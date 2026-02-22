@@ -19,97 +19,119 @@ tags:
 - computer-vision
 ---
 
-# ML-Danbooru ONNX Models
+# ML-Danbooru ONNX Web UI
 
-## Summary
+This repo includes:
 
-This repository provides **ONNX-optimized** implementations of the **ML-Danbooru** image tagging models, originally developed by 7eu7d7. ML-Danbooru is a sophisticated **deep learning** system specifically designed for **automated tagging** of anime-style images, leveraging modern transformer architectures to achieve high-precision classification across thousands of Danbooru-style tags. The models in this repository have been converted to ONNX format for improved inference performance and cross-platform compatibility.
+- ML-Danbooru ONNX model assets and tag data (`tags.csv`)
+- A FastAPI backend for scanning, tagging, review, and migration
+- A React frontend Web UI for interactive classification workflows
 
-The core architecture employs **Caformer** (Convolution-Augmented Transformer) models, which combine the global receptive field of transformers with the local feature extraction capabilities of convolutional networks. This hybrid approach enables the models to effectively capture both fine-grained details and global contextual information in anime artwork. The repository includes multiple model variants trained with different configurations and epochs, providing users with options ranging from faster inference to higher accuracy depending on their specific requirements.
+## What The Web UI Does
 
-Performance-wise, these models demonstrate **exceptional accuracy** in recognizing common anime character attributes, clothing items, accessories, backgrounds, and compositional elements. They can reliably identify tags such as hair colors, eye colors, clothing types, character poses, and scene settings with confidence scores typically exceeding 0.7-0.9 for relevant features. The models support **batch processing** and can handle images of various aspect ratios through intelligent resizing strategies that preserve important visual information while maintaining computational efficiency.
+- Configure source image root and category destination root
+- Select output classes from real tags in `tags.csv` (search/select + comma-separated add)
+- Scan only supported images and ignore unsupported files (videos, GIFs, unreadable files)
+- Run non-blocking classification with live status/progress and cancel support
+- Rank only the user-selected tags for assignment:
+  - highest selected tag = primary
+  - next selected tags = secondary
+  - non-selected global top tags do not override selected output classes
+- Show image previews and per-item full score JSON for debugging
+- Approve/reject/review items and migrate approved files with `copy` or `move`
 
-## Usage
+## Quick Start
 
-The models in this repository are designed to be used with the `dghs-imgutils` library, which provides a comprehensive interface for image tagging tasks.
-
-### Installation
+### 1) Create Python environment and install backend dependencies
 
 ```bash
-pip install dghs-imgutils
+cd /path/to/thr3shr
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r backend/requirements.txt
 ```
 
-### Basic Usage
+### 2) Start backend API (port 8000)
 
-```python
-from imgutils.tagging import get_mldanbooru_tags
-
-# Tag an image with default settings
-tags = get_mldanbooru_tags('your_image.jpg')
-print(tags)
-
-# Tag with custom threshold and settings
-tags_custom = get_mldanbooru_tags(
-    'your_image.jpg',
-    threshold=0.5,
-    size=448,
-    keep_ratio=True,
-    drop_overlap=True,
-    use_real_name=False
-)
-print(tags_custom)
+```bash
+cd /path/to/thr3shr/backend
+../.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-## Model Variants
+Health check:
 
-This repository contains multiple ML-Danbooru model variants:
-
-- **ml_caformer_m36_dec-5-97527.onnx**: Primary model with Caformer-M36 architecture
-- **ml_caformer_m36_dec-3-80000.onnx**: Alternative checkpoint with different training
-- **TResnet-D-FLq_ema_2-40000.onnx**: TResnet-based variant
-- **TResnet-D-FLq_ema_4-10000.onnx**: Lightweight TResnet variant
-- **TResnet-D-FLq_ema_6-10000.onnx**: Additional TResnet checkpoint
-- **TResnet-D-FLq_ema_6-30000.onnx**: Extended training TResnet variant
-- **caformer_m36-3-80000.onnx**: Base Caformer model
-
-## Tag Information
-
-The repository includes comprehensive tag information:
-
-- **classes.json**: Contains 1,527 simplified tag names for common anime attributes
-- **tags.csv**: Complete tag database with 12,547 entries including:
-  - Original tag names
-  - Root forms for morphological variations
-  - Part-of-speech classifications
-  - Usage frequency counts
-
-## Performance Characteristics
-
-- **Input Size**: Default 448x448 pixels (configurable)
-- **Tag Count**: 12,547 possible tags
-- **Threshold**: Default 0.7 (configurable)
-- **Supported Tags**: Character attributes, clothing, accessories, backgrounds, compositions
-- **Architecture**: Caformer-M36 and TResnet variants
-- **Format**: ONNX for optimized inference
-
-### Model Architecture Details
-
-The ML-Danbooru models utilize modern transformer-based architectures:
-
-- **Caformer-M36**: Combines convolutional layers with transformer blocks for efficient feature extraction
-- **TResnet-D**: Transformer-enhanced ResNet variants with focal loss optimization
-- **ONNX Optimization**: Models are exported with optimized operators for fast inference across different hardware platforms
-
-## Citation
-
-```bibtex
-@misc{deepghs_ml_danbooru_onnx,
-  title        = {{ML-Danbooru ONNX Models: Optimized Anime Image Tagging}},
-  author       = {7eu7d7 and DeepGHS Contributors},
-  howpublished = {\url{https://huggingface.co/deepghs/ml-danbooru-onnx}},
-  year         = {2023},
-  note         = {ONNX-optimized implementations of ML-Danbooru models for efficient anime image tagging with transformer-based architectures},
-  abstract     = {This repository provides ONNX-optimized implementations of the ML-Danbooru image tagging models, originally developed by 7eu7d7. ML-Danbooru is a sophisticated deep learning system specifically designed for automated tagging of anime-style images, leveraging modern transformer architectures to achieve high-precision classification across thousands of Danbooru-style tags. The models employ Caformer (Convolution-Augmented Transformer) architectures that combine the global receptive field of transformers with local feature extraction capabilities of convolutional networks, enabling effective capture of both fine-grained details and global contextual information in anime artwork.},
-  keywords     = {image-classification, anime, tagging, danbooru, transformer, onnx}
-}
+```bash
+curl http://127.0.0.1:8000/health
 ```
+
+### 3) Start frontend Web UI (port 5173)
+
+```bash
+cd /path/to/thr3shr/frontend
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173`.
+
+## Frontend Offline Mode
+
+The frontend automatically falls back to local mock mode when backend requests fail. This lets UI flows work even if the backend is not running, but file preview/migration are mock-only in that mode.
+
+## Classification Behavior Notes
+
+- Backend inference uses `get_mldanbooru_tags(..., threshold=0.0, drop_overlap=False)` so umbrella tags like `monster_girl` are preserved in scores.
+- Assignment considers only selected tags/folders that match known tags.
+- Threshold is applied to the winning selected tag:
+  - above threshold -> auto `approved`
+  - below threshold or no selected match -> `needs_review`
+
+## Review Workflow
+
+1. Save settings (root repo, categories root, threshold, default migrate mode)
+2. Add selected tags (type/search/select or comma-separated input)
+3. Start run
+4. Watch live run status (`pending`/`running`/`completed`/`failed`/`cancelled`)
+5. Review table:
+   - image preview
+   - primary and secondary selected-tag ranking
+   - debug scores JSON
+6. Approve/reject/batch update and run migration (`copy` or `move`)
+
+## Supported And Ignored Files
+
+- Supported image extensions: `.jpg`, `.jpeg`, `.png`, `.bmp`, `.webp`, `.tiff`
+- Ignored: `.gif`, common video formats, and unreadable/corrupt images
+
+## GPU Acceleration
+
+Inference attempts to use ONNX Runtime CUDA provider when available. If CUDA/cuDNN dependencies are missing, runtime falls back and logs provider errors. Ensure CUDA 12.x + cuDNN 9.x compatibility for GPU inference.
+
+## API Surface (High Level)
+
+- `GET /health`
+- `GET/PUT /api/settings`
+- `GET /api/tags`
+- `POST /api/runs/start`
+- `GET /api/runs/{run_id}/status`
+- `POST /api/runs/{run_id}/cancel`
+- `GET /api/runs/{run_id}/items`
+- `PATCH /api/items/{item_id}`
+- `GET /api/items/{item_id}/preview`
+- `GET /api/items/{item_id}/scores`
+- `POST /api/runs/{run_id}/batch`
+- `POST /api/runs/{run_id}/migrate`
+
+## Model Assets
+
+This repo contains multiple ONNX variants, including:
+
+- `ml_caformer_m36_dec-5-97527.onnx`
+- `ml_caformer_m36_dec-3-80000.onnx`
+- `TResnet-D-FLq_ema_2-40000.onnx`
+- `TResnet-D-FLq_ema_4-10000.onnx`
+- `TResnet-D-FLq_ema_6-10000.onnx`
+- `TResnet-D-FLq_ema_6-30000.onnx`
+- `caformer_m36-3-80000.onnx`
+
+`tags.csv` contains the canonical tag list used for matching and validation.
