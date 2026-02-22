@@ -7,6 +7,20 @@ const defaultSettings = {
   confidence_threshold: 0.6,
   default_migrate_mode: "copy",
 };
+const mockTags = [
+  "1girl",
+  "solo",
+  "blush",
+  "black_hair",
+  "brown_hair",
+  "blue_eyes",
+  "short_hair",
+  "long_hair",
+  "twintails",
+  "smile",
+  "open_mouth",
+  "looking_at_viewer",
+];
 
 const mockState = loadMockState();
 let backendAvailable = null;
@@ -107,6 +121,14 @@ function mockRequest(path, options = {}) {
 
   if (path === "/settings" && method === "GET") {
     return Promise.resolve(mockState.settings);
+  }
+  if (path.startsWith("/tags") && method === "GET") {
+    const queryString = path.includes("?") ? path.split("?")[1] : "";
+    const params = new URLSearchParams(queryString);
+    const query = (params.get("query") || "").toLowerCase();
+    const limit = Number(params.get("limit") || 50);
+    const items = mockTags.filter((t) => t.toLowerCase().includes(query)).slice(0, limit);
+    return Promise.resolve({ items, count: items.length });
   }
   if (path === "/settings" && method === "PUT") {
     mockState.settings = { ...defaultSettings, ...body };
@@ -226,6 +248,10 @@ function mockRequest(path, options = {}) {
 
 export const api = {
   isOfflineMode: () => backendAvailable === false,
+  getTags: (query = "", limit = 50) => {
+    const params = new URLSearchParams({ query, limit: String(limit) });
+    return request(`/tags?${params.toString()}`);
+  },
   getSettings: () => request("/settings"),
   saveSettings: (payload) =>
     request("/settings", {

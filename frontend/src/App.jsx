@@ -18,7 +18,9 @@ function App() {
   const [error, setError] = useState("");
   const [migrateMode, setMigrateMode] = useState("copy");
   const [selectedIds, setSelectedIds] = useState([]);
-  const [startFolderList, setStartFolderList] = useState("");
+  const [tagQuery, setTagQuery] = useState("");
+  const [tagOptions, setTagOptions] = useState([]);
+  const [selectedTags, setSelectedTags] = useState([]);
 
   async function refreshItems(currentRunId) {
     if (!currentRunId) return;
@@ -39,6 +41,25 @@ function App() {
       })
       .catch((err) => setError(err.message));
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      api.getTags(tagQuery, 50)
+        .then((data) => {
+          if (cancelled) return;
+          setTagOptions(data.items || []);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setTagOptions([]);
+        });
+    }, 150);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [tagQuery]);
 
   const stats = useMemo(() => {
     return {
@@ -68,13 +89,9 @@ function App() {
     setLoading(true);
     setError("");
     try {
-      const selectedFolders = startFolderList
-        .split(",")
-        .map((x) => x.trim())
-        .filter(Boolean);
       const result = await api.startRun({
         ...settings,
-        selected_folders: selectedFolders.length > 0 ? selectedFolders : null,
+        selected_folders: selectedTags.length > 0 ? selectedTags : null,
       });
       setOfflineMode(api.isOfflineMode());
       setRunId(result.run_id);
@@ -115,6 +132,49 @@ function App() {
     } finally {
       setLoading(false);
     }
+  }
+
+  function addSelectedTag(value) {
+    if (!value) return;
+    if (selectedTags.includes(value)) return;
+    setSelectedTags([...selectedTags, value]);
+  }
+
+  async function addValidatedTag(rawValue) {
+    const value = rawValue.trim();
+    if (!value) return;
+    if (selectedTags.includes(value)) return;
+
+    // Fast path when current dropdown options already include the tag.
+    if (tagOptions.includes(value)) {
+      addSelectedTag(value);
+      return;
+    }
+
+    // Validate against backend tag index to avoid accidental typo tags.
+    const result = await api.getTags(value, 200);
+    if ((result.items || []).includes(value)) {
+      addSelectedTag(value);
+      return;
+    }
+    throw new Error(`Tag not found in tags.csv: ${value}`);
+  }
+
+  async function addTagsFromInput(raw) {
+    const parts = raw
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean);
+    if (parts.length === 0) return;
+
+    for (const part of parts) {
+      await addValidatedTag(part);
+    }
+    setTagQuery("");
+  }
+
+  function removeSelectedTag(value) {
+    setSelectedTags(selectedTags.filter((t) => t !== value));
   }
 
   return (
@@ -179,13 +239,57 @@ function App() {
       <section className="card">
         <h2>Run Classification</h2>
         <label>
-          Optional selected folders (comma-separated, must match folder names)
+          Tag match search (from tags.csv)
           <input
-            value={startFolderList}
-            onChange={(e) => setStartFolderList(e.target.value)}
-            placeholder="1girl, solo, blush"
+            value={tagQuery}
+            onChange={(e) => setTagQuery(e.target.value)}
+            onKeyDown={async (e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                setError("");
+                try {
+                  await addTagsFromInput(tagQuery);
+                } catch (err) {
+                  setError(err.message);
+                }
+              }
+            }}
+            placeholder="Type to search tags..."
           />
         </label>
+        <div className="actions">
+          <select defaultValue="" onChange={(e) => addSelectedTag(e.target.value)}>
+            <option value="" disabled>
+              Select matching tag
+            </option>
+            {tagOptions.map((tag) => (
+              <option key={tag} value={tag}>
+                {tag}
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={async () => {
+              setError("");
+              try {
+                await addTagsFromInput(tagQuery);
+              } catch (err) {
+                setError(err.message);
+              }
+            }}
+          >
+            Add typed tag(s)
+          </button>
+        </div>
+        <div className="stats">
+          <span>Selected tags:</span>
+          {selectedTags.length === 0 && <span>none</span>}
+          {selectedTags.map((tag) => (
+            <span key={tag}>
+              {tag} <button onClick={() => removeSelectedTag(tag)}>x</button>
+            </span>
+          ))}
+        </div>
         <button disabled={loading} onClick={handleStartRun}>
           Start Run
         </button>
