@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
 
 const DEFAULT_SETTINGS = {
@@ -10,6 +10,7 @@ const DEFAULT_SETTINGS = {
 
 function App() {
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
+  const [offlineMode, setOfflineMode] = useState(false);
   const [runId, setRunId] = useState(null);
   const [runMeta, setRunMeta] = useState(null);
   const [items, setItems] = useState([]);
@@ -34,6 +35,7 @@ function App() {
       .then((data) => {
         setSettings(data);
         setMigrateMode(data.default_migrate_mode || "copy");
+        setOfflineMode(api.isOfflineMode());
       })
       .catch((err) => setError(err.message));
   }, []);
@@ -54,6 +56,7 @@ function App() {
     try {
       const saved = await api.saveSettings(settings);
       setSettings(saved);
+      setOfflineMode(api.isOfflineMode());
     } catch (err) {
       setError(err.message);
     } finally {
@@ -73,6 +76,7 @@ function App() {
         ...settings,
         selected_folders: selectedFolders.length > 0 ? selectedFolders : null,
       });
+      setOfflineMode(api.isOfflineMode());
       setRunId(result.run_id);
       await refreshItems(result.run_id);
     } catch (err) {
@@ -104,6 +108,7 @@ function App() {
     setError("");
     try {
       await api.migrateRun(runId, { mode: migrateMode, create_missing_folders: true });
+      setOfflineMode(api.isOfflineMode());
       await refreshItems(runId);
     } catch (err) {
       setError(err.message);
@@ -119,6 +124,11 @@ function App() {
         Configure source + category roots, run tagging, review predictions, then approve and
         migrate using move/copy.
       </p>
+      {offlineMode && (
+        <div className="error">
+          Backend is offline. Running in browser-only demo mode with local mock data.
+        </div>
+      )}
 
       {error && <div className="error">{error}</div>}
 
