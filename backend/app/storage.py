@@ -1,23 +1,27 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 DB_PATH = Path(__file__).resolve().parents[1] / "app.db"
+logger = logging.getLogger(__name__)
 
 
 def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
     conn.row_factory = sqlite3.Row
     return conn
 
 
 def init_db() -> None:
-    with get_connection() as conn:
-        conn.executescript(
-            """
+    try:
+        with get_connection() as conn:
+            conn.executescript(
+                """
             CREATE TABLE IF NOT EXISTS settings (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 root_repo TEXT NOT NULL DEFAULT '',
@@ -33,7 +37,15 @@ def init_db() -> None:
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 root_repo TEXT NOT NULL,
                 categories_root TEXT NOT NULL,
-                confidence_threshold REAL NOT NULL
+                confidence_threshold REAL NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                total_images INTEGER NOT NULL DEFAULT 0,
+                processed_images INTEGER NOT NULL DEFAULT 0,
+                failed_images INTEGER NOT NULL DEFAULT 0,
+                started_at TEXT,
+                finished_at TEXT,
+                last_error TEXT,
+                cancel_requested INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS items (
@@ -54,37 +66,94 @@ def init_db() -> None:
                 FOREIGN KEY(run_id) REFERENCES runs(id)
             );
             """
-        )
+            )
+            _ensure_runs_columns(conn)
+    except sqlite3.DatabaseError:
+        logger.exception("failed to initialize database")
+        raise
+
+
+def _ensure_runs_columns(conn: sqlite3.Connection) -> None:
+    expected_columns = {
+        "status": "TEXT NOT NULL DEFAULT 'pending'",
+        "total_images": "INTEGER NOT NULL DEFAULT 0",
+        "processed_images": "INTEGER NOT NULL DEFAULT 0",
+        "failed_images": "INTEGER NOT NULL DEFAULT 0",
+        "started_at": "TEXT",
+        "finished_at": "TEXT",
+        "last_error": "TEXT",
+        "cancel_requested": "INTEGER NOT NULL DEFAULT 0",
+    }
+    rows = conn.execute("PRAGMA table_info(runs)").fetchall()
+    existing = {row[1] for row in rows}
+    for name, definition in expected_columns.items():
+        if name in existing:
+            continue
+        conn.execute(f"ALTER TABLE runs ADD COLUMN {name} {definition}")
 
 
 def fetch_one(query: str, params: tuple[Any, ...] = ()) -> dict[str, Any] | None:
-    with get_connection() as conn:
-        row = conn.execute(query, params).fetchone()
-        return dict(row) if row else None
+    try:
+        with get_connection() as conn:
+            row = conn.execute(query, params).fetchone()
+            return dict(row) if row else None
+    except sqlite3.DatabaseError:
+        logger.exception("fetch_one failed")
+        raise
 
 
 def fetch_all(query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
-    with get_connection() as conn:
-        rows = conn.execute(query, params).fetchall()
-        return [dict(r) for r in rows]
+    try:
+        with get_connection() as conn:
+            rows = conn.execute(query, params).fetchall()
+            return [dict(r) for r in rows]
+    except sqlite3.DatabaseError:
+        logger.exception("fetch_all failed")
+        raise
 
 
 def execute(query: str, params: tuple[Any, ...] = ()) -> int:
-    with get_connection() as conn:
-        cur = conn.execute(query, params)
-        conn.commit()
-        return cur.lastrowid
+    try:
+        with get_connection() as conn:
+            cur = conn.execute(query, params)
+            conn.commit()
+            return cur.lastrowid
+    except sqlite3.DatabaseError:
+        logger.exception("execute failed")
+        raise
 
 
 def execute_many(query: str, params: list[tuple[Any, ...]]) -> None:
-    with get_connection() as conn:
-        conn.executemany(query, params)
-        conn.commit()
+    try:
+        with get_connection() as conn:
+            conn.executemany(query, params)
+            conn.commit()
+    except sqlite3.DatabaseError:
+        logger.exception("execute_many failed")
+        raise
 
 
 def to_json(data: Any) -> str:
     return json.dumps(data, ensure_ascii=True)
 
 
-def from_json(value: str) -> Any:
-    return json.loads(value)
+def from_json(value: str, default: Any = None) -> Any:
+    try:
+        return json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        logger.warning("invalid json value encountered; returning default")
+        return [] if default is None else default
+
+
+@contextmanager
+def transaction():
+    conn = get_connection()
+    try:
+        yield conn
+        conn.commit()
+    except sqlite3.DatabaseError:
+        conn.rollback()
+        logger.exception("transaction failed; rolled back")
+        raise
+    finally:
+        conn.close()

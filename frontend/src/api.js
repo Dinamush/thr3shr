@@ -24,6 +24,7 @@ const mockTags = [
 
 const mockState = loadMockState();
 let backendAvailable = null;
+const REQUEST_TIMEOUT_MS = 30000;
 
 function loadMockState() {
   try {
@@ -47,15 +48,36 @@ function persistMockState() {
 }
 
 async function jsonRequest(path, options = {}) {
-  const response = await fetch(`${API_BASE}${path}`, {
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-    ...options,
-  });
-  if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || `HTTP ${response.status}`);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort("timeout"), REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${API_BASE}${path}`, {
+      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+      ...options,
+      signal: options.signal || controller.signal,
+    });
+    const text = await response.text();
+    const maybeJson = text ? (() => {
+      try {
+        return JSON.parse(text);
+      } catch (_) {
+        return null;
+      }
+    })() : null;
+    if (!response.ok) {
+      const detail =
+        (maybeJson && (maybeJson.detail || maybeJson.message)) || text || "Request failed";
+      throw new Error(`HTTP ${response.status} ${response.statusText}: ${detail}`);
+    }
+    return maybeJson ?? {};
+  } catch (err) {
+    if (err?.name === "AbortError") {
+      throw new Error(`Request timeout after ${REQUEST_TIMEOUT_MS / 1000}s`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
   }
-  return response.json();
 }
 
 async function request(path, options = {}) {
@@ -67,7 +89,15 @@ async function request(path, options = {}) {
     backendAvailable = true;
     return data;
   } catch (err) {
-    if (backendAvailable === null) {
+    const message = String(err?.message || "");
+    const networkError =
+      err?.name === "TypeError" ||
+      message.includes("Failed to fetch") ||
+      message.includes("NetworkError") ||
+      message.includes("Load failed") ||
+      message.includes("CORS request did not succeed") ||
+      message.includes("timeout");
+    if (backendAvailable === null && networkError) {
       backendAvailable = false;
       return mockRequest(path, options);
     }
@@ -115,6 +145,25 @@ function makeMockItems(runId, selectedFolders, threshold) {
   });
 }
 
+function computeMockStatus(run) {
+  const total = run.total_images || 0;
+  const processed = run.processed_images || 0;
+  const pct = total > 0 ? Math.min(100, (processed / total) * 100) : 0;
+  return {
+    run_id: run.id,
+    status: run.status,
+    total_images: total,
+    processed_images: processed,
+    failed_images: run.failed_images || 0,
+    progress_pct: pct,
+    started_at: run.started_at || null,
+    finished_at: run.finished_at || null,
+    last_error: run.last_error || null,
+    cancel_requested: Boolean(run.cancel_requested),
+    has_items: (run.items || []).length > 0,
+  };
+}
+
 function mockRequest(path, options = {}) {
   const method = (options.method || "GET").toUpperCase();
   const body = parseBody(options);
@@ -148,40 +197,82 @@ function mockRequest(path, options = {}) {
       matched: true,
     }));
     mockState.runs[runId] = {
-      run: {
-        id: runId,
-        root_repo: mockState.settings.root_repo,
-        categories_root: mockState.settings.categories_root,
-        confidence_threshold: threshold,
-      },
+      id: runId,
+      root_repo: mockState.settings.root_repo,
+      categories_root: mockState.settings.categories_root,
+      confidence_threshold: threshold,
+      status: "pending",
+      total_images: items.length,
+      processed_images: 0,
+      failed_images: 0,
+      cancel_requested: 0,
+      started_at: new Date().toISOString(),
+      finished_at: null,
+      last_error: null,
       items,
     };
     persistMockState();
     return Promise.resolve({
       run_id: runId,
-      stats: {
-        total_files: items.length + 2,
-        eligible_images: items.length,
-        ignored_unsupported: 1,
-        ignored_gif: 1,
-        failed_to_read: 0,
-      },
+      status: "pending",
+      stats: null,
       mappings,
       unmatched_folders: [],
-      created_items: items.length,
+      created_items: 0,
+      message: "Run queued; poll /api/runs/{run_id}/status for progress.",
     });
+  }
+  if (path.match(/^\/runs\/\d+\/status$/) && method === "GET") {
+    const runId = Number(path.split("/")[2]);
+    const run = mockState.runs[runId];
+    if (!run) {
+      return Promise.reject(new Error("Run not found"));
+    }
+    if (run.status === "pending") {
+      run.status = "running";
+    }
+    if (run.status === "running" && !run.cancel_requested) {
+      run.processed_images = Math.min(run.total_images, run.processed_images + 5);
+      if (run.processed_images >= run.total_images) {
+        run.status = "completed";
+        run.finished_at = new Date().toISOString();
+      }
+      persistMockState();
+    }
+    if (run.cancel_requested && run.status === "running") {
+      run.status = "cancelled";
+      run.finished_at = new Date().toISOString();
+      persistMockState();
+    }
+    return Promise.resolve(computeMockStatus(run));
+  }
+  if (path.match(/^\/runs\/\d+\/cancel$/) && method === "POST") {
+    const runId = Number(path.split("/")[2]);
+    const run = mockState.runs[runId];
+    if (!run) {
+      return Promise.reject(new Error("Run not found"));
+    }
+    run.cancel_requested = 1;
+    if (run.status === "pending") {
+      run.status = "cancelled";
+      run.finished_at = new Date().toISOString();
+    }
+    persistMockState();
+    return Promise.resolve(computeMockStatus(run));
   }
   if (path.startsWith("/runs/") && path.endsWith("/items") && method === "GET") {
     const runId = Number(path.split("/")[2]);
     const run = mockState.runs[runId];
     if (!run) return Promise.resolve([]);
-    return Promise.resolve(run.items);
+    const visibleCount = Math.max(0, run.processed_images || 0);
+    return Promise.resolve(run.items.slice(0, visibleCount));
   }
   if (path.startsWith("/runs/") && !path.includes("/items") && method === "GET") {
     const runId = Number(path.split("/")[2]);
     const run = mockState.runs[runId];
     if (!run) return Promise.resolve({ run: null, counts: [] });
-    return Promise.resolve({ run: run.run, counts: mockCounts(run.items) });
+    const visibleItems = run.items.slice(0, Math.max(0, run.processed_images || 0));
+    return Promise.resolve({ run, counts: mockCounts(visibleItems) });
   }
   if (path.startsWith("/items/") && method === "PATCH") {
     const itemId = Number(path.split("/")[2]);
@@ -264,6 +355,12 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   getRun: (runId) => request(`/runs/${runId}`),
+  getRunStatus: (runId) => request(`/runs/${runId}/status`),
+  cancelRun: (runId) =>
+    request(`/runs/${runId}/cancel`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
   getRunItems: (runId, filters = {}) => {
     const params = new URLSearchParams();
     if (filters.status) params.set("status", filters.status);
@@ -288,4 +385,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  getItemPreviewUrl: (itemId) => {
+    if (backendAvailable === false) return null;
+    return `${API_BASE}/items/${itemId}/preview`;
+  },
 };

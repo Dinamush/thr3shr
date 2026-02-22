@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +21,7 @@ VIDEO_EXTENSIONS = {
     ".wmv",
     ".m4v",
 }
+logger = logging.getLogger(__name__)
 
 
 def normalize_tag_name(value: str) -> str:
@@ -157,22 +159,25 @@ def choose_best_tags(
     return primary_tag, float(primary_score), secondary
 
 
-def ensure_collision_free_destination(destination: Path) -> Path:
+def ensure_collision_free_destination(destination: Path, max_attempts: int = 10_000) -> Path:
     if not destination.exists():
         return destination
     stem = destination.stem
     suffix = destination.suffix
     parent = destination.parent
     idx = 1
-    while True:
+    while idx <= max_attempts:
         candidate = parent / f"{stem}_{idx}{suffix}"
         if not candidate.exists():
             return candidate
         idx += 1
+    raise RuntimeError("Unable to resolve collision-free destination name")
 
 
 def migrate_file(source: Path, destination: Path, mode: str) -> MigrationResult:
     try:
+        if not source.exists():
+            raise FileNotFoundError(f"Source file not found: {source}")
         target = ensure_collision_free_destination(destination)
         if mode == "copy":
             shutil.copy2(source, target)
@@ -180,6 +185,8 @@ def migrate_file(source: Path, destination: Path, mode: str) -> MigrationResult:
             shutil.move(source, target)
         else:
             raise ValueError(f"Unsupported mode: {mode}")
+        if not target.exists():
+            raise RuntimeError("Migration reported success but target file is missing")
         return MigrationResult(
             item_id=-1,
             source=str(source),
@@ -187,6 +194,7 @@ def migrate_file(source: Path, destination: Path, mode: str) -> MigrationResult:
             success=True,
         )
     except Exception as err:
+        logger.warning("file migration failed source=%s destination=%s error=%s", source, destination, err)
         return MigrationResult(
             item_id=-1,
             source=str(source),

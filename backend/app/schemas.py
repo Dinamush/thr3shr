@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 ItemStatus = Literal["proposed", "reviewed", "approved", "rejected", "migrated"]
 MigrateMode = Literal["move", "copy"]
+RunLifecycleStatus = Literal["pending", "running", "completed", "failed", "cancelled"]
 
 
 class AppSettings(BaseModel):
@@ -66,10 +67,26 @@ class ClassifiedItem(BaseModel):
 
 class StartRunResponse(BaseModel):
     run_id: int
-    stats: ScanStats
-    mappings: list[FolderMapping]
-    unmatched_folders: list[str]
-    created_items: int
+    status: RunLifecycleStatus
+    stats: ScanStats | None = None
+    mappings: list[FolderMapping] = Field(default_factory=list)
+    unmatched_folders: list[str] = Field(default_factory=list)
+    created_items: int = 0
+    message: str = "Run queued"
+
+
+class RunStatusResponse(BaseModel):
+    run_id: int
+    status: RunLifecycleStatus
+    total_images: int = 0
+    processed_images: int = 0
+    failed_images: int = 0
+    progress_pct: float = 0.0
+    started_at: str | None = None
+    finished_at: str | None = None
+    last_error: str | None = None
+    cancel_requested: bool = False
+    has_items: bool = False
 
 
 class UpdateItemRequest(BaseModel):

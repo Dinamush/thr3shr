@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 
 const DEFAULT_SETTINGS = {
@@ -7,11 +7,13 @@ const DEFAULT_SETTINGS = {
   confidence_threshold: 0.6,
   default_migrate_mode: "copy",
 };
+const ACTIVE_RUN_STORAGE_KEY = "imageClassifierActiveRunId";
 
 function App() {
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [offlineMode, setOfflineMode] = useState(false);
   const [runId, setRunId] = useState(null);
+  const [runStatus, setRunStatus] = useState(null);
   const [runMeta, setRunMeta] = useState(null);
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -21,15 +23,31 @@ function App() {
   const [tagQuery, setTagQuery] = useState("");
   const [tagOptions, setTagOptions] = useState([]);
   const [selectedTags, setSelectedTags] = useState([]);
+  const [previewErrors, setPreviewErrors] = useState({});
+  const [finalTagDrafts, setFinalTagDrafts] = useState({});
+  const [opsLoading, setOpsLoading] = useState({
+    saving: false,
+    startingRun: false,
+    updatingStatus: false,
+    applyingBatch: false,
+    migrating: false,
+  });
+  const finalTagTimersRef = useRef({});
+  const pollTimerRef = useRef(null);
 
   async function refreshItems(currentRunId) {
     if (!currentRunId) return;
-    const [runInfo, runItems] = await Promise.all([
-      api.getRun(currentRunId),
-      api.getRunItems(currentRunId),
-    ]);
-    setRunMeta(runInfo);
-    setItems(runItems);
+    try {
+      const [runInfo, runItems] = await Promise.all([
+        api.getRun(currentRunId),
+        api.getRunItems(currentRunId),
+      ]);
+      setRunMeta(runInfo);
+      setItems(runItems);
+    } catch (err) {
+      console.error("refreshItems failed", err);
+      setError(`Failed to refresh items: ${err.message}`);
+    }
   }
 
   useEffect(() => {
@@ -40,6 +58,10 @@ function App() {
         setOfflineMode(api.isOfflineMode());
       })
       .catch((err) => setError(err.message));
+    const storedRunId = Number(localStorage.getItem(ACTIVE_RUN_STORAGE_KEY) || 0);
+    if (storedRunId > 0) {
+      setRunId(storedRunId);
+    }
   }, []);
 
   useEffect(() => {
@@ -61,6 +83,17 @@ function App() {
     };
   }, [tagQuery]);
 
+  useEffect(() => {
+    return () => {
+      Object.values(finalTagTimersRef.current).forEach((timerId) => clearTimeout(timerId));
+      finalTagTimersRef.current = {};
+      if (pollTimerRef.current) {
+        clearInterval(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+    };
+  }, []);
+
   const stats = useMemo(() => {
     return {
       total: items.length,
@@ -70,9 +103,52 @@ function App() {
     };
   }, [items]);
 
+  async function pollRunStatus(currentRunId) {
+    try {
+      const status = await api.getRunStatus(currentRunId);
+      setRunStatus(status);
+      await refreshItems(currentRunId);
+      if (["completed", "cancelled", "failed"].includes(status.status)) {
+        if (pollTimerRef.current) {
+          clearInterval(pollTimerRef.current);
+          pollTimerRef.current = null;
+        }
+        localStorage.removeItem(ACTIVE_RUN_STORAGE_KEY);
+      }
+    } catch (err) {
+      setError(`Failed to poll run status: ${err.message}`);
+      if (pollTimerRef.current) {
+        clearInterval(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+    }
+  }
+
+  function startStatusPolling(currentRunId) {
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+    pollRunStatus(currentRunId);
+    pollTimerRef.current = setInterval(() => pollRunStatus(currentRunId), 1500);
+  }
+
+  useEffect(() => {
+    if (!runId) return;
+    localStorage.setItem(ACTIVE_RUN_STORAGE_KEY, String(runId));
+    startStatusPolling(runId);
+    return () => {
+      if (pollTimerRef.current) {
+        clearInterval(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+    };
+  }, [runId]);
+
   async function handleSaveSettings(e) {
     e.preventDefault();
     setLoading(true);
+    setOpsLoading((prev) => ({ ...prev, saving: true }));
     setError("");
     try {
       const saved = await api.saveSettings(settings);
@@ -82,11 +158,13 @@ function App() {
       setError(err.message);
     } finally {
       setLoading(false);
+      setOpsLoading((prev) => ({ ...prev, saving: false }));
     }
   }
 
   async function handleStartRun() {
     setLoading(true);
+    setOpsLoading((prev) => ({ ...prev, startingRun: true }));
     setError("");
     try {
       const result = await api.startRun({
@@ -95,34 +173,87 @@ function App() {
       });
       setOfflineMode(api.isOfflineMode());
       setRunId(result.run_id);
-      await refreshItems(result.run_id);
+      setPreviewErrors({});
+      setRunStatus({
+        run_id: result.run_id,
+        status: result.status || "pending",
+        total_images: 0,
+        processed_images: 0,
+        failed_images: 0,
+        progress_pct: 0,
+        cancel_requested: false,
+      });
     } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
+      setOpsLoading((prev) => ({ ...prev, startingRun: false }));
     }
   }
 
   async function updateStatus(itemId, status) {
-    await api.updateItem(itemId, { status });
-    await refreshItems(runId);
+    setOpsLoading((prev) => ({ ...prev, updatingStatus: true }));
+    setError("");
+    try {
+      await api.updateItem(itemId, { status });
+      await refreshItems(runId);
+    } catch (err) {
+      console.error("updateStatus failed", err);
+      setError(`Failed to update status: ${err.message}`);
+    } finally {
+      setOpsLoading((prev) => ({ ...prev, updatingStatus: false }));
+    }
   }
 
-  async function updateFinalTag(itemId, finalTag) {
-    await api.updateItem(itemId, { final_tag: finalTag, status: "reviewed" });
-    await refreshItems(runId);
+  function queueFinalTagUpdate(itemId, finalTag) {
+    setFinalTagDrafts((prev) => ({ ...prev, [itemId]: finalTag }));
+    if (finalTagTimersRef.current[itemId]) {
+      clearTimeout(finalTagTimersRef.current[itemId]);
+    }
+    finalTagTimersRef.current[itemId] = setTimeout(async () => {
+      setError("");
+      try {
+        await api.updateItem(itemId, { final_tag: finalTag, status: "reviewed" });
+        await refreshItems(runId);
+      } catch (err) {
+        console.error("queueFinalTagUpdate failed", err);
+        setError(`Failed to update final tag: ${err.message}`);
+      }
+    }, 350);
   }
 
   async function applyBatch(status) {
     if (selectedIds.length === 0) return;
-    await api.batchUpdate(runId, { item_ids: selectedIds, status });
-    setSelectedIds([]);
-    await refreshItems(runId);
+    if (status === "rejected") {
+      const confirmed = window.confirm("Reject selected items? This may require manual recovery.");
+      if (!confirmed) return;
+    }
+    setOpsLoading((prev) => ({ ...prev, applyingBatch: true }));
+    setError("");
+    try {
+      await api.batchUpdate(runId, { item_ids: selectedIds, status });
+      setSelectedIds([]);
+      await refreshItems(runId);
+    } catch (err) {
+      console.error("applyBatch failed", err);
+      setError(`Batch update failed: ${err.message}`);
+    } finally {
+      setOpsLoading((prev) => ({ ...prev, applyingBatch: false }));
+    }
   }
 
   async function migrateApproved() {
     setLoading(true);
+    setOpsLoading((prev) => ({ ...prev, migrating: true }));
     setError("");
+    const confirmed = window.confirm(
+      `Migrate approved items using ${migrateMode}? This can move/copy many files.`
+    );
+    if (!confirmed) {
+      setLoading(false);
+      setOpsLoading((prev) => ({ ...prev, migrating: false }));
+      return;
+    }
     try {
       await api.migrateRun(runId, { mode: migrateMode, create_missing_folders: true });
       setOfflineMode(api.isOfflineMode());
@@ -131,6 +262,18 @@ function App() {
       setError(err.message);
     } finally {
       setLoading(false);
+      setOpsLoading((prev) => ({ ...prev, migrating: false }));
+    }
+  }
+
+  async function cancelActiveRun() {
+    if (!runId) return;
+    setError("");
+    try {
+      const status = await api.cancelRun(runId);
+      setRunStatus(status);
+    } catch (err) {
+      setError(`Failed to cancel run: ${err.message}`);
     }
   }
 
@@ -232,7 +375,7 @@ function App() {
               <option value="move">move</option>
             </select>
           </label>
-          <button disabled={loading}>Save Settings</button>
+          <button disabled={loading || opsLoading.saving}>Save Settings</button>
         </form>
       </section>
 
@@ -290,7 +433,14 @@ function App() {
             </span>
           ))}
         </div>
-        <button disabled={loading} onClick={handleStartRun}>
+        <button
+          disabled={
+            loading ||
+            opsLoading.startingRun ||
+            (runStatus && ["pending", "running"].includes(runStatus.status))
+          }
+          onClick={handleStartRun}
+        >
           Start Run
         </button>
       </section>
@@ -298,6 +448,22 @@ function App() {
       {runId && (
         <section className="card">
           <h2>Review Queue (Run #{runId})</h2>
+          {runStatus && (
+            <div className="stats">
+              <span>Status: {runStatus.status}</span>
+              <span>
+                Progress: {runStatus.processed_images}/{runStatus.total_images} (
+                {Number(runStatus.progress_pct || 0).toFixed(1)}%)
+              </span>
+              <span>Failed: {runStatus.failed_images}</span>
+              {runStatus.cancel_requested && <span>Cancel requested</span>}
+            </div>
+          )}
+          {runStatus && ["pending", "running"].includes(runStatus.status) && (
+            <div className="actions">
+              <button onClick={cancelActiveRun}>Cancel Run</button>
+            </div>
+          )}
           <div className="stats">
             <span>Total: {stats.total}</span>
             <span>Needs Review: {stats.reviewNeeded}</span>
@@ -305,13 +471,19 @@ function App() {
             <span>Migrated: {stats.migrated}</span>
           </div>
           <div className="actions">
-            <button onClick={() => applyBatch("approved")}>Approve Selected</button>
-            <button onClick={() => applyBatch("rejected")}>Reject Selected</button>
+            <button disabled={opsLoading.applyingBatch} onClick={() => applyBatch("approved")}>
+              Approve Selected
+            </button>
+            <button disabled={opsLoading.applyingBatch} onClick={() => applyBatch("rejected")}>
+              Reject Selected
+            </button>
             <select value={migrateMode} onChange={(e) => setMigrateMode(e.target.value)}>
               <option value="copy">copy</option>
               <option value="move">move</option>
             </select>
-            <button onClick={migrateApproved}>Migrate Approved</button>
+            <button disabled={opsLoading.migrating} onClick={migrateApproved}>
+              {opsLoading.migrating ? "Migrating..." : "Migrate Approved"}
+            </button>
           </div>
 
           <table>
@@ -343,25 +515,58 @@ function App() {
                       }}
                     />
                   </td>
-                  <td title={item.file_path}>{item.relative_path}</td>
+                  <td title={item.file_path}>
+                    <div className="image-cell">
+                      {!previewErrors[item.id] && api.getItemPreviewUrl(item.id) ? (
+                        <img
+                          className="image-thumb"
+                          src={api.getItemPreviewUrl(item.id)}
+                          alt={item.relative_path || item.file_path}
+                          loading="lazy"
+                          onError={() =>
+                            setPreviewErrors((prev) => ({
+                              ...prev,
+                              [item.id]: true,
+                            }))
+                          }
+                        />
+                      ) : null}
+                      <div className="image-path">{item.relative_path || item.file_path || "-"}</div>
+                    </div>
+                  </td>
                   <td>{item.primary_tag || "-"}</td>
                   <td>{item.primary_score?.toFixed(3) || "-"}</td>
                   <td>
-                    {item.secondary_suggestions
+                    {(item.secondary_suggestions || [])
                       .map((s) => `${s.tag} (${Number(s.score).toFixed(3)})`)
-                      .join(", ")}
+                      .join(", ") || "-"}
                   </td>
                   <td>{item.status}</td>
                   <td>
                     <input
-                      value={item.final_tag || ""}
-                      onChange={(e) => updateFinalTag(item.id, e.target.value)}
+                      value={finalTagDrafts[item.id] ?? (item.final_tag || "")}
+                      onChange={(e) => queueFinalTagUpdate(item.id, e.target.value)}
                     />
                   </td>
                   <td>
-                    <button onClick={() => updateStatus(item.id, "approved")}>Approve</button>
-                    <button onClick={() => updateStatus(item.id, "rejected")}>Reject</button>
-                    <button onClick={() => updateStatus(item.id, "reviewed")}>Reviewed</button>
+                    <button
+                      disabled={opsLoading.updatingStatus}
+                      onClick={() => updateStatus(item.id, "approved")}
+                    >
+                      Approve
+                    </button>
+                    <button
+                      disabled={opsLoading.updatingStatus}
+                      onClick={() => updateStatus(item.id, "rejected")}
+                    >
+                      Reject
+                    </button>
+                    <button
+                      disabled={opsLoading.updatingStatus}
+                      onClick={() => updateStatus(item.id, "reviewed")}
+                    >
+                      Reviewed
+                    </button>
                   </td>
                 </tr>
               ))}

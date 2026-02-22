@@ -5,6 +5,7 @@ from PIL import Image
 from app.services import (
     choose_best_tags,
     discover_tag_folders,
+    ensure_collision_free_destination,
     migrate_file,
     normalize_tag_name,
     scan_images,
@@ -67,3 +68,22 @@ def test_migrate_file_copy_with_collision_suffix(tmp_path: Path) -> None:
     assert result.destination is not None
     assert result.destination.endswith("sample_1.jpg")
     assert src.exists()
+
+
+def test_migrate_file_fails_when_source_missing(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.jpg"
+    dst = tmp_path / "out" / "missing.jpg"
+    result = migrate_file(missing, dst, "copy")
+    assert result.success is False
+    assert "not found" in (result.error or "").lower()
+
+
+def test_collision_resolution_has_max_attempts(tmp_path: Path) -> None:
+    dst = tmp_path / "sample.jpg"
+    dst.write_text("x", encoding="utf-8")
+    try:
+        ensure_collision_free_destination(dst, max_attempts=0)
+    except RuntimeError as err:
+        assert "collision" in str(err).lower()
+    else:
+        raise AssertionError("Expected RuntimeError for collision exhaustion")

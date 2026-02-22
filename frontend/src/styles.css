@@ -84,3 +84,25 @@ td {
   padding: 10px;
   margin-bottom: 12px;
 }
+
+.image-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 160px;
+}
+
+.image-thumb {
+  width: 140px;
+  height: 140px;
+  object-fit: contain;
+  border: 1px solid #e4e8ef;
+  border-radius: 8px;
+  background: #f8faff;
+}
+
+.image-path {
+  max-width: 220px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
