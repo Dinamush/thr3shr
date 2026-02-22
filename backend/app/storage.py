@@ -68,6 +68,7 @@ def init_db() -> None:
             """
             )
             _ensure_runs_columns(conn)
+            _ensure_items_columns(conn)
     except sqlite3.DatabaseError:
         logger.exception("failed to initialize database")
         raise
@@ -90,6 +91,18 @@ def _ensure_runs_columns(conn: sqlite3.Connection) -> None:
         if name in existing:
             continue
         conn.execute(f"ALTER TABLE runs ADD COLUMN {name} {definition}")
+
+
+def _ensure_items_columns(conn: sqlite3.Connection) -> None:
+    expected_columns = {
+        "full_scores_json": "TEXT NOT NULL DEFAULT '{}'",
+    }
+    rows = conn.execute("PRAGMA table_info(items)").fetchall()
+    existing = {row[1] for row in rows}
+    for name, definition in expected_columns.items():
+        if name in existing:
+            continue
+        conn.execute(f"ALTER TABLE items ADD COLUMN {name} {definition}")
 
 
 def fetch_one(query: str, params: tuple[Any, ...] = ()) -> dict[str, Any] | None:

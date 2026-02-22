@@ -60,7 +60,7 @@ def _settings_from_db() -> AppSettings:
     )
 
 
-def _item_from_row(row: dict) -> ClassifiedItem:
+def _item_from_row(row: dict, include_full_scores: bool = False) -> ClassifiedItem:
     return ClassifiedItem(
         id=row["id"],
         run_id=row["run_id"],
@@ -69,6 +69,11 @@ def _item_from_row(row: dict) -> ClassifiedItem:
         primary_tag=row["primary_tag"],
         primary_score=row["primary_score"],
         secondary_suggestions=from_json(row.get("secondary_json") or "[]", default=[]),
+        full_scores=(
+            from_json(row.get("full_scores_json") or "{}", default={})
+            if include_full_scores
+            else None
+        ),
         suggested_destination=row["suggested_destination"],
         final_tag=row["final_tag"],
         final_destination=row["final_destination"],
@@ -146,7 +151,7 @@ def _execute_run(
                 reason = None
             except Exception:
                 logger.exception("inference_failed run_id=%d image=%s", run_id, image_path)
-                primary_tag, primary_score, secondary = None, None, []
+                scores, primary_tag, primary_score, secondary = {}, None, None, []
                 needs_review = True
                 reason = "Inference failed for this image; requires manual review."
                 failed += 1
@@ -169,8 +174,8 @@ def _execute_run(
                 """
                 INSERT INTO items (
                     run_id, file_path, relative_path, primary_tag, primary_score, secondary_json,
-                    suggested_destination, final_tag, final_destination, status, needs_review, review_reason
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    full_scores_json, suggested_destination, final_tag, final_destination, status, needs_review, review_reason
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -179,6 +184,7 @@ def _execute_run(
                     primary_tag,
                     primary_score,
                     to_json(secondary),
+                    to_json(scores),
                     suggested_destination,
                     primary_tag,
                     suggested_destination,
@@ -330,6 +336,7 @@ def get_run_items(
     run_id: int,
     status: str | None = None,
     needs_review: bool | None = None,
+    include_scores: bool = Query(False),
 ) -> list[ClassifiedItem]:
     query = "SELECT * FROM items WHERE run_id = ?"
     params: list = [run_id]
@@ -341,7 +348,7 @@ def get_run_items(
         params.append(1 if needs_review else 0)
     query += " ORDER BY id ASC"
     rows = fetch_all(query, tuple(params))
-    return [_item_from_row(r) for r in rows]
+    return [_item_from_row(r, include_full_scores=include_scores) for r in rows]
 
 
 @router.patch("/items/{item_id}", response_model=ClassifiedItem)
@@ -373,6 +380,17 @@ def update_item(item_id: int, payload: UpdateItemRequest) -> ClassifiedItem:
     )
     updated = fetch_one("SELECT * FROM items WHERE id = ?", (item_id,))
     return _item_from_row(updated)
+
+
+@router.get("/items/{item_id}/scores")
+def get_item_scores(item_id: int) -> dict:
+    row = fetch_one("SELECT id, full_scores_json FROM items WHERE id = ?", (item_id,))
+    if not row:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return {
+        "item_id": row["id"],
+        "full_scores": from_json(row.get("full_scores_json") or "{}", default={}),
+    }
 
 
 @router.get("/items/{item_id}/preview")

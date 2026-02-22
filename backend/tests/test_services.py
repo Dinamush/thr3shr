@@ -56,6 +56,22 @@ def test_choose_best_tags_single_primary_and_secondary() -> None:
     assert secondary[0]["tag"] == "solo"
 
 
+def test_choose_best_tags_ignores_non_selected_high_score() -> None:
+    scores = {"1girl": 0.99, "monster_girl": 0.81, "slime_girl": 0.77}
+    primary_tag, primary_score, secondary = choose_best_tags(scores, {"monster_girl", "slime_girl"})
+    assert primary_tag == "monster_girl"
+    assert primary_score == 0.81
+    assert secondary == [{"tag": "slime_girl", "score": 0.77}]
+
+
+def test_choose_best_tags_matches_normalized_selected_tags() -> None:
+    scores = {"monster girl": 0.88, "slime-girl": 0.84}
+    primary_tag, primary_score, secondary = choose_best_tags(scores, {"monster_girl", "slime_girl"})
+    assert primary_tag == "monster_girl"
+    assert primary_score == 0.88
+    assert secondary == [{"tag": "slime_girl", "score": 0.84}]
+
+
 def test_migrate_file_copy_with_collision_suffix(tmp_path: Path) -> None:
     src = tmp_path / "sample.jpg"
     src.write_text("abc", encoding="utf-8")

@@ -137,10 +137,16 @@ function makeMockItems(runId, selectedFolders, threshold) {
       suggested_destination: `${mockState.settings.categories_root || "/mock/categories"}/${tag}`,
       final_tag: tag,
       final_destination: `${mockState.settings.categories_root || "/mock/categories"}/${tag}`,
-      status: "proposed",
+      status: needsReview ? "proposed" : "approved",
       needs_review: needsReview,
       review_reason: needsReview ? `Below threshold (${score.toFixed(3)} < ${threshold.toFixed(3)})` : null,
       migrated_to: null,
+      full_scores: Object.fromEntries(
+        [tag, ...pool.filter((x) => x !== tag)].map((name, i) => [
+          name,
+          Math.max(0.1, score - i * 0.08),
+        ])
+      ),
     };
   });
 }
@@ -289,6 +295,13 @@ function mockRequest(path, options = {}) {
     persistMockState();
     return Promise.resolve(item);
   }
+  if (path.match(/^\/items\/\d+\/scores$/) && method === "GET") {
+    const itemId = Number(path.split("/")[2]);
+    const run = Object.values(mockState.runs).find((r) => r.items.some((i) => i.id === itemId));
+    if (!run) return Promise.reject(new Error("Item not found"));
+    const item = run.items.find((i) => i.id === itemId);
+    return Promise.resolve({ item_id: item.id, full_scores: item.full_scores || {} });
+  }
   if (path.match(/^\/runs\/\d+\/batch$/) && method === "POST") {
     const runId = Number(path.split("/")[2]);
     const run = mockState.runs[runId];
@@ -367,9 +380,13 @@ export const api = {
     if (filters.needs_review !== undefined) {
       params.set("needs_review", String(filters.needs_review));
     }
+    if (filters.include_scores) {
+      params.set("include_scores", "true");
+    }
     const query = params.toString();
     return request(`/runs/${runId}/items${query ? `?${query}` : ""}`);
   },
+  getItemScores: (itemId) => request(`/items/${itemId}/scores`),
   updateItem: (itemId, payload) =>
     request(`/items/${itemId}`, {
       method: "PATCH",

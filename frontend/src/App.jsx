@@ -24,6 +24,9 @@ function App() {
   const [tagOptions, setTagOptions] = useState([]);
   const [selectedTags, setSelectedTags] = useState([]);
   const [previewErrors, setPreviewErrors] = useState({});
+  const [expandedScoreRows, setExpandedScoreRows] = useState({});
+  const [scoreDebugByItem, setScoreDebugByItem] = useState({});
+  const [scoreLoadingByItem, setScoreLoadingByItem] = useState({});
   const [finalTagDrafts, setFinalTagDrafts] = useState({});
   const [opsLoading, setOpsLoading] = useState({
     saving: false,
@@ -277,10 +280,28 @@ function App() {
     }
   }
 
+  async function toggleScoreDebug(itemId) {
+    const isExpanded = Boolean(expandedScoreRows[itemId]);
+    if (isExpanded) {
+      setExpandedScoreRows((prev) => ({ ...prev, [itemId]: false }));
+      return;
+    }
+    setExpandedScoreRows((prev) => ({ ...prev, [itemId]: true }));
+    if (scoreDebugByItem[itemId]) return;
+    setScoreLoadingByItem((prev) => ({ ...prev, [itemId]: true }));
+    try {
+      const response = await api.getItemScores(itemId);
+      setScoreDebugByItem((prev) => ({ ...prev, [itemId]: response.full_scores || {} }));
+    } catch (err) {
+      setError(`Failed to load score debug JSON: ${err.message}`);
+    } finally {
+      setScoreLoadingByItem((prev) => ({ ...prev, [itemId]: false }));
+    }
+  }
+
   function addSelectedTag(value) {
     if (!value) return;
-    if (selectedTags.includes(value)) return;
-    setSelectedTags([...selectedTags, value]);
+    setSelectedTags((prev) => (prev.includes(value) ? prev : [...prev, value]));
   }
 
   async function addValidatedTag(rawValue) {
@@ -317,7 +338,7 @@ function App() {
   }
 
   function removeSelectedTag(value) {
-    setSelectedTags(selectedTags.filter((t) => t !== value));
+    setSelectedTags((prev) => prev.filter((t) => t !== value));
   }
 
   return (
@@ -491,11 +512,12 @@ function App() {
               <tr>
                 <th>Select</th>
                 <th>Image</th>
-                <th>Primary</th>
+                <th>Primary (Selected)</th>
                 <th>Score</th>
-                <th>Secondary</th>
+                <th>Secondary (Selected)</th>
                 <th>Status</th>
                 <th>Final Tag</th>
+                <th>Debug Scores</th>
                 <th>Review</th>
               </tr>
             </thead>
@@ -547,6 +569,18 @@ function App() {
                       value={finalTagDrafts[item.id] ?? (item.final_tag || "")}
                       onChange={(e) => queueFinalTagUpdate(item.id, e.target.value)}
                     />
+                  </td>
+                  <td>
+                    <button onClick={() => toggleScoreDebug(item.id)}>
+                      {expandedScoreRows[item.id] ? "Hide JSON" : "Show JSON"}
+                    </button>
+                    {expandedScoreRows[item.id] && (
+                      <pre className="debug-json">
+                        {scoreLoadingByItem[item.id]
+                          ? "Loading..."
+                          : JSON.stringify(scoreDebugByItem[item.id] || {}, null, 2)}
+                      </pre>
+                    )}
                   </td>
                   <td>
                     <button

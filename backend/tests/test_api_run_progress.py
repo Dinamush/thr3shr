@@ -139,6 +139,135 @@ def test_item_preview_returns_image(monkeypatch, tmp_path: Path):
         assert preview_resp.content == b"fake-image-bytes"
 
 
+def test_selected_tag_wins_when_global_top_not_selected(monkeypatch, tmp_path: Path):
+    root = tmp_path / "root_selected"
+    cats = tmp_path / "cats_selected"
+    root.mkdir()
+    cats.mkdir()
+    (cats / "monster_girl").mkdir()
+    (cats / "slime_girl").mkdir()
+    file_path = root / "s.png"
+    file_path.write_text("fake", encoding="utf-8")
+
+    def fake_scan_images(_root):
+        return ScanOutput(
+            image_paths=[file_path],
+            stats=ScanStats(
+                total_files=1,
+                eligible_images=1,
+                ignored_unsupported=0,
+                ignored_gif=0,
+                failed_to_read=0,
+            ),
+        )
+
+    monkeypatch.setattr("app.api.scan_images", fake_scan_images)
+    monkeypatch.setattr(
+        "app.api.extract_scores",
+        lambda _p: {"1girl": 0.99, "monster_girl": 0.85, "slime_girl": 0.82},
+    )
+    monkeypatch.setattr("app.api.load_known_tags", lambda _p: {"1girl", "monster_girl", "slime_girl"})
+    monkeypatch.setattr(
+        "app.api.discover_tag_folders",
+        lambda _root, _tags, _selected: [
+            FolderMapping(
+                folder_name="monster_girl",
+                normalized_name="monster_girl",
+                matched_tag="monster_girl",
+                matched=True,
+            ),
+            FolderMapping(
+                folder_name="slime_girl",
+                normalized_name="slime_girl",
+                matched_tag="slime_girl",
+                matched=True,
+            ),
+        ],
+    )
+
+    with TestClient(app) as client:
+        start_resp = client.post(
+            "/api/runs/start",
+            json={
+                "root_repo": str(root),
+                "categories_root": str(cats),
+                "confidence_threshold": 0.8,
+                "selected_folders": ["monster_girl", "slime_girl"],
+            },
+        )
+        start_resp.raise_for_status()
+        run_id = start_resp.json()["run_id"]
+        final = _wait_for_status(client, run_id, {"completed", "failed", "cancelled"})
+        assert final is not None
+        assert final["status"] == "completed"
+        items_resp = client.get(f"/api/runs/{run_id}/items")
+        items_resp.raise_for_status()
+        item = items_resp.json()[0]
+        assert item["primary_tag"] == "monster_girl"
+        assert item["status"] == "approved"
+        assert item["needs_review"] is False
+
+
+def test_item_scores_debug_endpoint(monkeypatch, tmp_path: Path):
+    root = tmp_path / "root_scores"
+    cats = tmp_path / "cats_scores"
+    root.mkdir()
+    cats.mkdir()
+    (cats / "1girl").mkdir()
+    file_path = root / "z.jpg"
+    file_path.write_text("fake", encoding="utf-8")
+
+    def fake_scan_images(_root):
+        return ScanOutput(
+            image_paths=[file_path],
+            stats=ScanStats(
+                total_files=1,
+                eligible_images=1,
+                ignored_unsupported=0,
+                ignored_gif=0,
+                failed_to_read=0,
+            ),
+        )
+
+    monkeypatch.setattr("app.api.scan_images", fake_scan_images)
+    monkeypatch.setattr("app.api.extract_scores", lambda _p: {"1girl": 0.92, "solo": 0.88})
+    monkeypatch.setattr("app.api.load_known_tags", lambda _p: {"1girl", "solo"})
+    monkeypatch.setattr(
+        "app.api.discover_tag_folders",
+        lambda _root, _tags, _selected: [
+            FolderMapping(
+                folder_name="1girl", normalized_name="1girl", matched_tag="1girl", matched=True
+            )
+        ],
+    )
+
+    with TestClient(app) as client:
+        start_resp = client.post(
+            "/api/runs/start",
+            json={
+                "root_repo": str(root),
+                "categories_root": str(cats),
+                "confidence_threshold": 0.6,
+                "selected_folders": ["1girl"],
+            },
+        )
+        start_resp.raise_for_status()
+        run_id = start_resp.json()["run_id"]
+        final = _wait_for_status(client, run_id, {"completed", "failed", "cancelled"})
+        assert final is not None
+        assert final["status"] == "completed"
+
+        items_resp = client.get(f"/api/runs/{run_id}/items")
+        items_resp.raise_for_status()
+        item_id = items_resp.json()[0]["id"]
+        debug_resp = client.get(f"/api/items/{item_id}/scores")
+        debug_resp.raise_for_status()
+        payload = debug_resp.json()
+        assert payload["item_id"] == item_id
+        assert payload["full_scores"]["1girl"] == 0.92
+        assert payload["full_scores"]["solo"] == 0.88
+
+
 def test_run_cancel_sets_cancelled(monkeypatch, tmp_path: Path):
     root = tmp_path / "root_cancel"
     cats = tmp_path / "cats_cancel"

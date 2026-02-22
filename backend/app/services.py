@@ -30,7 +30,7 @@ def normalize_tag_name(value: str) -> str:
     for ch in text:
         if ch.isalnum():
             normalized.append(ch)
-        elif ch in {" ", "-", ".", "/"}:
+        elif ch in {" ", "-", ".", "/", "_"}:
             normalized.append("_")
     return "".join(normalized).strip("_")
 
@@ -130,7 +130,7 @@ def extract_scores(image_path: Path) -> dict[str, float]:
         threshold=0.0,
         size=448,
         keep_ratio=True,
-        drop_overlap=True,
+        drop_overlap=False,
         use_real_name=False,
     )
 
@@ -150,7 +150,16 @@ def extract_scores(image_path: Path) -> dict[str, float]:
 def choose_best_tags(
     scores: dict[str, float], allowed_tags: set[str], max_secondary: int = 3
 ) -> tuple[str | None, float | None, list[dict[str, float]]]:
-    candidates = [(tag, score) for tag, score in scores.items() if tag in allowed_tags]
+    allowed_by_normalized = {normalize_tag_name(tag): tag for tag in allowed_tags}
+    best_by_allowed: dict[str, float] = {}
+    for tag, score in scores.items():
+        resolved = allowed_by_normalized.get(tag) or allowed_by_normalized.get(normalize_tag_name(tag))
+        if resolved is None:
+            continue
+        current = best_by_allowed.get(resolved)
+        if current is None or score > current:
+            best_by_allowed[resolved] = float(score)
+    candidates = list(best_by_allowed.items())
     candidates.sort(key=lambda x: x[1], reverse=True)
     if not candidates:
         return None, None, []

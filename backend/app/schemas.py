@@ -56,6 +56,7 @@ class ClassifiedItem(BaseModel):
     primary_tag: str | None
     primary_score: float | None
     secondary_suggestions: list[SecondarySuggestion] = Field(default_factory=list)
+    full_scores: dict[str, float] | None = None
     suggested_destination: str | None
     final_tag: str | None
     final_destination: str | None

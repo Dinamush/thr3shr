@@ -106,3 +106,16 @@ td {
   font-size: 12px;
   overflow-wrap: anywhere;
 }
+
+.debug-json {
+  margin-top: 6px;
+  max-width: 360px;
+  max-height: 220px;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.35;
+  background: #0f172a;
+  color: #e2e8f0;
+  border-radius: 8px;
+  padding: 8px;
+}
