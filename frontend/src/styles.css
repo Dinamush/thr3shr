@@ -1,0 +1,86 @@
+body {
+  margin: 0;
+  font-family: Inter, Arial, sans-serif;
+  background: #f4f6fb;
+  color: #1d2433;
+}
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.card {
+  background: #ffffff;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+}
+
+input,
+select,
+button {
+  padding: 8px;
+  border: 1px solid #ccd1dc;
+  border-radius: 8px;
+}
+
+button {
+  cursor: pointer;
+  background: #1d4ed8;
+  border: none;
+  color: #fff;
+}
+
+.stats {
+  display: flex;
+  gap: 16px;
+  margin: 10px 0;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  margin: 10px 0;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+th,
+td {
+  border: 1px solid #e4e8ef;
+  padding: 6px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.needs-review {
+  background: #fff8e7;
+}
+
+.error {
+  background: #ffe7e7;
+  border: 1px solid #f5b7b7;
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 12px;
+}
