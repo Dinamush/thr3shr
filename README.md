@@ -105,11 +105,44 @@ The frontend automatically falls back to local mock mode when backend requests f
 
 ## GPU Acceleration
 
-Inference attempts to use ONNX Runtime CUDA provider when available. If CUDA/cuDNN dependencies are missing, runtime falls back and logs provider errors. Ensure CUDA 12.x + cuDNN 9.x compatibility for GPU inference.
+Inference attempts to use ONNX Runtime CUDA provider when available. If CUDA/cuDNN dependencies are missing, runtime falls back to CPU and logs provider errors.
+
+### Verify GPU visibility
+
+```bash
+curl http://127.0.0.1:8000/health/providers
+curl http://127.0.0.1:8000/api/providers
+```
+
+`likely_device: "gpu"` means CUDA provider is visible and CPU is not being force-disabled.
+
+### Runtime controls
+
+- `MAX_INFERENCE_WORKERS` (default `2`, clamped to `1..16`): controls conservative thread-pool parallelism for per-image inference.
+- `FORCE_CPU_INFERENCE=true`: force reported/expected CPU path even if CUDA provider is available.
+- `INFERENCE_MODE=batch|single` (default `batch`): prefer GPU-first batched inference or legacy single-image inference.
+- `INFERENCE_BATCH_SIZE` (default `8`, clamped to `1..64`): request batch size for batched inference. If batch inference fails, runtime auto-falls back by splitting batches down to single-image.
+- `QUEUE_SHUFFLE_ENABLED=true|false` (default `true`): stochastic queue ordering toggle.
+- `QUEUE_SHUFFLE_SEED=<int>` (default `run_id`): deterministic seed for reproducible queue shuffling.
+
+Examples:
+
+```bash
+# CPU-safe baseline
+FORCE_CPU_INFERENCE=true MAX_INFERENCE_WORKERS=1 ../.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+
+# Throughput mode (tune workers to your CPU/GPU memory limits)
+MAX_INFERENCE_WORKERS=4 ../.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+
+# GPU-first batching + seeded stochastic queue
+INFERENCE_MODE=batch INFERENCE_BATCH_SIZE=8 QUEUE_SHUFFLE_ENABLED=true QUEUE_SHUFFLE_SEED=1337 MAX_INFERENCE_WORKERS=4 ../.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+```
 
 ## API Surface (High Level)
 
 - `GET /health`
+- `GET /health/providers`
+- `GET /api/providers`
 - `GET/PUT /api/settings`
 - `GET /api/tags`
 - `POST /api/runs/start`

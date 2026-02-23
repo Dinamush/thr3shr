@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 
 from fastapi import FastAPI
@@ -27,6 +28,31 @@ def _configure_logging() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     )
+
+
+def _get_provider_snapshot() -> dict[str, object]:
+    force_cpu = os.getenv("FORCE_CPU_INFERENCE", "").strip().lower() in {"1", "true", "yes", "on"}
+    try:
+        import onnxruntime as ort
+
+        providers = list(ort.get_available_providers())
+        cuda_available = "CUDAExecutionProvider" in providers
+        return {
+            "available_providers": providers,
+            "cuda_available": cuda_available,
+            "cpu_available": "CPUExecutionProvider" in providers,
+            "forced_cpu": force_cpu,
+            "likely_device": "cpu" if force_cpu else ("gpu" if cuda_available else "cpu"),
+        }
+    except Exception as err:
+        return {
+            "available_providers": [],
+            "cuda_available": False,
+            "cpu_available": True,
+            "forced_cpu": force_cpu,
+            "likely_device": "cpu",
+            "error": str(err),
+        }
 
 
 @app.middleware("http")
@@ -57,6 +83,8 @@ async def log_requests(request: Request, call_next):
 @app.on_event("startup")
 def startup() -> None:
     _configure_logging()
+    provider_state = _get_provider_snapshot()
+    logger.info("onnx_provider_state state=%s", provider_state)
     logger.info("initializing database at startup")
     init_db()
     logger.info("startup complete")
@@ -65,6 +93,11 @@ def startup() -> None:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/health/providers")
+def health_providers() -> dict[str, object]:
+    return {"status": "ok", **_get_provider_snapshot()}
 
 
 app.include_router(router)

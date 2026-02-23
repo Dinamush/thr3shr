@@ -1,4 +1,6 @@
 import time
+import os
+import random
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -7,6 +9,17 @@ from app.main import app
 from app.schemas import FolderMapping, ScanStats
 from app.services import ScanOutput
 from app.storage import execute
+
+
+def test_providers_endpoint_shape():
+    with TestClient(app) as client:
+        resp = client.get("/api/providers")
+        resp.raise_for_status()
+        payload = resp.json()
+        assert "available_providers" in payload
+        assert "likely_device" in payload
+        assert "cuda_available" in payload
+        assert "forced_cpu" in payload
 
 
 def _wait_for_status(client: TestClient, run_id: int, terminal: set[str], timeout_s: float = 5.0):
@@ -32,7 +45,7 @@ def test_run_progress_reaches_completed(monkeypatch, tmp_path: Path):
     file_path = root / "a.jpg"
     file_path.write_text("fake", encoding="utf-8")
 
-    def fake_scan_images(_root):
+    def fake_scan_images(_root, **kwargs):
         return ScanOutput(
             image_paths=[file_path],
             stats=ScanStats(
@@ -90,7 +103,7 @@ def test_item_preview_returns_image(monkeypatch, tmp_path: Path):
     file_path = root / "preview.jpg"
     file_path.write_bytes(b"fake-image-bytes")
 
-    def fake_scan_images(_root):
+    def fake_scan_images(_root, **kwargs):
         return ScanOutput(
             image_paths=[file_path],
             stats=ScanStats(
@@ -149,7 +162,7 @@ def test_selected_tag_wins_when_global_top_not_selected(monkeypatch, tmp_path: P
     file_path = root / "s.png"
     file_path.write_text("fake", encoding="utf-8")
 
-    def fake_scan_images(_root):
+    def fake_scan_images(_root, **kwargs):
         return ScanOutput(
             image_paths=[file_path],
             stats=ScanStats(
@@ -217,7 +230,7 @@ def test_item_scores_debug_endpoint(monkeypatch, tmp_path: Path):
     file_path = root / "z.jpg"
     file_path.write_text("fake", encoding="utf-8")
 
-    def fake_scan_images(_root):
+    def fake_scan_images(_root, **kwargs):
         return ScanOutput(
             image_paths=[file_path],
             stats=ScanStats(
@@ -280,7 +293,7 @@ def test_run_cancel_sets_cancelled(monkeypatch, tmp_path: Path):
         p.write_text("fake", encoding="utf-8")
         file_paths.append(p)
 
-    def fake_scan_images(_root):
+    def fake_scan_images(_root, **kwargs):
         return ScanOutput(
             image_paths=file_paths,
             stats=ScanStats(
@@ -326,7 +339,179 @@ def test_run_cancel_sets_cancelled(monkeypatch, tmp_path: Path):
         assert final is not None
         assert final["cancel_requested"] is True
         assert final["status"] in {"cancelled", "completed"}
+        if final["status"] == "cancelled":
+            items_resp = client.get(f"/api/runs/{run_id}/items")
+            items_resp.raise_for_status()
+            assert items_resp.json() == []
+            assert final["processed_images"] == 0
+            assert final["total_images"] == 0
 
     # Keep test environment clean of inserted rows.
     execute("DELETE FROM items WHERE run_id = ?", (run_id,))
     execute("DELETE FROM runs WHERE id = ?", (run_id,))
+
+
+def test_seeded_queue_shuffle_is_deterministic(monkeypatch, tmp_path: Path):
+    root = tmp_path / "root_seed"
+    cats = tmp_path / "cats_seed"
+    root.mkdir()
+    cats.mkdir()
+    (cats / "1girl").mkdir()
+    file_paths = []
+    for idx in range(6):
+        p = root / f"{idx}.jpg"
+        p.write_text("fake", encoding="utf-8")
+        file_paths.append(p)
+
+    observed_order: list[str] = []
+
+    def fake_scan_images(_root, **kwargs):
+        return ScanOutput(
+            image_paths=file_paths,
+            stats=ScanStats(
+                total_files=len(file_paths),
+                eligible_images=len(file_paths),
+                ignored_unsupported=0,
+                ignored_gif=0,
+                failed_to_read=0,
+            ),
+        )
+
+    def record_scores(path: Path):
+        observed_order.append(path.name)
+        return {"1girl": 0.88}
+
+    monkeypatch.setattr("app.api.scan_images", fake_scan_images)
+    monkeypatch.setattr("app.api.extract_scores", record_scores)
+    monkeypatch.setattr("app.api.load_known_tags", lambda _p: {"1girl"})
+    monkeypatch.setattr(
+        "app.api.discover_tag_folders",
+        lambda _root, _tags, _selected: [
+            FolderMapping(
+                folder_name="1girl", normalized_name="1girl", matched_tag="1girl", matched=True
+            )
+        ],
+    )
+
+    prev_shuffle = os.environ.get("QUEUE_SHUFFLE_ENABLED")
+    prev_seed = os.environ.get("QUEUE_SHUFFLE_SEED")
+    prev_workers = os.environ.get("MAX_INFERENCE_WORKERS")
+    prev_mode = os.environ.get("INFERENCE_MODE")
+    os.environ["QUEUE_SHUFFLE_ENABLED"] = "true"
+    os.environ["QUEUE_SHUFFLE_SEED"] = "1337"
+    os.environ["MAX_INFERENCE_WORKERS"] = "1"
+    os.environ["INFERENCE_MODE"] = "single"
+    try:
+        with TestClient(app) as client:
+            start_resp = client.post(
+                "/api/runs/start",
+                json={
+                    "root_repo": str(root),
+                    "categories_root": str(cats),
+                    "confidence_threshold": 0.6,
+                    "selected_folders": ["1girl"],
+                },
+            )
+            start_resp.raise_for_status()
+            run_id = start_resp.json()["run_id"]
+            final = _wait_for_status(client, run_id, {"completed", "failed", "cancelled"}, timeout_s=8.0)
+            assert final is not None
+            assert final["status"] == "completed"
+            expected = [p.name for p in file_paths]
+            random.Random(1337).shuffle(expected)
+            assert observed_order == expected
+            execute("DELETE FROM items WHERE run_id = ?", (run_id,))
+            execute("DELETE FROM runs WHERE id = ?", (run_id,))
+    finally:
+        if prev_shuffle is None:
+            os.environ.pop("QUEUE_SHUFFLE_ENABLED", None)
+        else:
+            os.environ["QUEUE_SHUFFLE_ENABLED"] = prev_shuffle
+        if prev_seed is None:
+            os.environ.pop("QUEUE_SHUFFLE_SEED", None)
+        else:
+            os.environ["QUEUE_SHUFFLE_SEED"] = prev_seed
+        if prev_workers is None:
+            os.environ.pop("MAX_INFERENCE_WORKERS", None)
+        else:
+            os.environ["MAX_INFERENCE_WORKERS"] = prev_workers
+        if prev_mode is None:
+            os.environ.pop("INFERENCE_MODE", None)
+        else:
+            os.environ["INFERENCE_MODE"] = prev_mode
+
+
+def test_batch_mode_falls_back_to_single(monkeypatch, tmp_path: Path):
+    root = tmp_path / "root_batch_fallback"
+    cats = tmp_path / "cats_batch_fallback"
+    root.mkdir()
+    cats.mkdir()
+    (cats / "1girl").mkdir()
+    file_paths = []
+    for idx in range(8):
+        p = root / f"{idx}.jpg"
+        p.write_text("fake", encoding="utf-8")
+        file_paths.append(p)
+
+    def fake_scan_images(_root, **kwargs):
+        return ScanOutput(
+            image_paths=file_paths,
+            stats=ScanStats(
+                total_files=len(file_paths),
+                eligible_images=len(file_paths),
+                ignored_unsupported=0,
+                ignored_gif=0,
+                failed_to_read=0,
+            ),
+        )
+
+    def fail_batch(_paths):
+        raise RuntimeError("synthetic batch failure")
+
+    monkeypatch.setattr("app.api.scan_images", fake_scan_images)
+    monkeypatch.setattr("app.api.extract_scores_batch", fail_batch)
+    monkeypatch.setattr("app.api.extract_scores", lambda _p: {"1girl": 0.9})
+    monkeypatch.setattr("app.api.load_known_tags", lambda _p: {"1girl"})
+    monkeypatch.setattr(
+        "app.api.discover_tag_folders",
+        lambda _root, _tags, _selected: [
+            FolderMapping(
+                folder_name="1girl", normalized_name="1girl", matched_tag="1girl", matched=True
+            )
+        ],
+    )
+
+    prev_mode = os.environ.get("INFERENCE_MODE")
+    prev_batch = os.environ.get("INFERENCE_BATCH_SIZE")
+    os.environ["INFERENCE_MODE"] = "batch"
+    os.environ["INFERENCE_BATCH_SIZE"] = "4"
+    try:
+        with TestClient(app) as client:
+            start_resp = client.post(
+                "/api/runs/start",
+                json={
+                    "root_repo": str(root),
+                    "categories_root": str(cats),
+                    "confidence_threshold": 0.6,
+                    "selected_folders": ["1girl"],
+                },
+            )
+            start_resp.raise_for_status()
+            run_id = start_resp.json()["run_id"]
+            final = _wait_for_status(client, run_id, {"completed", "failed", "cancelled"}, timeout_s=8.0)
+            assert final is not None
+            assert final["status"] == "completed"
+            assert final["failed_images"] == 0
+            assert final["processed_images"] == len(file_paths)
+            assert final["inference_mode"] in {"single", "batch_fallback", "single_fallback"}
+            execute("DELETE FROM items WHERE run_id = ?", (run_id,))
+            execute("DELETE FROM runs WHERE id = ?", (run_id,))
+    finally:
+        if prev_mode is None:
+            os.environ.pop("INFERENCE_MODE", None)
+        else:
+            os.environ["INFERENCE_MODE"] = prev_mode
+        if prev_batch is None:
+            os.environ.pop("INFERENCE_BATCH_SIZE", None)
+        else:
+            os.environ["INFERENCE_BATCH_SIZE"] = prev_batch

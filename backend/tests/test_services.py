@@ -38,14 +38,80 @@ def test_scan_images_filters_types(tmp_path: Path) -> None:
     (tmp_path / "video.mp4").write_text("not-video", encoding="utf-8")
     (tmp_path / "anim.gif").write_text("gif", encoding="utf-8")
     (tmp_path / "doc.txt").write_text("txt", encoding="utf-8")
+    # broken.png has a known image extension so it is accepted at scan time;
+    # corrupt files are caught later during inference (not at discovery).
     (tmp_path / "broken.png").write_text("broken", encoding="utf-8")
 
     result = scan_images(tmp_path)
-    assert len(result.image_paths) == 1
-    assert result.stats.eligible_images == 1
+    names = {p.name for p in result.image_paths}
+    assert "ok.jpg" in names
+    assert "broken.png" in names  # accepted at scan; inference will handle corruption
+    assert result.stats.eligible_images == 2
     assert result.stats.ignored_gif == 1
-    assert result.stats.ignored_unsupported >= 2
-    assert result.stats.failed_to_read == 1
+    assert result.stats.ignored_unsupported >= 1  # doc.txt
+    assert result.stats.failed_to_read == 0  # no OSError-level failures
+
+
+def test_scan_images_includes_extensionless_valid_image(tmp_path: Path) -> None:
+    extless = tmp_path / "no_extension_image"
+    Image.new("RGB", (16, 16), color="purple").save(extless, format="PNG")
+
+    result = scan_images(tmp_path)
+    names = {p.name for p in result.image_paths}
+    assert "no_extension_image" in names
+    assert result.stats.eligible_images == 1
+
+
+def test_scan_images_includes_unknown_extension_if_decodable(tmp_path: Path) -> None:
+    odd_ext = tmp_path / "odd_format.weird"
+    Image.new("RGB", (16, 16), color="yellow").save(odd_ext, format="PNG")
+
+    result = scan_images(tmp_path)
+    names = {p.name for p in result.image_paths}
+    assert "odd_format.weird" in names
+    assert result.stats.eligible_images == 1
+    assert result.stats.ignored_unsupported == 0
+
+
+def test_scan_images_rejects_unknown_extension_when_not_image(tmp_path: Path) -> None:
+    non_image = tmp_path / "not_image.weird"
+    non_image.write_text("plain text", encoding="utf-8")
+
+    result = scan_images(tmp_path)
+    names = {p.name for p in result.image_paths}
+    assert "not_image.weird" not in names
+    assert result.stats.eligible_images == 0
+    assert result.stats.ignored_unsupported == 1
+
+
+def test_scan_images_descends_into_subdirectories(tmp_path: Path) -> None:
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    nested_img = nested / "nested.jpg"
+    Image.new("RGB", (16, 16), color="blue").save(nested_img)
+
+    top_img = tmp_path / "top.jpg"
+    Image.new("RGB", (16, 16), color="green").save(top_img)
+
+    result = scan_images(tmp_path)
+    names = {p.name for p in result.image_paths}
+    assert "top.jpg" in names
+    assert "nested.jpg" in names
+
+
+def test_scan_images_excludes_specified_directory(tmp_path: Path) -> None:
+    included_dir = tmp_path / "included"
+    included_dir.mkdir()
+    Image.new("RGB", (16, 16), color="red").save(included_dir / "in.jpg")
+
+    excluded_dir = tmp_path / "excluded"
+    excluded_dir.mkdir()
+    Image.new("RGB", (16, 16), color="blue").save(excluded_dir / "out.jpg")
+
+    result = scan_images(tmp_path, exclude_dirs={excluded_dir})
+    names = {p.name for p in result.image_paths}
+    assert "in.jpg" in names
+    assert "out.jpg" not in names
 
 
 def test_choose_best_tags_single_primary_and_secondary() -> None:

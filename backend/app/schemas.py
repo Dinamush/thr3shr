@@ -15,6 +15,7 @@ class AppSettings(BaseModel):
     categories_root: str = ""
     confidence_threshold: float = 0.6
     default_migrate_mode: MigrateMode = "copy"
+    scan_recursive: bool = True
 
 
 class SaveSettingsRequest(AppSettings):
@@ -88,6 +89,10 @@ class RunStatusResponse(BaseModel):
     last_error: str | None = None
     cancel_requested: bool = False
     has_items: bool = False
+    inference_mode: str | None = None
+    batch_size: int | None = None
+    avg_infer_ms_per_image: float | None = None
+    queue_seed: int | None = None
 
 
 class UpdateItemRequest(BaseModel):

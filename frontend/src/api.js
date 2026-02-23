@@ -6,6 +6,7 @@ const defaultSettings = {
   categories_root: "",
   confidence_threshold: 0.6,
   default_migrate_mode: "copy",
+  scan_recursive: true,
 };
 const mockTags = [
   "1girl",
@@ -167,6 +168,10 @@ function computeMockStatus(run) {
     last_error: run.last_error || null,
     cancel_requested: Boolean(run.cancel_requested),
     has_items: (run.items || []).length > 0,
+    inference_mode: "single",
+    batch_size: 1,
+    avg_infer_ms_per_image: null,
+    queue_seed: null,
   };
 }
 
@@ -176,6 +181,16 @@ function mockRequest(path, options = {}) {
 
   if (path === "/settings" && method === "GET") {
     return Promise.resolve(mockState.settings);
+  }
+  if (path === "/providers" && method === "GET") {
+    return Promise.resolve({
+      available_providers: ["CPUExecutionProvider"],
+      cuda_available: false,
+      cpu_available: true,
+      forced_cpu: false,
+      likely_device: "cpu",
+      mock_mode: true,
+    });
   }
   if (path.startsWith("/tags") && method === "GET") {
     const queryString = path.includes("?") ? path.split("?")[1] : "";
@@ -357,6 +372,7 @@ export const api = {
     return request(`/tags?${params.toString()}`);
   },
   getSettings: () => request("/settings"),
+  getProviders: () => request("/providers"),
   saveSettings: (payload) =>
     request("/settings", {
       method: "PUT",

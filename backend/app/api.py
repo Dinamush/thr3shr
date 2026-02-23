@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import os
 import logging
+import random
 import threading
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+import time
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -24,6 +29,7 @@ from .services import (
     choose_best_tags,
     discover_tag_folders,
     extract_scores,
+    extract_scores_batch,
     load_known_tags,
     migrate_file,
     resolve_settings,
@@ -42,10 +48,186 @@ SUPPORTED_PREVIEW_SUFFIXES = {
     ".webp": "image/webp",
     ".bmp": "image/bmp",
 }
+_RUN_TELEMETRY: dict[int, dict[str, object]] = {}
+_RUN_TELEMETRY_LOCK = threading.Lock()
+
+
+@dataclass
+class _ImageInferenceResult:
+    image_path: Path
+    scores: dict[str, float]
+    primary_tag: str | None
+    primary_score: float | None
+    secondary: list[dict[str, float]]
+    needs_review: bool
+    reason: str | None
+    inference_failed: bool
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _get_max_inference_workers() -> int:
+    raw = os.getenv("MAX_INFERENCE_WORKERS", "2").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 2
+    return max(1, min(value, 16))
+
+
+def _get_inference_mode() -> str:
+    raw = os.getenv("INFERENCE_MODE", "batch").strip().lower()
+    return "single" if raw == "single" else "batch"
+
+
+def _get_inference_batch_size() -> int:
+    raw = os.getenv("INFERENCE_BATCH_SIZE", "8").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 8
+    return max(1, min(value, 64))
+
+
+def _get_queue_shuffle_enabled() -> bool:
+    raw = os.getenv("QUEUE_SHUFFLE_ENABLED", "true").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _get_queue_shuffle_seed(run_id: int) -> int:
+    raw = os.getenv("QUEUE_SHUFFLE_SEED", "").strip()
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return int(run_id)
+
+
+def _set_run_telemetry(run_id: int, **kwargs) -> None:
+    with _RUN_TELEMETRY_LOCK:
+        telemetry = _RUN_TELEMETRY.get(run_id, {})
+        telemetry.update(kwargs)
+        _RUN_TELEMETRY[run_id] = telemetry
+
+
+def _get_run_telemetry(run_id: int) -> dict[str, object]:
+    with _RUN_TELEMETRY_LOCK:
+        return dict(_RUN_TELEMETRY.get(run_id, {}))
+
+
+def _is_provider_related_error(err: Exception) -> bool:
+    msg = str(err).lower()
+    keywords = ("cuda", "cudnn", "executionprovider", "provider", "onnxruntime", "gpu")
+    return any(k in msg for k in keywords)
+
+
+def _infer_one_image(
+    image_path: Path, matched_tags: set[str], confidence_threshold: float
+) -> _ImageInferenceResult:
+    try:
+        scores = extract_scores(image_path)
+        primary_tag, primary_score, secondary = choose_best_tags(scores, matched_tags)
+        needs_review = False
+        reason = None
+        if primary_tag is None:
+            needs_review = True
+            reason = "No matching tags found in selected folders."
+        elif primary_score is not None and primary_score < confidence_threshold:
+            needs_review = True
+            reason = f"Below threshold ({primary_score:.3f} < {confidence_threshold:.3f})."
+        return _ImageInferenceResult(
+            image_path=image_path,
+            scores=scores,
+            primary_tag=primary_tag,
+            primary_score=primary_score,
+            secondary=secondary,
+            needs_review=needs_review,
+            reason=reason,
+            inference_failed=False,
+        )
+    except Exception as err:
+        if _is_provider_related_error(err):
+            logger.exception("inference_provider_failure image=%s", image_path)
+        else:
+            logger.exception("inference_failed image=%s", image_path)
+        return _ImageInferenceResult(
+            image_path=image_path,
+            scores={},
+            primary_tag=None,
+            primary_score=None,
+            secondary=[],
+            needs_review=True,
+            reason="Inference failed for this image; requires manual review.",
+            inference_failed=True,
+        )
+
+
+def _infer_batch_with_fallback(
+    image_paths: list[Path],
+    matched_tags: set[str],
+    confidence_threshold: float,
+    requested_mode: str,
+) -> tuple[list[_ImageInferenceResult], float, str]:
+    if not image_paths:
+        return [], 0.0, "none"
+
+    if requested_mode != "batch" or len(image_paths) == 1:
+        start = time.perf_counter()
+        rows = [_infer_one_image(image_paths[0], matched_tags, confidence_threshold)]
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
+        mode = "single" if requested_mode == "single" else "single_fallback"
+        return rows, elapsed_ms, mode
+
+    start = time.perf_counter()
+    try:
+        scores_by_image = extract_scores_batch(image_paths)
+        if len(scores_by_image) != len(image_paths):
+            raise RuntimeError("Batch inference result count mismatch")
+        rows: list[_ImageInferenceResult] = []
+        for image_path, scores in zip(image_paths, scores_by_image):
+            primary_tag, primary_score, secondary = choose_best_tags(scores, matched_tags)
+            needs_review = False
+            reason = None
+            if primary_tag is None:
+                needs_review = True
+                reason = "No matching tags found in selected folders."
+            elif primary_score is not None and primary_score < confidence_threshold:
+                needs_review = True
+                reason = f"Below threshold ({primary_score:.3f} < {confidence_threshold:.3f})."
+            rows.append(
+                _ImageInferenceResult(
+                    image_path=image_path,
+                    scores=scores,
+                    primary_tag=primary_tag,
+                    primary_score=primary_score,
+                    secondary=secondary,
+                    needs_review=needs_review,
+                    reason=reason,
+                    inference_failed=False,
+                )
+            )
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
+        return rows, elapsed_ms, "batch"
+    except Exception as err:
+        if _is_provider_related_error(err):
+            logger.exception("batch_inference_provider_failure batch_size=%d", len(image_paths))
+        else:
+            logger.exception("batch_inference_failed batch_size=%d", len(image_paths))
+        if len(image_paths) > 1:
+            mid = len(image_paths) // 2
+            left_rows, left_ms, _ = _infer_batch_with_fallback(
+                image_paths[:mid], matched_tags, confidence_threshold, "batch"
+            )
+            right_rows, right_ms, _ = _infer_batch_with_fallback(
+                image_paths[mid:], matched_tags, confidence_threshold, "batch"
+            )
+            return left_rows + right_rows, left_ms + right_ms, "batch_fallback"
+        row = _infer_one_image(image_paths[0], matched_tags, confidence_threshold)
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
+        return [row], elapsed_ms, "single_fallback"
 
 
 def _settings_from_db() -> AppSettings:
@@ -57,6 +239,7 @@ def _settings_from_db() -> AppSettings:
         categories_root=row["categories_root"],
         confidence_threshold=float(row["confidence_threshold"]),
         default_migrate_mode=row["default_migrate_mode"],
+        scan_recursive=bool(row.get("scan_recursive", 1)),
     )
 
 
@@ -90,6 +273,7 @@ def _run_status_from_row(row: dict) -> RunStatusResponse:
     pct = 0.0 if total <= 0 else min(100.0, (processed / total) * 100.0)
     item_count_row = fetch_one("SELECT COUNT(*) AS cnt FROM items WHERE run_id = ?", (row["id"],))
     has_items = bool(item_count_row and int(item_count_row["cnt"]) > 0)
+    telemetry = _get_run_telemetry(row["id"])
     return RunStatusResponse(
         run_id=row["id"],
         status=row.get("status") or "pending",
@@ -102,6 +286,10 @@ def _run_status_from_row(row: dict) -> RunStatusResponse:
         last_error=row.get("last_error"),
         cancel_requested=bool(row.get("cancel_requested") or 0),
         has_items=has_items,
+        inference_mode=telemetry.get("inference_mode"),
+        batch_size=telemetry.get("batch_size"),
+        avg_infer_ms_per_image=telemetry.get("avg_infer_ms_per_image"),
+        queue_seed=telemetry.get("queue_seed"),
     )
 
 
@@ -123,80 +311,175 @@ def _execute_run(
     categories_root: Path,
     confidence_threshold: float,
     matched_tags: set[str],
+    scan_recursive: bool = True,
 ) -> None:
     try:
         execute(
             "UPDATE runs SET status = 'running', started_at = ?, last_error = NULL WHERE id = ?",
             (_now_iso(), run_id),
         )
-        scan_output = scan_images(root_repo)
+        scan_output = scan_images(root_repo, exclude_dirs={categories_root}, recursive=scan_recursive)
         execute("UPDATE runs SET total_images = ? WHERE id = ?", (scan_output.stats.eligible_images, run_id))
+        logger.info(
+            "run_scan_complete run_id=%d total_files=%d eligible=%d "
+            "ignored_gif=%d ignored_unsupported=%d failed_to_read=%d",
+            run_id,
+            scan_output.stats.total_files,
+            scan_output.stats.eligible_images,
+            scan_output.stats.ignored_gif,
+            scan_output.stats.ignored_unsupported,
+            scan_output.stats.failed_to_read,
+        )
+
+        queue_shuffle_enabled = _get_queue_shuffle_enabled()
+        queue_seed = _get_queue_shuffle_seed(run_id)
+        ordered_paths = list(scan_output.image_paths)
+        if queue_shuffle_enabled:
+            rng = random.Random(queue_seed)
+            rng.shuffle(ordered_paths)
+        inference_mode = _get_inference_mode()
+        configured_batch_size = _get_inference_batch_size()
+        batch_size = 1 if inference_mode == "single" else configured_batch_size
+        _set_run_telemetry(
+            run_id,
+            queue_seed=queue_seed,
+            inference_mode=inference_mode,
+            batch_size=batch_size,
+            avg_infer_ms_per_image=0.0,
+        )
+        logger.info(
+            "run_queue_config run_id=%d shuffle=%s seed=%d mode=%s batch_size=%d",
+            run_id,
+            queue_shuffle_enabled,
+            queue_seed,
+            inference_mode,
+            batch_size,
+        )
 
         processed = 0
         failed = 0
-        for image_path in scan_output.image_paths:
-            if _is_cancel_requested(run_id):
-                execute(
-                    "UPDATE runs SET status = 'cancelled', finished_at = ? WHERE id = ?",
-                    (_now_iso(), run_id),
-                )
-                logger.info("run_cancelled run_id=%d processed=%d", run_id, processed)
-                return
+        cancelled = False
+        infer_elapsed_ms_total = 0.0
+        infer_sample_count = 0
+        max_workers = _get_max_inference_workers()
+        logger.info(
+            "run_inference_workers run_id=%d workers=%d total_images=%d",
+            run_id,
+            max_workers,
+            scan_output.stats.eligible_images,
+        )
 
-            relative_path = str(image_path.relative_to(root_repo))
-            try:
-                scores = extract_scores(image_path)
-                primary_tag, primary_score, secondary = choose_best_tags(scores, matched_tags)
-                needs_review = False
-                reason = None
-            except Exception:
-                logger.exception("inference_failed run_id=%d image=%s", run_id, image_path)
-                scores, primary_tag, primary_score, secondary = {}, None, None, []
-                needs_review = True
-                reason = "Inference failed for this image; requires manual review."
-                failed += 1
+        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="infer") as executor:
+            pending: dict[Future[tuple[list[_ImageInferenceResult], float, str]], list[Path]] = {}
+            batches = [
+                ordered_paths[idx : idx + batch_size]
+                for idx in range(0, len(ordered_paths), batch_size)
+            ]
+            iterator = iter(batches)
 
-            if primary_tag is None and reason is None:
-                needs_review = True
-                reason = "No matching tags found in selected folders."
-            elif (
-                primary_score is not None
-                and primary_score < confidence_threshold
-                and reason is None
-            ):
-                needs_review = True
-                reason = f"Below threshold ({primary_score:.3f} < {confidence_threshold:.3f})."
+            def _submit_until_capacity() -> None:
+                while len(pending) < max_workers:
+                    try:
+                        next_batch = next(iterator)
+                    except StopIteration:
+                        return
+                    future = executor.submit(
+                        _infer_batch_with_fallback,
+                        next_batch,
+                        matched_tags,
+                        confidence_threshold,
+                        inference_mode,
+                    )
+                    pending[future] = next_batch
 
-            suggested_destination = (
-                str(categories_root / primary_tag) if primary_tag is not None else None
-            )
+            _submit_until_capacity()
+            while pending:
+                if _is_cancel_requested(run_id):
+                    cancelled = True
+                    for future in pending:
+                        future.cancel()
+                    break
+
+                done, _ = wait(set(pending.keys()), return_when=FIRST_COMPLETED)
+                for future in done:
+                    pending.pop(future)
+                    if future.cancelled():
+                        continue
+                    batch_results, elapsed_ms, used_mode = future.result()
+                    infer_elapsed_ms_total += elapsed_ms
+                    infer_sample_count += len(batch_results)
+                    avg_ms = (
+                        infer_elapsed_ms_total / infer_sample_count if infer_sample_count else 0.0
+                    )
+                    _set_run_telemetry(
+                        run_id,
+                        inference_mode=used_mode if used_mode != "single_fallback" else "single",
+                        batch_size=batch_size,
+                        avg_infer_ms_per_image=avg_ms,
+                    )
+
+                    for result in batch_results:
+                        relative_path = str(result.image_path.relative_to(root_repo))
+                        suggested_destination = (
+                            str(categories_root / result.primary_tag)
+                            if result.primary_tag is not None
+                            else None
+                        )
+                        execute(
+                            """
+                            INSERT INTO items (
+                                run_id, file_path, relative_path, primary_tag, primary_score, secondary_json,
+                                full_scores_json, suggested_destination, final_tag, final_destination, status, needs_review, review_reason
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                run_id,
+                                str(result.image_path),
+                                relative_path,
+                                result.primary_tag,
+                                result.primary_score,
+                                to_json(result.secondary),
+                                to_json(result.scores),
+                                suggested_destination,
+                                result.primary_tag,
+                                suggested_destination,
+                                "approved" if not result.needs_review else "proposed",
+                                1 if result.needs_review else 0,
+                                result.reason,
+                            ),
+                        )
+                        processed += 1
+                        if result.inference_failed:
+                            failed += 1
+                        _update_run_progress(run_id, processed, failed)
+                        if processed % 10 == 0:
+                            logger.info(
+                                "run_progress run_id=%d processed=%d total=%d avg_infer_ms=%.2f",
+                                run_id,
+                                processed,
+                                scan_output.stats.eligible_images,
+                                avg_ms,
+                            )
+                _submit_until_capacity()
+
+        if cancelled:
+            # Reset partial run artifacts so cancelled runs do not look like
+            # "missing file" runs with incomplete queues.
+            execute("DELETE FROM items WHERE run_id = ?", (run_id,))
             execute(
                 """
-                INSERT INTO items (
-                    run_id, file_path, relative_path, primary_tag, primary_score, secondary_json,
-                    full_scores_json, suggested_destination, final_tag, final_destination, status, needs_review, review_reason
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                UPDATE runs
+                SET status = 'cancelled',
+                    finished_at = ?,
+                    total_images = 0,
+                    processed_images = 0,
+                    failed_images = 0
+                WHERE id = ?
                 """,
-                (
-                    run_id,
-                    str(image_path),
-                    relative_path,
-                    primary_tag,
-                    primary_score,
-                    to_json(secondary),
-                    to_json(scores),
-                    suggested_destination,
-                    primary_tag,
-                    suggested_destination,
-                    "approved" if not needs_review else "proposed",
-                    1 if needs_review else 0,
-                    reason,
-                ),
+                (_now_iso(), run_id),
             )
-            processed += 1
-            _update_run_progress(run_id, processed, failed)
-            if processed % 10 == 0:
-                logger.info("run_progress run_id=%d processed=%d total=%d", run_id, processed, scan_output.stats.eligible_images)
+            logger.info("run_cancelled run_id=%d processed=%d", run_id, processed)
+            return
 
         execute(
             "UPDATE runs SET status = 'completed', finished_at = ? WHERE id = ?",
@@ -222,7 +505,8 @@ def save_settings(payload: SaveSettingsRequest) -> AppSettings:
         execute(
             """
             UPDATE settings
-            SET root_repo = ?, categories_root = ?, confidence_threshold = ?, default_migrate_mode = ?
+            SET root_repo = ?, categories_root = ?, confidence_threshold = ?,
+                default_migrate_mode = ?, scan_recursive = ?
             WHERE id = 1
             """,
             (
@@ -230,6 +514,7 @@ def save_settings(payload: SaveSettingsRequest) -> AppSettings:
                 payload.categories_root,
                 payload.confidence_threshold,
                 payload.default_migrate_mode,
+                1 if payload.scan_recursive else 0,
             ),
         )
     except Exception:
@@ -244,6 +529,59 @@ def search_tags(query: str = Query("", min_length=0), limit: int = 50) -> dict:
     if query:
         known = [t for t in known if query.lower() in t.lower()]
     return {"items": known[:limit], "count": len(known)}
+
+
+@router.get("/scan/preview")
+def scan_preview() -> dict:
+    """Run image discovery on the configured root_repo and return stats without inference."""
+    settings = _settings_from_db()
+    if not settings.root_repo:
+        raise HTTPException(status_code=400, detail="root_repo is not configured in settings")
+    root_repo = Path(settings.root_repo).expanduser()
+    exclude_dirs: set[Path] = set()
+    if settings.categories_root:
+        exclude_dirs.add(Path(settings.categories_root).expanduser())
+    try:
+        output = scan_images(
+            root_repo,
+            exclude_dirs=exclude_dirs or None,
+            recursive=settings.scan_recursive,
+        )
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+    return {
+        "root_repo": str(root_repo),
+        "recursive": settings.scan_recursive,
+        "excluded_dirs": [str(d) for d in exclude_dirs],
+        "stats": output.stats.model_dump(),
+        "sample_paths": [str(p) for p in output.image_paths[:20]],
+    }
+
+
+@router.get("/providers")
+def get_providers() -> dict[str, object]:
+    force_cpu = os.getenv("FORCE_CPU_INFERENCE", "").strip().lower() in {"1", "true", "yes", "on"}
+    try:
+        import onnxruntime as ort
+
+        providers = list(ort.get_available_providers())
+        cuda_available = "CUDAExecutionProvider" in providers
+        return {
+            "available_providers": providers,
+            "cuda_available": cuda_available,
+            "cpu_available": "CPUExecutionProvider" in providers,
+            "forced_cpu": force_cpu,
+            "likely_device": "cpu" if force_cpu else ("gpu" if cuda_available else "cpu"),
+        }
+    except Exception as err:
+        return {
+            "available_providers": [],
+            "cuda_available": False,
+            "cpu_available": True,
+            "forced_cpu": force_cpu,
+            "likely_device": "cpu",
+            "error": str(err),
+        }
 
 
 @router.post("/runs/start", response_model=StartRunResponse)
@@ -287,7 +625,8 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
 
     worker = threading.Thread(
         target=_execute_run,
-        args=(run_id, root_repo, categories_root, resolved.confidence_threshold, matched_tags),
+        args=(run_id, root_repo, categories_root, resolved.confidence_threshold, matched_tags,
+              resolved.scan_recursive),
         daemon=True,
     )
     worker.start()

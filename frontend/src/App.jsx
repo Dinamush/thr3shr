@@ -6,6 +6,7 @@ const DEFAULT_SETTINGS = {
   categories_root: "",
   confidence_threshold: 0.6,
   default_migrate_mode: "copy",
+  scan_recursive: true,
 };
 const ACTIVE_RUN_STORAGE_KEY = "imageClassifierActiveRunId";
 
@@ -18,6 +19,7 @@ function App() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [providerInfo, setProviderInfo] = useState(null);
   const [migrateMode, setMigrateMode] = useState("copy");
   const [selectedIds, setSelectedIds] = useState([]);
   const [tagQuery, setTagQuery] = useState("");
@@ -65,6 +67,9 @@ function App() {
     if (storedRunId > 0) {
       setRunId(storedRunId);
     }
+    api.getProviders()
+      .then((info) => setProviderInfo(info))
+      .catch(() => setProviderInfo(null));
   }, []);
 
   useEffect(() => {
@@ -353,6 +358,13 @@ function App() {
           Backend is offline. Running in browser-only demo mode with local mock data.
         </div>
       )}
+      {providerInfo && !offlineMode && (
+        <div className="stats">
+          <span>Inference device: {providerInfo.likely_device || "unknown"}</span>
+          <span>CUDA available: {String(Boolean(providerInfo.cuda_available))}</span>
+          <span>Forced CPU: {String(Boolean(providerInfo.forced_cpu))}</span>
+        </div>
+      )}
 
       {error && <div className="error">{error}</div>}
 
@@ -395,6 +407,14 @@ function App() {
               <option value="copy">copy</option>
               <option value="move">move</option>
             </select>
+          </label>
+          <label style={{ flexDirection: "row", alignItems: "center", gap: "0.5rem" }}>
+            <input
+              type="checkbox"
+              checked={Boolean(settings.scan_recursive)}
+              onChange={(e) => setSettings({ ...settings, scan_recursive: e.target.checked })}
+            />
+            Scan subfolders recursively
           </label>
           <button disabled={loading || opsLoading.saving}>Save Settings</button>
         </form>
@@ -477,6 +497,17 @@ function App() {
                 {Number(runStatus.progress_pct || 0).toFixed(1)}%)
               </span>
               <span>Failed: {runStatus.failed_images}</span>
+              {runStatus.inference_mode && <span>Inference mode: {runStatus.inference_mode}</span>}
+              {runStatus.batch_size ? <span>Batch size: {runStatus.batch_size}</span> : null}
+              {runStatus.avg_infer_ms_per_image !== null &&
+              runStatus.avg_infer_ms_per_image !== undefined ? (
+                <span>
+                  Avg infer ms/image: {Number(runStatus.avg_infer_ms_per_image).toFixed(1)}
+                </span>
+              ) : null}
+              {runStatus.queue_seed !== null && runStatus.queue_seed !== undefined ? (
+                <span>Queue seed: {runStatus.queue_seed}</span>
+              ) : null}
               {runStatus.cancel_requested && <span>Cancel requested</span>}
             </div>
           )}

@@ -10,7 +10,7 @@ from PIL import Image
 
 from .schemas import AppSettings, FolderMapping, MigrationResult, ScanStats
 
-SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tiff"}
+SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".jfif", ".png", ".bmp", ".webp", ".tiff"}
 VIDEO_EXTENSIONS = {
     ".mp4",
     ".mov",
@@ -22,6 +22,7 @@ VIDEO_EXTENSIONS = {
     ".m4v",
 }
 logger = logging.getLogger(__name__)
+_BATCH_INFERENCE_SUPPORTED: bool | None = None
 
 
 def normalize_tag_name(value: str) -> str:
@@ -78,9 +79,22 @@ class ScanOutput:
     stats: ScanStats
 
 
-def scan_images(root_repo: Path) -> ScanOutput:
+def scan_images(
+    root_repo: Path,
+    exclude_dirs: set[Path] | None = None,
+    recursive: bool = True,
+) -> ScanOutput:
     if not root_repo.exists() or not root_repo.is_dir():
         raise ValueError(f"root_repo does not exist or is not a directory: {root_repo}")
+
+    # Resolve exclude_dirs to absolute paths so prefix matching is reliable.
+    resolved_excludes: set[Path] = set()
+    if exclude_dirs:
+        for d in exclude_dirs:
+            try:
+                resolved_excludes.add(d.resolve())
+            except OSError:
+                pass
 
     total_files = 0
     eligible: list[Path] = []
@@ -88,9 +102,27 @@ def scan_images(root_repo: Path) -> ScanOutput:
     ignored_gif = 0
     failed_to_read = 0
 
-    for path in root_repo.rglob("*"):
-        if not path.is_file():
+    iterator = root_repo.rglob("*") if recursive else root_repo.iterdir()
+    for path in iterator:
+        try:
+            if not path.is_file():
+                continue
+        except OSError:
+            failed_to_read += 1
             continue
+
+        # Skip any path that lives inside an excluded directory.
+        if resolved_excludes:
+            try:
+                resolved_path = path.resolve()
+                if any(
+                    resolved_path == exc or resolved_path.is_relative_to(exc)
+                    for exc in resolved_excludes
+                ):
+                    continue
+            except OSError:
+                pass
+
         total_files += 1
         ext = path.suffix.lower()
         if ext == ".gif":
@@ -99,17 +131,37 @@ def scan_images(root_repo: Path) -> ScanOutput:
         if ext in VIDEO_EXTENSIONS:
             ignored_unsupported += 1
             continue
-        if ext not in SUPPORTED_IMAGE_EXTENSIONS:
-            ignored_unsupported += 1
+
+        if ext in SUPPORTED_IMAGE_EXTENSIONS:
+            # Known image extension: accept without Pillow verification.
+            # Corrupt or unreadable files are handled gracefully during inference.
+            eligible.append(path)
             continue
 
+        # Unknown or missing extension: try content-based detection.
         try:
             with Image.open(path) as img:
-                img.verify()
+                if not img.format:
+                    raise ValueError("Not a recognizable image format")
             eligible.append(path)
         except Exception:
-            failed_to_read += 1
+            if ext == "":
+                failed_to_read += 1
+            else:
+                ignored_unsupported += 1
 
+    logger.info(
+        "scan_complete root=%s recursive=%s total_files=%d eligible=%d "
+        "ignored_gif=%d ignored_unsupported=%d failed_to_read=%d excluded_dirs=%d",
+        root_repo,
+        recursive,
+        total_files,
+        len(eligible),
+        ignored_gif,
+        ignored_unsupported,
+        failed_to_read,
+        len(resolved_excludes),
+    )
     return ScanOutput(
         image_paths=eligible,
         stats=ScanStats(
@@ -145,6 +197,57 @@ def extract_scores(image_path: Path) -> dict[str, float]:
             if isinstance(item, (list, tuple)) and len(item) >= 2:
                 scores[str(item[0])] = float(item[1])
     return scores
+
+
+def extract_scores_batch(image_paths: list[Path]) -> list[dict[str, float]]:
+    if not image_paths:
+        return []
+    global _BATCH_INFERENCE_SUPPORTED
+
+    if _BATCH_INFERENCE_SUPPORTED is False:
+        return [extract_scores(p) for p in image_paths]
+
+    from imgutils.tagging import get_mldanbooru_tags
+
+    try:
+        raw = get_mldanbooru_tags(
+            [str(p) for p in image_paths],
+            threshold=0.0,
+            size=448,
+            keep_ratio=True,
+            drop_overlap=False,
+            use_real_name=False,
+        )
+    except TypeError as err:
+        # Current imgutils build treats list input as invalid image type.
+        if "Unknown image type" in str(err):
+            if _BATCH_INFERENCE_SUPPORTED is not False:
+                logger.warning("batch inference not supported by imgutils; using per-image fallback")
+            _BATCH_INFERENCE_SUPPORTED = False
+            return [extract_scores(p) for p in image_paths]
+        raise
+
+    parsed: list[dict[str, float]] = []
+    if isinstance(raw, list) and len(raw) == len(image_paths):
+        _BATCH_INFERENCE_SUPPORTED = True
+        for entry in raw:
+            if isinstance(entry, dict):
+                parsed.append({str(k): float(v) for k, v in entry.items()})
+                continue
+            if isinstance(entry, list):
+                scores: dict[str, float] = {}
+                for item in entry:
+                    if isinstance(item, (list, tuple)) and len(item) >= 2:
+                        scores[str(item[0])] = float(item[1])
+                parsed.append(scores)
+                continue
+            raise TypeError("Unexpected batch inference entry format")
+        return parsed
+
+    # If the backend or library returns an unexpected shape, fall back to per-image inference.
+    logger.warning("batch inference unsupported format; falling back to per-image path")
+    _BATCH_INFERENCE_SUPPORTED = False
+    return [extract_scores(p) for p in image_paths]
 
 
 def choose_best_tags(
@@ -226,4 +329,5 @@ def resolve_settings(
             confidence_threshold if confidence_threshold is not None else current.confidence_threshold
         ),
         default_migrate_mode=current.default_migrate_mode,
+        scan_recursive=current.scan_recursive,
     )
