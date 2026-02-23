@@ -70,6 +70,19 @@ def test_scan_images_filters_types(tmp_path: Path) -> None:
     assert result.stats.failed_to_read == 0  # no OSError-level failures
 
 
+def test_scan_images_includes_gif_and_video_when_experimental_enabled(tmp_path: Path) -> None:
+    gif_path = tmp_path / "anim.gif"
+    Image.new("RGB", (16, 16), color="orange").save(gif_path, format="GIF")
+    video_path = tmp_path / "clip.mp4"
+    video_path.write_text("fake-video", encoding="utf-8")
+
+    result = scan_images(tmp_path, experimental_media_enabled=True)
+    names = {p.name for p in result.image_paths}
+    assert "anim.gif" in names
+    assert "clip.mp4" in names
+    assert result.stats.ignored_gif == 0
+
+
 def test_scan_images_includes_extensionless_valid_image(tmp_path: Path) -> None:
     extless = tmp_path / "no_extension_image"
     Image.new("RGB", (16, 16), color="purple").save(extless, format="PNG")

@@ -28,7 +28,8 @@ def init_db() -> None:
                 categories_root TEXT NOT NULL DEFAULT '',
                 confidence_threshold REAL NOT NULL DEFAULT 0.6,
                 default_migrate_mode TEXT NOT NULL DEFAULT 'copy',
-                scan_recursive INTEGER NOT NULL DEFAULT 1
+                scan_recursive INTEGER NOT NULL DEFAULT 1,
+                experimental_media_enabled INTEGER NOT NULL DEFAULT 0
             );
 
             INSERT OR IGNORE INTO settings (id) VALUES (1);
@@ -79,6 +80,7 @@ def init_db() -> None:
 def _ensure_settings_columns(conn: sqlite3.Connection) -> None:
     expected_columns = {
         "scan_recursive": "INTEGER NOT NULL DEFAULT 1",
+        "experimental_media_enabled": "INTEGER NOT NULL DEFAULT 0",
     }
     rows = conn.execute("PRAGMA table_info(settings)").fetchall()
     existing = {row[1] for row in rows}

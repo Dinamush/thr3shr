@@ -16,6 +16,7 @@ class AppSettings(BaseModel):
     confidence_threshold: float = 0.6
     default_migrate_mode: MigrateMode = "copy"
     scan_recursive: bool = True
+    experimental_media_enabled: bool = False
 
 
 class SaveSettingsRequest(AppSettings):

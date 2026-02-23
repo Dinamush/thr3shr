@@ -7,6 +7,7 @@ const defaultSettings = {
   confidence_threshold: 0.6,
   default_migrate_mode: "copy",
   scan_recursive: true,
+  experimental_media_enabled: false,
 };
 const mockTags = [
   "1girl",

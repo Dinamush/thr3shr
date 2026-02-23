@@ -7,6 +7,7 @@ const DEFAULT_SETTINGS = {
   confidence_threshold: 0.6,
   default_migrate_mode: "copy",
   scan_recursive: true,
+  experimental_media_enabled: false,
 };
 const ACTIVE_RUN_STORAGE_KEY = "imageClassifierActiveRunId";
 
@@ -415,6 +416,16 @@ function App() {
               onChange={(e) => setSettings({ ...settings, scan_recursive: e.target.checked })}
             />
             Scan subfolders recursively
+          </label>
+          <label style={{ flexDirection: "row", alignItems: "center", gap: "0.5rem" }}>
+            <input
+              type="checkbox"
+              checked={Boolean(settings.experimental_media_enabled)}
+              onChange={(e) =>
+                setSettings({ ...settings, experimental_media_enabled: e.target.checked })
+              }
+            />
+            Experimental: classify GIF/videos using sampled frames
           </label>
           <button disabled={loading || opsLoading.saving}>Save Settings</button>
         </form>

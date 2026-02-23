@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import csv
 import logging
+import subprocess
 import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,6 +52,11 @@ def sanitize_folder_name(value: str) -> str:
             cleaned.append(ch)
     result = "".join(cleaned).strip(" .")
     return result or "_"
+
+
+def is_experimental_media(path: Path) -> bool:
+    ext = path.suffix.lower()
+    return ext == ".gif" or ext in VIDEO_EXTENSIONS
 
 
 def load_known_tags(tags_csv_path: Path) -> set[str]:
@@ -108,6 +115,7 @@ def scan_images(
     root_repo: Path,
     exclude_dirs: set[Path] | None = None,
     recursive: bool = True,
+    experimental_media_enabled: bool = False,
 ) -> ScanOutput:
     if not root_repo.exists() or not root_repo.is_dir():
         raise ValueError(f"root_repo does not exist or is not a directory: {root_repo}")
@@ -151,10 +159,16 @@ def scan_images(
         total_files += 1
         ext = path.suffix.lower()
         if ext == ".gif":
-            ignored_gif += 1
+            if not experimental_media_enabled:
+                ignored_gif += 1
+                continue
+            eligible.append(path)
             continue
         if ext in VIDEO_EXTENSIONS:
-            ignored_unsupported += 1
+            if not experimental_media_enabled:
+                ignored_unsupported += 1
+                continue
+            eligible.append(path)
             continue
 
         if ext in SUPPORTED_IMAGE_EXTENSIONS:
@@ -222,6 +236,68 @@ def extract_scores(image_path: Path) -> dict[str, float]:
             if isinstance(item, (list, tuple)) and len(item) >= 2:
                 scores[str(item[0])] = float(item[1])
     return scores
+
+
+def _extract_scores_from_pil_image(image: Image.Image) -> dict[str, float]:
+    from imgutils.tagging import get_mldanbooru_tags
+
+    raw = get_mldanbooru_tags(
+        image,
+        threshold=0.0,
+        size=448,
+        keep_ratio=True,
+        drop_overlap=False,
+        use_real_name=False,
+    )
+
+    scores: dict[str, float] = {}
+    if isinstance(raw, dict):
+        for tag, score in raw.items():
+            scores[str(tag)] = float(score)
+        return scores
+
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                scores[str(item[0])] = float(item[1])
+    return scores
+
+
+def extract_scores_with_experimental_media(
+    image_path: Path, experimental_media_enabled: bool = False
+) -> dict[str, float]:
+    """
+    Experimental path: supports GIF/video by sampling a representative frame.
+    """
+    if not experimental_media_enabled or not is_experimental_media(image_path):
+        return extract_scores(image_path)
+
+    ext = image_path.suffix.lower()
+    if ext == ".gif":
+        with Image.open(image_path) as gif:
+            gif.seek(0)
+            frame = gif.convert("RGB")
+            return _extract_scores_from_pil_image(frame)
+
+    # Video path: extract first frame with ffmpeg to a temporary image.
+    with tempfile.TemporaryDirectory(prefix="media_frame_") as temp_dir:
+        frame_path = Path(temp_dir) / "frame0.png"
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+            "-i",
+            str(image_path),
+            "-frames:v",
+            "1",
+            str(frame_path),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0 or not frame_path.exists():
+            err = (result.stderr or result.stdout or "").strip()
+            raise RuntimeError(f"Video frame extraction failed: {err or 'ffmpeg unavailable'}")
+        return extract_scores(frame_path)
 
 
 def extract_scores_batch(image_paths: list[Path]) -> list[dict[str, float]]:
@@ -355,4 +431,5 @@ def resolve_settings(
         ),
         default_migrate_mode=current.default_migrate_mode,
         scan_recursive=current.scan_recursive,
+        experimental_media_enabled=current.experimental_media_enabled,
     )

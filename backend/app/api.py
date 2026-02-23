@@ -30,6 +30,8 @@ from .services import (
     discover_tag_folders,
     extract_scores,
     extract_scores_batch,
+    extract_scores_with_experimental_media,
+    is_experimental_media,
     load_known_tags,
     migrate_file,
     resolve_settings,
@@ -126,10 +128,17 @@ def _is_provider_related_error(err: Exception) -> bool:
 
 
 def _infer_one_image(
-    image_path: Path, matched_tags: set[str], confidence_threshold: float
+    image_path: Path,
+    matched_tags: set[str],
+    confidence_threshold: float,
+    experimental_media_enabled: bool = False,
 ) -> _ImageInferenceResult:
     try:
-        scores = extract_scores(image_path)
+        if experimental_media_enabled and is_experimental_media(image_path):
+            scores = extract_scores_with_experimental_media(image_path, experimental_media_enabled)
+        else:
+            # Keep base path unchanged so existing mocks/tests and behavior remain stable.
+            scores = extract_scores(image_path)
         primary_tag, primary_score, secondary = choose_best_tags(scores, matched_tags)
         needs_review = False
         reason = None
@@ -171,16 +180,31 @@ def _infer_batch_with_fallback(
     matched_tags: set[str],
     confidence_threshold: float,
     requested_mode: str,
+    experimental_media_enabled: bool = False,
 ) -> tuple[list[_ImageInferenceResult], float, str]:
     if not image_paths:
         return [], 0.0, "none"
 
     if requested_mode != "batch" or len(image_paths) == 1:
         start = time.perf_counter()
-        rows = [_infer_one_image(image_paths[0], matched_tags, confidence_threshold)]
+        rows = [
+            _infer_one_image(
+                image_paths[0], matched_tags, confidence_threshold, experimental_media_enabled
+            )
+        ]
         elapsed_ms = (time.perf_counter() - start) * 1000.0
         mode = "single" if requested_mode == "single" else "single_fallback"
         return rows, elapsed_ms, mode
+
+    # Batch inference currently supports image files only.
+    if any(is_experimental_media(p) for p in image_paths):
+        start = time.perf_counter()
+        rows = [
+            _infer_one_image(p, matched_tags, confidence_threshold, experimental_media_enabled)
+            for p in image_paths
+        ]
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
+        return rows, elapsed_ms, "single_fallback"
 
     start = time.perf_counter()
     try:
@@ -220,13 +244,23 @@ def _infer_batch_with_fallback(
         if len(image_paths) > 1:
             mid = len(image_paths) // 2
             left_rows, left_ms, _ = _infer_batch_with_fallback(
-                image_paths[:mid], matched_tags, confidence_threshold, "batch"
+                image_paths[:mid],
+                matched_tags,
+                confidence_threshold,
+                "batch",
+                experimental_media_enabled,
             )
             right_rows, right_ms, _ = _infer_batch_with_fallback(
-                image_paths[mid:], matched_tags, confidence_threshold, "batch"
+                image_paths[mid:],
+                matched_tags,
+                confidence_threshold,
+                "batch",
+                experimental_media_enabled,
             )
             return left_rows + right_rows, left_ms + right_ms, "batch_fallback"
-        row = _infer_one_image(image_paths[0], matched_tags, confidence_threshold)
+        row = _infer_one_image(
+            image_paths[0], matched_tags, confidence_threshold, experimental_media_enabled
+        )
         elapsed_ms = (time.perf_counter() - start) * 1000.0
         return [row], elapsed_ms, "single_fallback"
 
@@ -241,6 +275,7 @@ def _settings_from_db() -> AppSettings:
         confidence_threshold=float(row["confidence_threshold"]),
         default_migrate_mode=row["default_migrate_mode"],
         scan_recursive=bool(row.get("scan_recursive", 1)),
+        experimental_media_enabled=bool(row.get("experimental_media_enabled", 0)),
     )
 
 
@@ -313,13 +348,19 @@ def _execute_run(
     confidence_threshold: float,
     matched_tags: set[str],
     scan_recursive: bool = True,
+    experimental_media_enabled: bool = False,
 ) -> None:
     try:
         execute(
             "UPDATE runs SET status = 'running', started_at = ?, last_error = NULL WHERE id = ?",
             (_now_iso(), run_id),
         )
-        scan_output = scan_images(root_repo, exclude_dirs={categories_root}, recursive=scan_recursive)
+        scan_output = scan_images(
+            root_repo,
+            exclude_dirs={categories_root},
+            recursive=scan_recursive,
+            experimental_media_enabled=experimental_media_enabled,
+        )
         execute("UPDATE runs SET total_images = ? WHERE id = ?", (scan_output.stats.eligible_images, run_id))
         logger.info(
             "run_scan_complete run_id=%d total_files=%d eligible=%d "
@@ -390,6 +431,7 @@ def _execute_run(
                         matched_tags,
                         confidence_threshold,
                         inference_mode,
+                        experimental_media_enabled,
                     )
                     pending[future] = next_batch
 
@@ -507,7 +549,7 @@ def save_settings(payload: SaveSettingsRequest) -> AppSettings:
             """
             UPDATE settings
             SET root_repo = ?, categories_root = ?, confidence_threshold = ?,
-                default_migrate_mode = ?, scan_recursive = ?
+                default_migrate_mode = ?, scan_recursive = ?, experimental_media_enabled = ?
             WHERE id = 1
             """,
             (
@@ -516,6 +558,7 @@ def save_settings(payload: SaveSettingsRequest) -> AppSettings:
                 payload.confidence_threshold,
                 payload.default_migrate_mode,
                 1 if payload.scan_recursive else 0,
+                1 if payload.experimental_media_enabled else 0,
             ),
         )
     except Exception:
@@ -547,12 +590,14 @@ def scan_preview() -> dict:
             root_repo,
             exclude_dirs=exclude_dirs or None,
             recursive=settings.scan_recursive,
+            experimental_media_enabled=settings.experimental_media_enabled,
         )
     except ValueError as err:
         raise HTTPException(status_code=400, detail=str(err))
     return {
         "root_repo": str(root_repo),
         "recursive": settings.scan_recursive,
+        "experimental_media_enabled": settings.experimental_media_enabled,
         "excluded_dirs": [str(d) for d in exclude_dirs],
         "stats": output.stats.model_dump(),
         "sample_paths": [str(p) for p in output.image_paths[:20]],
@@ -627,7 +672,7 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
     worker = threading.Thread(
         target=_execute_run,
         args=(run_id, root_repo, categories_root, resolved.confidence_threshold, matched_tags,
-              resolved.scan_recursive),
+              resolved.scan_recursive, resolved.experimental_media_enabled),
         daemon=True,
     )
     worker.start()
