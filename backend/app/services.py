@@ -23,6 +23,7 @@ VIDEO_EXTENSIONS = {
 }
 logger = logging.getLogger(__name__)
 _BATCH_INFERENCE_SUPPORTED: bool | None = None
+_WINDOWS_FORBIDDEN_CHARS = set('<>:"/\\|?*')
 
 
 def normalize_tag_name(value: str) -> str:
@@ -34,6 +35,21 @@ def normalize_tag_name(value: str) -> str:
         elif ch in {" ", "-", ".", "/", "_"}:
             normalized.append("_")
     return "".join(normalized).strip("_")
+
+
+def sanitize_folder_name(value: str) -> str:
+    """
+    Convert an arbitrary tag into a filesystem-safe folder name.
+    Keeps names readable while replacing common invalid path characters.
+    """
+    cleaned = []
+    for ch in value.strip():
+        if ch in _WINDOWS_FORBIDDEN_CHARS or ord(ch) < 32:
+            cleaned.append("_")
+        else:
+            cleaned.append(ch)
+    result = "".join(cleaned).strip(" .")
+    return result or "_"
 
 
 def load_known_tags(tags_csv_path: Path) -> set[str]:
@@ -58,10 +74,19 @@ def discover_tag_folders(
     else:
         folder_names = sorted([p.name for p in categories_root.iterdir() if p.is_dir()])
 
+    known_by_normalized: dict[str, str] = {}
+    for tag in sorted(known_tags):
+        normalized_tag = normalize_tag_name(tag)
+        # Keep first stable mapping for normalized fallback.
+        if normalized_tag not in known_by_normalized:
+            known_by_normalized[normalized_tag] = tag
+
     mappings: list[FolderMapping] = []
     for folder in folder_names:
         normalized = normalize_tag_name(folder)
-        matched_tag = normalized if normalized in known_tags else None
+        # Prefer exact known tag match first for selected tags that contain
+        # special syntax (e.g. `remodel_(kantai_collection)`).
+        matched_tag = folder if folder in known_tags else known_by_normalized.get(normalized)
         mappings.append(
             FolderMapping(
                 folder_name=folder,

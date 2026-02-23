@@ -33,6 +33,7 @@ from .services import (
     load_known_tags,
     migrate_file,
     resolve_settings,
+    sanitize_folder_name,
     scan_images,
 )
 from .storage import execute, fetch_all, fetch_one, from_json, to_json
@@ -421,7 +422,7 @@ def _execute_run(
                     for result in batch_results:
                         relative_path = str(result.image_path.relative_to(root_repo))
                         suggested_destination = (
-                            str(categories_root / result.primary_tag)
+                            str(categories_root / sanitize_folder_name(result.primary_tag))
                             if result.primary_tag is not None
                             else None
                         )
@@ -698,7 +699,7 @@ def update_item(item_id: int, payload: UpdateItemRequest) -> ClassifiedItem:
     new_status = payload.status if payload.status is not None else row["status"]
     new_final_tag = payload.final_tag if payload.final_tag is not None else row["final_tag"]
     new_final_destination = (
-        str(Path(row["suggested_destination"]).parent / new_final_tag)
+        str(Path(row["suggested_destination"]).parent / sanitize_folder_name(new_final_tag))
         if row["suggested_destination"] and new_final_tag
         else row["final_destination"]
     )
@@ -760,7 +761,7 @@ def batch_update(run_id: int, payload: BatchUpdateRequest) -> dict:
         new_status = payload.status if payload.status is not None else row["status"]
         new_final_tag = payload.final_tag if payload.final_tag is not None else row["final_tag"]
         new_final_destination = (
-            str(Path(row["suggested_destination"]).parent / new_final_tag)
+            str(Path(row["suggested_destination"]).parent / sanitize_folder_name(new_final_tag))
             if row["suggested_destination"] and new_final_tag
             else row["final_destination"]
         )

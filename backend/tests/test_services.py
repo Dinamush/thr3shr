@@ -8,6 +8,7 @@ from app.services import (
     ensure_collision_free_destination,
     migrate_file,
     normalize_tag_name,
+    sanitize_folder_name,
     scan_images,
 )
 
@@ -29,6 +30,23 @@ def test_discover_tag_folders_mapping(tmp_path: Path) -> None:
     assert mapped["black hair"] == "black_hair"
     assert mapped["Blue-Eyes"] == "blue_eyes"
     assert mapped["Unknown Folder"] is None
+
+
+def test_discover_tag_folders_selected_tag_exact_match_with_special_chars(tmp_path: Path) -> None:
+    tags = {"remodel_(kantai_collection)", "monster_girl"}
+    mappings = discover_tag_folders(
+        tmp_path,
+        tags,
+        selected_folders=["remodel_(kantai_collection)", "monster_girl"],
+    )
+    mapped = {m.folder_name: m.matched_tag for m in mappings}
+    assert mapped["remodel_(kantai_collection)"] == "remodel_(kantai_collection)"
+    assert mapped["monster_girl"] == "monster_girl"
+
+
+def test_sanitize_folder_name_replaces_forbidden_chars() -> None:
+    assert sanitize_folder_name('remodel_(kantai_collection)') == "remodel_(kantai_collection)"
+    assert sanitize_folder_name('tag:with*bad|chars?') == "tag_with_bad_chars_"
 
 
 def test_scan_images_filters_types(tmp_path: Path) -> None:
