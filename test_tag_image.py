@@ -7,7 +7,7 @@ Usage: python test_tag_image.py [image_path]
 import sys
 from pathlib import Path
 
-# Default image path
+# Default image path (placeholder: set your own or pass as argument)
 DEFAULT_IMAGE = "path/to/your/image.jpg"
 
 
