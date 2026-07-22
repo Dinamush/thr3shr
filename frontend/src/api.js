@@ -57,12 +57,14 @@ function persistMockState() {
 
 async function jsonRequest(path, options = {}) {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort("timeout"), REQUEST_TIMEOUT_MS);
+  const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : REQUEST_TIMEOUT_MS;
+  const { timeoutMs: _ignored, ...fetchOptions } = options;
+  const timeoutId = setTimeout(() => controller.abort("timeout"), timeoutMs);
   try {
     const response = await fetch(`${API_BASE}${path}`, {
-      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-      ...options,
-      signal: options.signal || controller.signal,
+      headers: { "Content-Type": "application/json", ...(fetchOptions.headers || {}) },
+      ...fetchOptions,
+      signal: fetchOptions.signal || controller.signal,
     });
     const text = await response.text();
     const maybeJson = text ? (() => {
@@ -80,7 +82,7 @@ async function jsonRequest(path, options = {}) {
     return maybeJson ?? {};
   } catch (err) {
     if (err?.name === "AbortError") {
-      throw new Error(`Request timeout after ${REQUEST_TIMEOUT_MS / 1000}s`);
+      throw new Error(`Request timeout after ${timeoutMs / 1000}s`);
     }
     throw err;
   } finally {
@@ -205,6 +207,81 @@ function mockRequest(path, options = {}) {
       mock_mode: true,
     });
   }
+  if (path === "/debug/sfw-sources" && method === "GET") {
+    return Promise.resolve({
+      sources: [
+        {
+          id: "safebooru",
+          label: "Safebooru",
+          sfw_policy: "rating:safe",
+          max_content_tags: null,
+        },
+        {
+          id: "danbooru",
+          label: "Danbooru",
+          sfw_policy: "rating:g",
+          max_content_tags: 2,
+        },
+      ],
+    });
+  }
+  if (path === "/debug/sfw-eval" && method === "POST") {
+    const tags = Array.isArray(body.tags) ? body.tags.filter(Boolean) : [];
+    if (!tags.length) {
+      return Promise.reject(new Error("At least one tag is required"));
+    }
+    const source = body.source || "safebooru";
+    if (source === "danbooru" && tags.length > 2) {
+      return Promise.reject(new Error("Danbooru allows at most 2 content tag(s)"));
+    }
+    const count = Math.max(5, Math.min(30, Number(body.count) || 10));
+    const threshold = Number(mockState.settings.confidence_threshold || 0.6);
+    const items = Array.from({ length: Math.min(count, 6) }, (_, idx) => {
+      const pullScores = Object.fromEntries(tags.map((t) => [t, Math.max(0.2, 0.95 - idx * 0.08)]));
+      const primary = tags[0] || "1girl";
+      const score = pullScores[primary];
+      const needsReview = score < threshold;
+      return {
+        source,
+        post_id: String(9000 + idx),
+        rating: source === "danbooru" ? "g" : "safe",
+        file_name: `${9000 + idx}.jpg`,
+        known_tags: tags,
+        pull_tag_scores: pullScores,
+        global_top_tags: tags.map((t) => ({ tag: t, score: pullScores[t] })),
+        primary_tag: needsReview ? null : primary,
+        primary_score: needsReview ? null : score,
+        needs_review: needsReview,
+        review_reason: needsReview ? `Below threshold (${score.toFixed(3)} < ${threshold}).` : null,
+        suggested_folder: needsReview ? null : primary,
+        secondary_suggestions: needsReview ? [{ tag: primary, score }] : [],
+      };
+    });
+    return Promise.resolve({
+      source,
+      source_label: source === "danbooru" ? "Danbooru" : "Safebooru",
+      sfw_policy: source === "danbooru" ? "rating:g" : "rating:safe",
+      query: `${tags.join(" ")} ${source === "danbooru" ? "rating:g" : "rating:safe"}`,
+      tags,
+      count_requested: count,
+      count_evaluated: items.length,
+      tagger_model: mockState.settings.tagger_model || "wd_swinv2_v3",
+      confidence_threshold: threshold,
+      destination_tags: mockState.settings.selected_tags || [],
+      recall: tags.map((tag) => ({
+        tag,
+        present_in_posts: items.length,
+        hits_at_threshold: items.filter((it) => Number(it.pull_tag_scores[tag] || 0) >= threshold)
+          .length,
+        hit_rate: items.length
+          ? items.filter((it) => Number(it.pull_tag_scores[tag] || 0) >= threshold).length /
+            items.length
+          : null,
+      })),
+      items,
+      errors: [],
+    });
+  }
   if (path === "/scan/preview" && method === "GET") {
     return Promise.resolve({
       root_repo: mockState.settings.root_repo || "/mock/images",
@@ -312,6 +389,66 @@ function mockRequest(path, options = {}) {
     }
     persistMockState();
     return Promise.resolve(computeMockStatus(run));
+  }
+  if (path.match(/^\/runs\/\d+\/reclassify$/) && method === "POST") {
+    const runId = Number(path.split("/")[2]);
+    const run = mockState.runs[runId];
+    if (!run) {
+      return Promise.reject(new Error("Run not found"));
+    }
+    if (["pending", "running"].includes(run.status)) {
+      return Promise.reject(new Error("Cannot reclassify while a run is still pending or running."));
+    }
+    const threshold = Number(run.confidence_threshold || mockState.settings.confidence_threshold || 0.6);
+    const model = body.tagger_model || "wd_eva02_large";
+    const idFilter = Array.isArray(body.item_ids) ? new Set(body.item_ids) : null;
+    let eligibleCount = 0;
+    run.items = run.items.map((item) => {
+      if (item.status !== "proposed" || !item.needs_review) return item;
+      if (idFilter && !idFilter.has(item.id)) return item;
+      eligibleCount += 1;
+      const boosted = Math.min(0.99, Number(item.primary_score || 0.4) + 0.35);
+      const tag = item.primary_tag || item.secondary_suggestions?.[0]?.tag || "1girl";
+      if (boosted >= threshold) {
+        return {
+          ...item,
+          primary_tag: tag,
+          primary_score: boosted,
+          needs_review: false,
+          review_reason: null,
+          status: "approved",
+          final_tag: item.final_tag || tag,
+          suggested_destination: `${mockState.settings.categories_root || "/mock/categories"}/${tag}`,
+        };
+      }
+      return {
+        ...item,
+        review_reason: `Reclassified with ${model}. Below threshold (${boosted.toFixed(3)} < ${threshold.toFixed(3)}).`,
+      };
+    });
+    if (eligibleCount === 0) {
+      return Promise.reject(new Error("No eligible needs-review items to reclassify"));
+    }
+    run.status = "running";
+    run.cancel_requested = 0;
+    run.finished_at = null;
+    persistMockState();
+    setTimeout(() => {
+      if (run.cancel_requested) {
+        run.status = "cancelled";
+      } else {
+        run.status = "completed";
+      }
+      run.finished_at = new Date().toISOString();
+      persistMockState();
+    }, 400);
+    return Promise.resolve({
+      run_id: runId,
+      status: "running",
+      eligible_count: eligibleCount,
+      tagger_model: model,
+      message: `Reclassify queued for ${eligibleCount} item(s) with ${model}`,
+    });
   }
   if (path.startsWith("/runs/") && path.endsWith("/items") && method === "GET") {
     const runId = Number(path.split("/")[2]);
@@ -422,6 +559,22 @@ export const api = {
       method: "POST",
       body: JSON.stringify({}),
     }),
+  reclassifyRun: (runId, payload) =>
+    request(`/runs/${runId}/reclassify`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  getSfwDebugSources: () => request("/debug/sfw-sources"),
+  runSfwDebugEval: (payload) =>
+    request("/debug/sfw-eval", {
+      method: "POST",
+      body: JSON.stringify(payload),
+      timeoutMs: 180000,
+    }),
+  getSfwDebugPreviewUrl: (sourceId, fileName) => {
+    if (backendAvailable === false) return null;
+    return `${API_BASE}/debug/sfw-eval/preview/${encodeURIComponent(sourceId)}/${encodeURIComponent(fileName)}`;
+  },
   getRunItems: (runId, filters = {}) => {
     const params = new URLSearchParams();
     if (filters.status) params.set("status", filters.status);

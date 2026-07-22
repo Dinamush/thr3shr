@@ -68,6 +68,22 @@ def startup() -> None:
     logger.info("onnx_provider_state state=%s", provider_state)
     logger.info("initializing database at startup")
     init_db()
+    try:
+        from .api import _settings_from_db
+        from .inference_engine import get_engine
+
+        settings = _settings_from_db()
+        if settings.force_cpu_inference:
+            import os
+
+            os.environ["FORCE_CPU_INFERENCE"] = "true"
+        else:
+            import os
+
+            os.environ.pop("FORCE_CPU_INFERENCE", None)
+        get_engine().warm(settings.tagger_model)
+    except Exception:
+        logger.exception("inference_engine_warm_failed")
     logger.info("startup complete")
 
 

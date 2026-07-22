@@ -44,6 +44,39 @@ body {
   margin-bottom: 22px;
 }
 
+.app-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.nav-link {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.92rem;
+}
+
+.nav-link:hover,
+.nav-link:focus-visible {
+  color: var(--ink);
+  border-color: #b7c6e3;
+  outline: none;
+}
+
+.nav-link.active {
+  background: var(--accent-soft);
+  border-color: #b7c6e3;
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .app-header h1 {
   margin: 0 0 6px;
   font-family: var(--font-display);
@@ -285,6 +318,50 @@ button.danger {
   gap: 10px;
   margin: 10px 0;
   align-items: center;
+}
+
+.reclassify-banner {
+  padding: 10px 12px;
+  border: 1px solid #c5d4ef;
+  background: #f3f7ff;
+  border-radius: 8px;
+}
+
+.reclassify-model select {
+  min-width: 11rem;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.debug-eval-results {
+  margin-top: 12px;
+}
+
+.debug-eval-results h3 {
+  margin: 14px 0 8px;
+  font-size: 1rem;
+}
+
+.debug-thumb {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 6px;
+  background: #e8eef8;
+}
+
+.table-wrap {
+  overflow-x: auto;
 }
 
 .progress-track {

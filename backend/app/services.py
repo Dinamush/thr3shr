@@ -27,8 +27,8 @@ VIDEO_EXTENSIONS = {
 logger = logging.getLogger(__name__)
 _BATCH_INFERENCE_SUPPORTED: bool | None = None
 _WINDOWS_FORBIDDEN_CHARS = set('<>:"/\\|?*')
-# imgutils keeps one shared ORT session; concurrent Run() calls under GPU load
-# corrupt outputs (empty score dicts) and thrash VRAM. Serialize model execution.
+# Legacy lock retained for any callers that still expect it. The owned
+# InferenceEngine serializes only session.run internally now.
 _INFERENCE_LOCK = threading.Lock()
 
 
@@ -280,17 +280,13 @@ def _parse_wd14_raw(raw: object) -> dict[str, float]:
 
 
 def _run_mldanbooru(image: Path | Image.Image | str) -> dict[str, float]:
-    from imgutils.tagging import get_mldanbooru_tags
+    from .inference_engine import get_engine
 
-    raw = get_mldanbooru_tags(
-        image if isinstance(image, Image.Image) else str(image),
-        threshold=0.0,
-        size=448,
-        keep_ratio=True,
-        drop_overlap=False,
-        use_real_name=False,
+    return get_engine().score_one(
+        image,
+        tagger_model=TAGGER_MODEL_ML,
+        wd_general_threshold=0.35,
     )
-    return _normalize_score_tags(_parse_mldanbooru_raw(raw))
 
 
 def _run_wd14(
@@ -299,17 +295,19 @@ def _run_wd14(
     model_name: str,
     general_threshold: float,
 ) -> dict[str, float]:
-    from imgutils.tagging import get_wd14_tags
+    from .inference_engine import get_engine
 
-    raw = get_wd14_tags(
-        image if isinstance(image, Image.Image) else str(image),
-        model_name=model_name,
-        general_threshold=general_threshold,
-        no_underline=False,
-        drop_overlap=False,
-        fmt="general",
+    tagger_model = next(
+        (key for key, value in WD_MODEL_NAMES.items() if value == model_name),
+        None,
     )
-    return _parse_wd14_raw(raw)
+    if tagger_model is None:
+        raise ValueError(f"Unsupported WD model_name: {model_name}")
+    return get_engine().score_one(
+        image,
+        tagger_model=tagger_model,
+        wd_general_threshold=general_threshold,
+    )
 
 
 def extract_scores(
@@ -323,22 +321,21 @@ def extract_scores(
     ensure_nvidia_dll_search_path()
     preload_onnx_runtime_dlls()
 
-    with _INFERENCE_LOCK:
+    scores = _extract_scores_unlocked(
+        image_path,
+        tagger_model=tagger_model,
+        wd_general_threshold=wd_general_threshold,
+    )
+    # One retry: concurrent/GPU glitches occasionally return an empty map.
+    if not scores:
+        logger.warning(
+            "empty_scores_retry path=%s tagger_model=%s", image_path, tagger_model
+        )
         scores = _extract_scores_unlocked(
             image_path,
             tagger_model=tagger_model,
             wd_general_threshold=wd_general_threshold,
         )
-        # One retry: concurrent/GPU glitches occasionally return an empty map.
-        if not scores:
-            logger.warning(
-                "empty_scores_retry path=%s tagger_model=%s", image_path, tagger_model
-            )
-            scores = _extract_scores_unlocked(
-                image_path,
-                tagger_model=tagger_model,
-                wd_general_threshold=wd_general_threshold,
-            )
     return scores
 
 
@@ -370,12 +367,11 @@ def _extract_scores_from_pil_image(
 
     ensure_nvidia_dll_search_path()
     preload_onnx_runtime_dlls()
-    with _INFERENCE_LOCK:
-        return _extract_scores_unlocked(
-            image,
-            tagger_model=tagger_model,
-            wd_general_threshold=wd_general_threshold,
-        )
+    return _extract_scores_unlocked(
+        image,
+        tagger_model=tagger_model,
+        wd_general_threshold=wd_general_threshold,
+    )
 
 
 def extract_scores_with_experimental_media(
@@ -438,27 +434,39 @@ def extract_scores_batch(
     wd_general_threshold: float = 0.35,
 ) -> list[dict[str, float]]:
     """
-    imgutils taggers do not accept image lists.
-
-    Fall back to sequential per-image scoring; the run executor provides
-    parallelism across workers (avoid nested pools on a shared ORT session).
+    WD models support true ORT batching (fixed NHWC). ML-Danbooru stays
+    sequential Run because keep_ratio yields variable HxW tensors.
     """
     if not image_paths:
         return []
 
-    global _BATCH_INFERENCE_SUPPORTED
-    if _BATCH_INFERENCE_SUPPORTED is not False:
-        logger.info("batch list API unsupported by imgutils; using per-image inference")
-        _BATCH_INFERENCE_SUPPORTED = False
+    from .inference_engine import get_engine
+    from .providers import ensure_nvidia_dll_search_path, preload_onnx_runtime_dlls
 
-    return [
-        extract_scores(
-            path,
-            tagger_model=tagger_model,
-            wd_general_threshold=wd_general_threshold,
-        )
-        for path in image_paths
-    ]
+    ensure_nvidia_dll_search_path()
+    preload_onnx_runtime_dlls()
+
+    global _BATCH_INFERENCE_SUPPORTED
+    if tagger_model == TAGGER_MODEL_ML:
+        if _BATCH_INFERENCE_SUPPORTED is not False:
+            logger.info("ml_danbooru batch uses sequential ORT runs (variable HxW)")
+            _BATCH_INFERENCE_SUPPORTED = False
+        return [
+            extract_scores(
+                path,
+                tagger_model=tagger_model,
+                wd_general_threshold=wd_general_threshold,
+            )
+            for path in image_paths
+        ]
+
+    _BATCH_INFERENCE_SUPPORTED = True
+    return get_engine().score_many(
+        list(image_paths),
+        tagger_model=tagger_model,
+        wd_general_threshold=wd_general_threshold,
+        batch_size=max(1, len(image_paths)),
+    )
 
 
 def global_top_tags(scores: dict[str, float], limit: int = 5) -> list[dict[str, float]]:

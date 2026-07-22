@@ -17,4 +17,8 @@ def _isolated_app_db(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pyte
     db_dir = tmp_path_factory.mktemp("app_db")
     db_path = db_dir / "test_app.db"
     monkeypatch.setattr("app.storage.DB_PATH", db_path)
+    # Deterministic single-image tasks for API tests (batch path bypasses many mocks).
+    monkeypatch.setenv("INFERENCE_MODE", "single")
+    monkeypatch.setenv("INFERENCE_BATCH_SIZE", "1")
+    monkeypatch.setenv("MAX_INFERENCE_WORKERS", "1")
     init_db()

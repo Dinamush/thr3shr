@@ -19,8 +19,12 @@ from .schemas import (
     ClassifiedItem,
     MigrateRequest,
     MigrateResponse,
+    ReclassifyRequest,
+    ReclassifyResponse,
     RunStatusResponse,
     SaveSettingsRequest,
+    SfwDebugEvalRequest,
+    SfwDebugEvalResponse,
     StartRunRequest,
     StartRunResponse,
     UpdateItemRequest,
@@ -90,12 +94,12 @@ def _get_max_inference_workers(settings_workers: int | None = None) -> int:
 
 
 def _get_inference_mode() -> str:
-    raw = os.getenv("INFERENCE_MODE", "single").strip().lower()
+    raw = os.getenv("INFERENCE_MODE", "batch").strip().lower()
     return "single" if raw == "single" else "batch"
 
 
 def _get_inference_batch_size(settings_batch: int | None = None) -> int:
-    # Default 1: imgutils cannot true-batch; small batches keep workers saturated.
+    # WD true-batches inside InferenceEngine; default stays 1 unless settings raise it.
     if settings_batch is not None:
         return max(1, min(int(settings_batch), 64))
     raw = os.getenv("INFERENCE_BATCH_SIZE", "1").strip()
@@ -362,10 +366,23 @@ def _apply_runtime_inference_env(settings: AppSettings) -> None:
     """Mirror persisted settings into env knobs used by the run executor."""
     os.environ["MAX_INFERENCE_WORKERS"] = str(settings.max_inference_workers)
     os.environ["INFERENCE_BATCH_SIZE"] = str(settings.inference_batch_size)
+    # Respect an explicit INFERENCE_MODE (tests set single); otherwise derive from batch size.
+    if "INFERENCE_MODE" not in os.environ:
+        os.environ["INFERENCE_MODE"] = (
+            "batch" if settings.inference_batch_size > 1 else "single"
+        )
+    prev_force = os.environ.get("FORCE_CPU_INFERENCE")
     if settings.force_cpu_inference:
         os.environ["FORCE_CPU_INFERENCE"] = "true"
+        os.environ["ONNX_MODE"] = "cpu"
     else:
         os.environ.pop("FORCE_CPU_INFERENCE", None)
+        os.environ.pop("ONNX_MODE", None)
+    new_force = os.environ.get("FORCE_CPU_INFERENCE")
+    if prev_force != new_force:
+        from .inference_engine import reset_engine
+
+        reset_engine()
     clear_provider_probe_cache()
 
 
@@ -506,10 +523,21 @@ def _execute_run(
         if queue_shuffle_enabled:
             rng = random.Random(queue_seed)
             rng.shuffle(ordered_paths)
-        inference_mode = _get_inference_mode()
         configured_batch_size = _get_inference_batch_size(inference_batch_size)
-        # Prefer single-image tasks so worker pool stays saturated (no true ORT batch).
-        batch_size = 1 if inference_mode == "single" else configured_batch_size
+        # Settings batch size is authoritative for WD; env INFERENCE_MODE can still force single.
+        inference_mode = _get_inference_mode()
+        if (
+            inference_mode != "single"
+            and tagger_model != "ml_danbooru"
+            and configured_batch_size > 1
+        ):
+            inference_mode = "batch"
+            batch_size = configured_batch_size
+        elif tagger_model == "ml_danbooru":
+            inference_mode = "single"
+            batch_size = 1
+        else:
+            batch_size = 1 if inference_mode == "single" else configured_batch_size
         _set_run_telemetry(
             run_id,
             queue_seed=queue_seed,
@@ -662,6 +690,255 @@ def _execute_run(
         logger.info("run_completed run_id=%d processed=%d failed=%d", run_id, processed, failed)
     except Exception as err:
         logger.exception("run_failed run_id=%d", run_id)
+        execute(
+            "UPDATE runs SET status = 'failed', finished_at = ?, last_error = ? WHERE id = ?",
+            (_now_iso(), str(err), run_id),
+        )
+
+
+def _count_inference_failed_items(run_id: int) -> int:
+    rows = fetch_all(
+        "SELECT review_reason FROM items WHERE run_id = ? AND needs_review = 1",
+        (run_id,),
+    )
+    failed = 0
+    for row in rows:
+        reason = str(row.get("review_reason") or "").lower()
+        if "inference failed" in reason or "no tag scores" in reason:
+            failed += 1
+    return failed
+
+
+def _eligible_reclassify_rows(
+    run_id: int, item_ids: list[int] | None = None
+) -> list[dict]:
+    query = """
+        SELECT * FROM items
+        WHERE run_id = ? AND needs_review = 1 AND status = 'proposed'
+    """
+    params: list = [run_id]
+    if item_ids:
+        placeholders = ",".join("?" for _ in item_ids)
+        query += f" AND id IN ({placeholders})"
+        params.extend(item_ids)
+    query += " ORDER BY id ASC"
+    return fetch_all(query, tuple(params))
+
+
+def _reclassify_review_reason(tagger_model: str, result: _ImageInferenceResult) -> str | None:
+    if not result.needs_review:
+        return None
+    prefix = f"Reclassified with {tagger_model}."
+    if result.reason:
+        return f"{prefix} {result.reason}"
+    return prefix
+
+
+def _execute_reclassify(
+    run_id: int,
+    root_repo: Path,
+    categories_root: Path,
+    confidence_threshold: float,
+    matched_tags: set[str],
+    item_ids: list[int] | None,
+    experimental_media_enabled: bool = False,
+    max_inference_workers: int = 2,
+    inference_batch_size: int = 1,
+    tagger_model: str = "wd_eva02_large",
+    wd_general_threshold: float = 0.35,
+) -> None:
+    try:
+        execute(
+            """
+            UPDATE runs
+            SET status = 'running',
+                last_error = NULL,
+                cancel_requested = 0,
+                finished_at = NULL
+            WHERE id = ?
+            """,
+            (run_id,),
+        )
+        if _is_cancel_requested(run_id):
+            execute(
+                "UPDATE runs SET status = 'cancelled', finished_at = ? WHERE id = ?",
+                (_now_iso(), run_id),
+            )
+            return
+
+        rows = _eligible_reclassify_rows(run_id, item_ids)
+        if not rows:
+            execute(
+                "UPDATE runs SET status = 'completed', finished_at = ? WHERE id = ?",
+                (_now_iso(), run_id),
+            )
+            return
+
+        probe_execution_providers()
+        ordered_paths = [Path(row["file_path"]) for row in rows]
+        path_to_row = {Path(row["file_path"]): row for row in rows}
+
+        configured_batch_size = _get_inference_batch_size(inference_batch_size)
+        inference_mode = _get_inference_mode()
+        if (
+            inference_mode != "single"
+            and tagger_model != "ml_danbooru"
+            and configured_batch_size > 1
+        ):
+            inference_mode = "batch"
+            batch_size = configured_batch_size
+        elif tagger_model == "ml_danbooru":
+            inference_mode = "single"
+            batch_size = 1
+        else:
+            batch_size = 1 if inference_mode == "single" else configured_batch_size
+
+        _set_run_telemetry(
+            run_id,
+            inference_mode=inference_mode,
+            batch_size=batch_size,
+            avg_infer_ms_per_image=0.0,
+        )
+
+        max_workers = _get_max_inference_workers(max_inference_workers)
+        cancelled = False
+        infer_elapsed_ms_total = 0.0
+        infer_sample_count = 0
+        # Keep original processed/total; only refresh failed_images as we go.
+        original_processed = int(
+            (fetch_one("SELECT processed_images FROM runs WHERE id = ?", (run_id,)) or {}).get(
+                "processed_images"
+            )
+            or 0
+        )
+
+        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="reclass") as executor:
+            pending: dict[Future[tuple[list[_ImageInferenceResult], float, str]], list[Path]] = {}
+            batches = [
+                ordered_paths[idx : idx + batch_size]
+                for idx in range(0, len(ordered_paths), batch_size)
+            ]
+            iterator = iter(batches)
+
+            def _submit_until_capacity() -> None:
+                while len(pending) < max_workers:
+                    try:
+                        next_batch = next(iterator)
+                    except StopIteration:
+                        return
+                    future = executor.submit(
+                        _infer_batch_with_fallback,
+                        next_batch,
+                        matched_tags,
+                        confidence_threshold,
+                        inference_mode,
+                        experimental_media_enabled,
+                        tagger_model,
+                        wd_general_threshold,
+                    )
+                    pending[future] = next_batch
+
+            _submit_until_capacity()
+            while pending:
+                if _is_cancel_requested(run_id):
+                    cancelled = True
+                    for future in pending:
+                        future.cancel()
+                    break
+
+                done, _ = wait(set(pending.keys()), return_when=FIRST_COMPLETED)
+                for future in done:
+                    pending.pop(future)
+                    if future.cancelled():
+                        continue
+                    batch_results, elapsed_ms, used_mode = future.result()
+                    infer_elapsed_ms_total += elapsed_ms
+                    infer_sample_count += len(batch_results)
+                    avg_ms = (
+                        infer_elapsed_ms_total / infer_sample_count if infer_sample_count else 0.0
+                    )
+                    _set_run_telemetry(
+                        run_id,
+                        inference_mode=used_mode if used_mode != "single_fallback" else "single",
+                        batch_size=batch_size,
+                        avg_infer_ms_per_image=avg_ms,
+                    )
+                    for result in batch_results:
+                        row = path_to_row.get(result.image_path)
+                        if row is None:
+                            continue
+                        suggested_destination = (
+                            str(categories_root / sanitize_folder_name(result.primary_tag))
+                            if result.primary_tag is not None
+                            else None
+                        )
+                        new_status = "approved" if not result.needs_review else "proposed"
+                        review_reason = _reclassify_review_reason(tagger_model, result)
+                        # Preserve a manually set final_tag; otherwise mirror classification.
+                        existing_final = row.get("final_tag")
+                        if existing_final:
+                            new_final_tag = existing_final
+                            new_final_destination = row.get("final_destination")
+                        else:
+                            new_final_tag = result.primary_tag
+                            new_final_destination = suggested_destination
+                        execute(
+                            """
+                            UPDATE items
+                            SET primary_tag = ?,
+                                primary_score = ?,
+                                secondary_json = ?,
+                                full_scores_json = ?,
+                                suggested_destination = ?,
+                                final_tag = ?,
+                                final_destination = ?,
+                                status = ?,
+                                needs_review = ?,
+                                review_reason = ?
+                            WHERE id = ? AND run_id = ? AND status = 'proposed' AND needs_review = 1
+                            """,
+                            (
+                                result.primary_tag,
+                                result.primary_score,
+                                to_json(result.secondary),
+                                to_json(result.scores),
+                                suggested_destination,
+                                new_final_tag,
+                                new_final_destination,
+                                new_status,
+                                1 if result.needs_review else 0,
+                                review_reason,
+                                row["id"],
+                                run_id,
+                            ),
+                        )
+                        failed = _count_inference_failed_items(run_id)
+                        _update_run_progress(run_id, original_processed, failed)
+                _submit_until_capacity()
+
+        failed = _count_inference_failed_items(run_id)
+        _update_run_progress(run_id, original_processed, failed)
+        if cancelled:
+            execute(
+                "UPDATE runs SET status = 'cancelled', finished_at = ? WHERE id = ?",
+                (_now_iso(), run_id),
+            )
+            logger.info("reclassify_cancelled run_id=%d", run_id)
+            return
+
+        execute(
+            "UPDATE runs SET status = 'completed', finished_at = ? WHERE id = ?",
+            (_now_iso(), run_id),
+        )
+        logger.info(
+            "reclassify_completed run_id=%d model=%s eligible=%d failed=%d",
+            run_id,
+            tagger_model,
+            len(rows),
+            failed,
+        )
+    except Exception as err:
+        logger.exception("reclassify_failed run_id=%d", run_id)
         execute(
             "UPDATE runs SET status = 'failed', finished_at = ?, last_error = ? WHERE id = ?",
             (_now_iso(), str(err), run_id),
@@ -904,6 +1181,111 @@ def cancel_run(run_id: int) -> RunStatusResponse:
     return _run_status_from_row(updated)
 
 
+@router.post("/runs/{run_id}/reclassify", response_model=ReclassifyResponse)
+def reclassify_run(run_id: int, payload: ReclassifyRequest) -> ReclassifyResponse:
+    run = fetch_one("SELECT * FROM runs WHERE id = ?", (run_id,))
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    status = str(run.get("status") or "")
+    if status in {"pending", "running"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot reclassify while a run is still pending or running.",
+        )
+    if status == "cancelled":
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot reclassify a cancelled run.",
+        )
+    if status not in {"completed", "failed"}:
+        raise HTTPException(status_code=400, detail=f"Run status '{status}' cannot be reclassified.")
+
+    eligible = _eligible_reclassify_rows(run_id, payload.item_ids)
+    if not eligible:
+        raise HTTPException(
+            status_code=400,
+            detail="No eligible needs-review items to reclassify "
+            "(only proposed + needs_review items are updated).",
+        )
+
+    current = _settings_from_db()
+    _apply_runtime_inference_env(current)
+    root_repo = Path(str(run["root_repo"])).expanduser()
+    categories_root = Path(str(run["categories_root"])).expanduser()
+    confidence_threshold = float(run.get("confidence_threshold") or current.confidence_threshold)
+
+    selected_folders = list(current.selected_tags)
+    if not selected_folders:
+        raise HTTPException(
+            status_code=400,
+            detail="No selected tags in settings; save destination tags before reclassifying.",
+        )
+    try:
+        known_tags = load_known_tags(TAGS_CSV)
+        mappings = discover_tag_folders(categories_root, known_tags, selected_folders)
+        matched_tags = {m.matched_tag for m in mappings if m.matched and m.matched_tag}
+        if not matched_tags:
+            raise HTTPException(
+                status_code=400,
+                detail="No selected tags map to known tags.csv entries. Save tags in settings first.",
+            )
+    except HTTPException:
+        raise
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+    except Exception:
+        logger.exception("failed to prepare reclassify run_id=%d", run_id)
+        raise HTTPException(status_code=500, detail="Failed to prepare reclassify")
+
+    # Claim the run before spawning the worker so a second reclassify cannot race in.
+    execute(
+        """
+        UPDATE runs
+        SET status = 'running',
+            last_error = NULL,
+            cancel_requested = 0,
+            finished_at = NULL
+        WHERE id = ? AND status IN ('completed', 'failed')
+        """,
+        (run_id,),
+    )
+    claimed = fetch_one("SELECT status FROM runs WHERE id = ?", (run_id,))
+    if not claimed or claimed.get("status") != "running":
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot reclassify while a run is still pending or running.",
+        )
+
+    worker = threading.Thread(
+        target=_execute_reclassify,
+        args=(
+            run_id,
+            root_repo,
+            categories_root,
+            confidence_threshold,
+            matched_tags,
+            payload.item_ids,
+            current.experimental_media_enabled,
+            current.max_inference_workers,
+            current.inference_batch_size,
+            payload.tagger_model,
+            current.wd_general_threshold,
+        ),
+        daemon=True,
+    )
+    worker.start()
+    return ReclassifyResponse(
+        run_id=run_id,
+        status="running",
+        eligible_count=len(eligible),
+        tagger_model=payload.tagger_model,
+        message=(
+            f"Reclassify queued for {len(eligible)} item(s) with {payload.tagger_model}; "
+            "poll /api/runs/{run_id}/status for progress."
+        ),
+    )
+
+
 @router.get("/runs/{run_id}/items", response_model=list[ClassifiedItem])
 def get_run_items(
     run_id: int,
@@ -1128,3 +1510,62 @@ def migrate_run(run_id: int, payload: MigrateRequest) -> MigrateResponse:
         failed_count=failed_count,
         results=results,
     )
+
+
+@router.get("/debug/sfw-sources")
+def debug_sfw_sources() -> dict[str, object]:
+    from .sfw_sources import list_sources
+
+    return {
+        "sources": [
+            {
+                "id": s.id,
+                "label": s.label,
+                "sfw_policy": s.sfw_policy,
+                "max_content_tags": s.max_content_tags,
+            }
+            for s in list_sources()
+        ]
+    }
+
+
+@router.post("/debug/sfw-eval", response_model=SfwDebugEvalResponse)
+def debug_sfw_eval(payload: SfwDebugEvalRequest) -> SfwDebugEvalResponse:
+    from .debug_eval import run_sfw_eval
+    from .sfw_sources import get_source
+
+    settings = _settings_from_db()
+    _apply_runtime_inference_env(settings)
+    try:
+        get_source(payload.source)
+    except KeyError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+    try:
+        result = run_sfw_eval(
+            source_id=payload.source,
+            tags=payload.tags,
+            count=payload.count,
+            settings=settings,
+        )
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+    except Exception as err:
+        logger.exception("debug_sfw_eval_failed")
+        raise HTTPException(status_code=500, detail=f"SFW eval failed: {err}") from err
+    return SfwDebugEvalResponse.model_validate(result)
+
+
+@router.get("/debug/sfw-eval/preview/{source_id}/{file_name}")
+def debug_sfw_eval_preview(source_id: str, file_name: str) -> FileResponse:
+    from .sfw_sources import resolve_cached_file
+
+    try:
+        path = resolve_cached_file(source_id, file_name)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Preview not found")
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+    suffix = path.suffix.lower()
+    media = SUPPORTED_PREVIEW_SUFFIXES.get(suffix, "application/octet-stream")
+    return FileResponse(path, media_type=media)
+

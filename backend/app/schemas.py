@@ -20,9 +20,9 @@ class AppSettings(BaseModel):
     experimental_media_enabled: bool = False
     # Shuck3r-style persisted preferences (survive reload / restart).
     selected_tags: list[str] = Field(default_factory=list)
-    # Shared ORT session is serialized; >2 workers mostly queues behind the lock.
+    # Shared ORT run lock; preprocess overlaps across workers. Prefer 2 on GPU.
     max_inference_workers: int = Field(default=2, ge=1, le=16)
-    inference_batch_size: int = Field(default=1, ge=1, le=64)
+    inference_batch_size: int = Field(default=4, ge=1, le=64)
     force_cpu_inference: bool = False
     tagger_model: TaggerModel = "wd_swinv2_v3"
     wd_general_threshold: float = Field(default=0.35, ge=0.0, le=1.0)
@@ -86,6 +86,64 @@ class StartRunResponse(BaseModel):
     unmatched_folders: list[str] = Field(default_factory=list)
     created_items: int = 0
     message: str = "Run queued"
+
+
+class ReclassifyRequest(BaseModel):
+    tagger_model: TaggerModel
+    item_ids: list[int] | None = None
+
+
+class ReclassifyResponse(BaseModel):
+    run_id: int
+    status: RunLifecycleStatus
+    eligible_count: int
+    tagger_model: TaggerModel
+    message: str = "Reclassify queued"
+
+
+class SfwDebugEvalRequest(BaseModel):
+    source: str = "safebooru"
+    tags: list[str] = Field(default_factory=list)
+    count: int = Field(default=10, ge=5, le=30)
+
+
+class SfwDebugRecallRow(BaseModel):
+    tag: str
+    present_in_posts: int
+    hits_at_threshold: int
+    hit_rate: float | None = None
+
+
+class SfwDebugEvalItem(BaseModel):
+    source: str
+    post_id: str
+    rating: str
+    file_name: str
+    known_tags: list[str] = Field(default_factory=list)
+    pull_tag_scores: dict[str, float | None] = Field(default_factory=dict)
+    global_top_tags: list[SecondarySuggestion] = Field(default_factory=list)
+    primary_tag: str | None = None
+    primary_score: float | None = None
+    needs_review: bool = True
+    review_reason: str | None = None
+    suggested_folder: str | None = None
+    secondary_suggestions: list[SecondarySuggestion] = Field(default_factory=list)
+
+
+class SfwDebugEvalResponse(BaseModel):
+    source: str
+    source_label: str
+    sfw_policy: str
+    query: str
+    tags: list[str]
+    count_requested: int
+    count_evaluated: int
+    tagger_model: str
+    confidence_threshold: float
+    destination_tags: list[str] = Field(default_factory=list)
+    recall: list[SfwDebugRecallRow] = Field(default_factory=list)
+    items: list[SfwDebugEvalItem] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
 
 
 class RunStatusResponse(BaseModel):

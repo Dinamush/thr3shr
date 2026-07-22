@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
+import ClassifierDebugPage from "./ClassifierDebugPage";
 
 const DEFAULT_SETTINGS = {
   root_repo: "",
@@ -48,7 +49,13 @@ function formatTagScore(entry) {
   return `${entry.tag} (${Number(entry.score).toFixed(3)})`;
 }
 
+function readRoute() {
+  const hash = window.location.hash.replace(/^#/, "") || "/";
+  return hash.startsWith("/debug") ? "debug" : "home";
+}
+
 function App() {
+  const [route, setRoute] = useState(readRoute);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [savedSnapshot, setSavedSnapshot] = useState(
     settingsSnapshot(DEFAULT_SETTINGS, [])
@@ -79,11 +86,19 @@ function App() {
     updatingStatus: false,
     applyingBatch: false,
     migrating: false,
+    reclassifying: false,
   });
+  const [reclassifyModel, setReclassifyModel] = useState("wd_eva02_large");
   const finalTagTimersRef = useRef({});
   const pollTimerRef = useRef(null);
   const tagsHydratedRef = useRef(false);
   const skipNextTagPersistRef = useRef(false);
+
+  useEffect(() => {
+    const handleHashChange = () => setRoute(readRoute());
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
+  }, []);
 
   const isDirty = useMemo(
     () => settingsSnapshot(settings, selectedTags) !== savedSnapshot,
@@ -408,6 +423,42 @@ function App() {
     }
   }
 
+  useEffect(() => {
+    const runModel = runStatus?.tagger_model || settings.tagger_model;
+    if (runModel === "wd_swinv2_v3") {
+      setReclassifyModel("wd_eva02_large");
+      return;
+    }
+    if (runModel === "wd_eva02_large") {
+      setReclassifyModel("ml_danbooru");
+      return;
+    }
+    setReclassifyModel("wd_eva02_large");
+  }, [runStatus?.tagger_model, settings.tagger_model]);
+
+  async function handleReclassifyNeedsReview() {
+    if (!runId || runActive) return;
+    setOpsLoading((prev) => ({ ...prev, reclassifying: true }));
+    setError("");
+    try {
+      const result = await api.reclassifyRun(runId, {
+        tagger_model: reclassifyModel,
+      });
+      setRunStatus((prev) => ({
+        ...(prev || {}),
+        run_id: runId,
+        status: result.status || "running",
+        cancel_requested: false,
+        last_error: null,
+      }));
+      startStatusPolling(runId);
+    } catch (err) {
+      setError(`Failed to reclassify needs-review items: ${err.message}`);
+    } finally {
+      setOpsLoading((prev) => ({ ...prev, reclassifying: false }));
+    }
+  }
+
   async function toggleScoreDebug(itemId) {
     const isExpanded = Boolean(expandedScoreRows[itemId]);
     if (isExpanded) {
@@ -467,9 +518,21 @@ function App() {
     setSelectedTags((prev) => prev.filter((t) => t !== value));
   }
 
+  if (route === "debug") {
+    return <ClassifierDebugPage />;
+  }
+
   return (
     <div className="container">
       <header className="app-header">
+        <div className="app-nav">
+          <a href="#/" className="nav-link active" aria-current="page">
+            Classifier
+          </a>
+          <a href="#/debug" className="nav-link">
+            Classifier debug
+          </a>
+        </div>
         <h1>Image Classifier</h1>
         <p className="lede">
           Configure paths and tagger model, select destination tags, run inference, then review
@@ -854,6 +917,39 @@ function App() {
               </button>
             </div>
           )}
+          {!runActive &&
+            stats.reviewNeeded > 0 &&
+            ["completed", "failed"].includes(runStatus.status) && (
+              <div className="actions reclassify-banner" role="region" aria-label="Reclassify needs review">
+                <span>
+                  {stats.reviewNeeded} item{stats.reviewNeeded === 1 ? "" : "s"} need review — retry with a
+                  stronger model (approved/rejected stay untouched).
+                </span>
+                <label className="reclassify-model">
+                  <span className="sr-only">Reclassify model</span>
+                  <select
+                    value={reclassifyModel}
+                    onChange={(e) => setReclassifyModel(e.target.value)}
+                    disabled={opsLoading.reclassifying}
+                    aria-label="Model for reclassify"
+                  >
+                    {TAGGER_MODELS.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  disabled={opsLoading.reclassifying || selectedTags.length === 0}
+                  onClick={handleReclassifyNeedsReview}
+                  aria-label="Reclassify needs review items"
+                >
+                  {opsLoading.reclassifying ? "Queuing…" : "Reclassify needs review"}
+                </button>
+              </div>
+            )}
           {runStatus.last_error && <div className="error">{runStatus.last_error}</div>}
         </section>
       )}
