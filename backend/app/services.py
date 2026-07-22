@@ -77,12 +77,16 @@ def load_known_tags(tags_csv_path: Path) -> set[str]:
 def discover_tag_folders(
     categories_root: Path, known_tags: set[str], selected_folders: list[str] | None = None
 ) -> list[FolderMapping]:
-    if not categories_root.exists() or not categories_root.is_dir():
-        raise ValueError(f"categories_root does not exist or is not a directory: {categories_root}")
-
     if selected_folders:
+        # Selected-tag runs may target a destination root that does not exist yet.
+        if categories_root.exists() and not categories_root.is_dir():
+            raise ValueError(f"categories_root exists but is not a directory: {categories_root}")
         folder_names = selected_folders
     else:
+        if not categories_root.exists() or not categories_root.is_dir():
+            raise ValueError(
+                f"categories_root does not exist or is not a directory: {categories_root}"
+            )
         folder_names = sorted([p.name for p in categories_root.iterdir() if p.is_dir()])
 
     known_by_normalized: dict[str, str] = {}

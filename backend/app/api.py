@@ -446,12 +446,42 @@ def _execute_run(
     wd_general_threshold: float = 0.35,
 ) -> None:
     try:
-        provider_state = probe_execution_providers()
-        logger.info("run_provider_state run_id=%d state=%s", run_id, provider_state)
+        # Mark running immediately so clients can cancel during provider probe / scan.
         execute(
             "UPDATE runs SET status = 'running', started_at = ?, last_error = NULL WHERE id = ?",
             (_now_iso(), run_id),
         )
+        if _is_cancel_requested(run_id):
+            execute("DELETE FROM items WHERE run_id = ?", (run_id,))
+            execute(
+                """
+                UPDATE runs
+                SET status = 'cancelled',
+                    finished_at = ?,
+                    total_images = 0,
+                    processed_images = 0,
+                    failed_images = 0
+                WHERE id = ?
+                """,
+                (_now_iso(), run_id),
+            )
+            return
+        provider_state = probe_execution_providers()
+        logger.info("run_provider_state run_id=%d state=%s", run_id, provider_state)
+        if _is_cancel_requested(run_id):
+            execute(
+                """
+                UPDATE runs
+                SET status = 'cancelled',
+                    finished_at = ?,
+                    total_images = 0,
+                    processed_images = 0,
+                    failed_images = 0
+                WHERE id = ?
+                """,
+                (_now_iso(), run_id),
+            )
+            return
         scan_output = scan_images(
             root_repo,
             exclude_dirs={categories_root},
@@ -751,6 +781,24 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
 
     if not resolved.root_repo or not resolved.categories_root:
         raise HTTPException(status_code=400, detail="root_repo and categories_root are required")
+    if not root_repo.exists() or not root_repo.is_dir():
+        raise HTTPException(
+            status_code=400,
+            detail=f"root_repo does not exist or is not a directory: {root_repo}",
+        )
+    if categories_root.exists() and not categories_root.is_dir():
+        raise HTTPException(
+            status_code=400,
+            detail=f"categories_root exists but is not a directory: {categories_root}",
+        )
+    if not categories_root.exists():
+        try:
+            categories_root.mkdir(parents=True, exist_ok=True)
+        except OSError as err:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unable to create categories_root ({categories_root}): {err}",
+            )
 
     selected_folders = payload.selected_folders
     if not selected_folders:
@@ -767,6 +815,9 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
             )
     except HTTPException:
         raise
+    except ValueError as err:
+        logger.warning("failed to prepare run: %s", err)
+        raise HTTPException(status_code=400, detail=str(err))
     except Exception:
         logger.exception("failed to prepare run")
         raise HTTPException(status_code=500, detail="Failed to prepare classification run")

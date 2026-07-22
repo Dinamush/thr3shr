@@ -54,6 +54,51 @@ def test_settings_round_trip_includes_tagger_model(tmp_path: Path):
         assert loaded["max_inference_workers"] == 2
 
 
+def test_start_run_missing_root_returns_400(tmp_path: Path):
+    root = tmp_path / "root"
+    cats = tmp_path / "cats"
+    root.mkdir()
+    with TestClient(app) as client:
+        client.put(
+            "/api/settings",
+            json={
+                "root_repo": str(root),
+                "categories_root": str(cats),
+                "confidence_threshold": 0.6,
+                "default_migrate_mode": "copy",
+                "scan_recursive": True,
+                "experimental_media_enabled": False,
+                "selected_tags": ["1girl"],
+                "max_inference_workers": 2,
+                "inference_batch_size": 1,
+                "force_cpu_inference": False,
+                "tagger_model": "wd_swinv2_v3",
+                "wd_general_threshold": 0.35,
+            },
+        ).raise_for_status()
+        resp = client.post(
+            "/api/runs/start",
+            json={
+                "root_repo": str(tmp_path / "missing_root"),
+                "categories_root": str(cats),
+                "selected_folders": ["1girl"],
+            },
+        )
+        assert resp.status_code == 400
+        assert "root_repo" in resp.json()["detail"]
+        # Missing categories_root is auto-created when selected tags are provided.
+        resp_ok = client.post(
+            "/api/runs/start",
+            json={
+                "root_repo": str(root),
+                "categories_root": str(cats),
+                "selected_folders": ["1girl"],
+            },
+        )
+        assert resp_ok.status_code == 200
+        assert cats.is_dir()
+
+
 def test_below_threshold_null_primary_and_global_top_tags(monkeypatch, tmp_path: Path):
     root = tmp_path / "root_thresh"
     cats = tmp_path / "cats_thresh"
