@@ -26,7 +26,6 @@ from .schemas import (
     UpdateItemRequest,
 )
 from .services import (
-    choose_best_tags,
     discover_tag_folders,
     extract_scores,
     extract_scores_batch,
@@ -40,6 +39,7 @@ from .services import (
     sanitize_folder_name,
     scan_images,
 )
+from .taxonomy import choose_best_destination, resolve_taxonomy_folder
 from .providers import clear_provider_probe_cache, probe_execution_providers
 from .storage import execute, fetch_all, fetch_one, from_json, to_json
 
@@ -145,7 +145,7 @@ def _classify_from_scores(
     matched_tags: set[str],
     confidence_threshold: float,
 ) -> _ImageInferenceResult:
-    primary_tag, primary_score, secondary = choose_best_tags(scores, matched_tags)
+    primary_tag, primary_score, secondary = choose_best_destination(scores, matched_tags)
     needs_review = False
     reason = None
     if not scores:
@@ -681,6 +681,11 @@ def save_settings(payload: SaveSettingsRequest) -> AppSettings:
     for tag in payload.selected_tags:
         value = tag.strip()
         if not value:
+            continue
+        tax = resolve_taxonomy_folder(value)
+        if tax is not None:
+            if tax.folder not in cleaned_tags:
+                cleaned_tags.append(tax.folder)
             continue
         matched = value if value in known else known_by_norm.get(normalize_tag_name(value))
         if matched and matched not in cleaned_tags:

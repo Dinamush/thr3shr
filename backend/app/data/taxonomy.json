@@ -1,0 +1,153 @@
+{
+  "soft_alone_weight": 0.6,
+  "soft_corroboration_raw": 0.15,
+  "buckets": [
+    {
+      "id": "fertilization",
+      "folder": "fertilization",
+      "priority": 1,
+      "ignore": ["pregnant"],
+      "evidence": [
+        { "tag": "fertilization", "weight": 1.0 },
+        { "tag": "ovum", "weight": 0.9 },
+        { "tag": "impregnation", "weight": 0.85 },
+        { "tag": "sperm_cell", "weight": 0.85 },
+        { "tag": "internal_cumshot", "weight": 0.5 },
+        { "tag": "cum_in_pussy", "weight": 0.45 }
+      ]
+    },
+    {
+      "id": "fellatio",
+      "folder": "fellatio",
+      "priority": 2,
+      "ignore": ["oral", "cunnilingus", "fellatio_gesture"],
+      "evidence": [
+        { "tag": "fellatio", "weight": 1.0 },
+        { "tag": "irrumatio", "weight": 0.95 },
+        { "tag": "deepthroat", "weight": 0.95 },
+        { "tag": "autofellatio", "weight": 0.9 },
+        { "tag": "after_fellatio", "weight": 0.85 },
+        { "tag": "implied_fellatio", "weight": 0.5 },
+        { "tag": "imminent_fellatio", "weight": 0.5 }
+      ]
+    },
+    {
+      "id": "loli",
+      "folder": "loli",
+      "priority": 3,
+      "ignore": [
+        "lolita_fashion",
+        "gothic_lolita",
+        "sweet_lolita",
+        "wa_lolita",
+        "qi_lolita",
+        "lolita_hairband",
+        "flat_chest",
+        "petite",
+        "small_breasts",
+        "child",
+        "paper_child",
+        "kodomo_no_hi",
+        "kono_lolicon_domome",
+        "hololive_fantasy",
+        "hololive_gamers",
+        "hololive_idol_uniform",
+        "age_regression",
+        "shota"
+      ],
+      "evidence": [
+        { "tag": "loli", "weight": 1.0 },
+        { "tag": "oppai_loli", "weight": 0.85 },
+        { "tag": "toddler", "weight": 0.8 },
+        { "tag": "toddlercon", "weight": 0.75 },
+        { "tag": "child_on_child", "weight": 0.55 }
+      ]
+    },
+    {
+      "id": "shota",
+      "folder": "shota",
+      "priority": 4,
+      "ignore": [
+        "child",
+        "paper_child",
+        "kodomo_no_hi",
+        "1boy",
+        "2boys",
+        "multiple_boys",
+        "male_focus",
+        "otoko_no_ko",
+        "crossdressing",
+        "androgynous",
+        "bishounen",
+        "reverse_trap",
+        "bara",
+        "yaoi",
+        "muscular_male",
+        "mature_male",
+        "old_man",
+        "beard",
+        "facial_hair",
+        "stubble",
+        "abs",
+        "cowboy_shot",
+        "game_boy",
+        "cat_boy",
+        "dog_boy",
+        "monster_boy",
+        "magical_boy",
+        "petboy",
+        "boy_on_top",
+        "cum_on_boy",
+        "loli",
+        "flat_chest",
+        "petite",
+        "small_breasts",
+        "age_regression",
+        "age_difference",
+        "size_difference"
+      ],
+      "evidence": [
+        { "tag": "shota", "weight": 1.0 },
+        { "tag": "miniboy", "weight": 0.75 },
+        { "tag": "toddlercon", "weight": 0.7 },
+        { "tag": "toddler", "weight": 0.65 },
+        { "tag": "child_on_child", "weight": 0.55 }
+      ]
+    },
+    {
+      "id": "furry",
+      "folder": "furry",
+      "priority": 5,
+      "ignore": ["animal_ears", "fake_animal_ears", "kemonomimi_mode"],
+      "evidence": [
+        { "tag": "furry", "weight": 1.0 },
+        { "tag": "furry_male", "weight": 0.95 },
+        { "tag": "furry_female", "weight": 0.95 },
+        { "tag": "furry_with_furry", "weight": 0.9 },
+        { "tag": "furry_with_non-furry", "weight": 0.85 }
+      ]
+    },
+    {
+      "id": "pokemon",
+      "folder": "Pokemon",
+      "priority": 6,
+      "aliases": ["pokemon", "pokemon_(creature)"],
+      "ignore": [
+        "pokemon_ears",
+        "pokemon_tail",
+        "jessie_(pokemon)_(cosplay)",
+        "female_protagonist_(pokemon_go)_(cosplay)"
+      ],
+      "evidence": [
+        { "tag": "pokemon_(creature)", "weight": 1.0 },
+        { "tag": "holding_pokemon", "weight": 0.9 },
+        { "tag": "shiny_pokemon", "weight": 0.9 },
+        { "tag": "mega_pokemon", "weight": 0.9 },
+        { "tag": "legendary_pokemon", "weight": 0.9 },
+        { "tag": "pokemon_on_shoulder", "weight": 0.85 },
+        { "tag": "pokemon_on_head", "weight": 0.85 },
+        { "tag": "poke_ball", "weight": 0.45 }
+      ]
+    }
+  ]
+}

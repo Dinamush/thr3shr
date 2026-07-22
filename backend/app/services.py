@@ -96,12 +96,19 @@ def discover_tag_folders(
         if normalized_tag not in known_by_normalized:
             known_by_normalized[normalized_tag] = tag
 
+    from .taxonomy import resolve_taxonomy_folder
+
     mappings: list[FolderMapping] = []
     for folder in folder_names:
         normalized = normalize_tag_name(folder)
         # Prefer exact known tag match first for selected tags that contain
         # special syntax (e.g. `remodel_(kantai_collection)`).
         matched_tag = folder if folder in known_tags else known_by_normalized.get(normalized)
+        if matched_tag is None:
+            # Taxonomy destinations (e.g. Pokemon → pokemon_(creature) evidence).
+            tax = resolve_taxonomy_folder(folder)
+            if tax is not None:
+                matched_tag = tax.folder
         mappings.append(
             FolderMapping(
                 folder_name=folder,
