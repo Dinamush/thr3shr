@@ -1060,6 +1060,30 @@ def migrate_run(run_id: int, payload: MigrateRequest) -> MigrateResponse:
         try:
             if payload.create_missing_folders:
                 destination_folder.mkdir(parents=True, exist_ok=True)
+            elif not destination_folder.exists():
+                failed_count += 1
+                results.append(
+                    {
+                        "item_id": row["id"],
+                        "source": str(source),
+                        "destination": str(destination_folder),
+                        "success": False,
+                        "error": "Destination folder does not exist",
+                    }
+                )
+                continue
+            elif not destination_folder.is_dir():
+                failed_count += 1
+                results.append(
+                    {
+                        "item_id": row["id"],
+                        "source": str(source),
+                        "destination": str(destination_folder),
+                        "success": False,
+                        "error": "Destination path exists but is not a folder",
+                    }
+                )
+                continue
         except Exception:
             failed_count += 1
             results.append(
