@@ -1146,7 +1146,7 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
         status="pending",
         mappings=mappings,
         unmatched_folders=[m.folder_name for m in mappings if not m.matched],
-        message="Run queued; poll /api/runs/{run_id}/status for progress.",
+        message=f"Run queued; poll /api/runs/{run_id}/status for progress.",
     )
 
 
@@ -1281,7 +1281,7 @@ def reclassify_run(run_id: int, payload: ReclassifyRequest) -> ReclassifyRespons
         tagger_model=payload.tagger_model,
         message=(
             f"Reclassify queued for {len(eligible)} item(s) with {payload.tagger_model}; "
-            "poll /api/runs/{run_id}/status for progress."
+            f"poll /api/runs/{run_id}/status for progress."
         ),
     )
 
