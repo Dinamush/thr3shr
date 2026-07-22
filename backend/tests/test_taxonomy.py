@@ -14,8 +14,10 @@ from app.taxonomy import (
 def test_default_taxonomy_json_loads() -> None:
     cfg = load_taxonomy(DEFAULT_TAXONOMY_PATH)
     assert DEFAULT_TAXONOMY_PATH.is_file()
-    assert len(cfg.buckets) >= 6
+    assert len(cfg.buckets) >= 10
     assert resolve_taxonomy_folder("Pokemon", taxonomy=cfg).folder == "Pokemon"
+    assert resolve_taxonomy_folder("NTR", taxonomy=cfg).folder == "NTR"
+    assert resolve_taxonomy_folder("nakadashi", taxonomy=cfg).folder == "nakadashi"
 
 
 def test_custom_taxonomy_json_is_used(tmp_path: Path) -> None:
@@ -103,14 +105,78 @@ def test_fellatio_implication_children_and_ignore_oral() -> None:
     assert abs(score - 0.9 * 0.95) < 1e-9
 
 
-def test_fertilization_ignores_pregnant_alone() -> None:
-    selected = {"fertilization", "fellatio"}
+def test_fertilization_ignores_pregnant_and_creampie_alone() -> None:
+    selected = {"fertilization", "nakadashi", "fellatio"}
     folder, score, _ = choose_best_destination({"pregnant": 0.99}, selected)
     assert folder is None
 
-    folder, score, _ = choose_best_destination({"fertilization": 0.72, "pregnant": 0.99}, selected)
+    # Creampie tags no longer count as fertilization evidence.
+    folder, score, _ = choose_best_destination({"cum_in_pussy": 0.99}, selected)
+    assert folder == "nakadashi"
+
+    folder, score, _ = choose_best_destination(
+        {"fertilization": 0.72, "pregnant": 0.99, "cum_in_pussy": 0.95},
+        selected,
+    )
     assert folder == "fertilization"
     assert score == 0.72
+
+
+def test_impregnation_alias_routes_to_fertilization() -> None:
+    folder, score, _ = choose_best_destination(
+        {"impregnation": 0.88},
+        {"impregnation"},
+    )
+    assert folder == "fertilization"
+    assert score == 0.88
+
+
+def test_ntr_requires_netorare_or_cheating() -> None:
+    selected = {"NTR", "incest"}
+    folder, score, _ = choose_best_destination(
+        {"voyeurism": 0.99, "caught": 0.9, "rape": 0.95},
+        selected,
+    )
+    assert folder is None
+
+    folder, score, _ = choose_best_destination({"netorare": 0.8, "caught": 0.99}, selected)
+    assert folder == "NTR"
+    assert score == 0.8
+
+
+def test_incest_ignores_siblings_alone() -> None:
+    selected = {"incest", "loli"}
+    folder, score, _ = choose_best_destination({"siblings": 0.99}, selected)
+    assert folder is None
+
+    folder, score, _ = choose_best_destination(
+        {"incest": 0.77, "siblings": 0.99, "brother_and_sister": 0.9},
+        selected,
+    )
+    assert folder == "incest"
+    assert score == 0.77
+
+
+def test_monster_girl_ignores_parts_alone() -> None:
+    selected = {"monster_girl", "furry"}
+    folder, score, _ = choose_best_destination(
+        {"horns": 0.99, "wings": 0.98, "tail": 0.97, "pointy_ears": 0.96},
+        selected,
+    )
+    assert folder is None
+
+    folder, score, _ = choose_best_destination({"slime_girl": 0.84}, selected)
+    assert folder == "monster_girl"
+    assert abs(score - 0.84 * 0.9) < 1e-9
+
+
+def test_nakadashi_folder_alias() -> None:
+    folder, score, _ = choose_best_destination(
+        {"internal_cumshot": 0.9},
+        {"creampie"},
+    )
+    assert folder == "nakadashi"
+    assert score == 0.9
 
 
 def test_furry_ignores_kemonomimi() -> None:
@@ -150,15 +216,15 @@ def test_soft_evidence_alone_does_not_win() -> None:
 
 
 def test_priority_breaks_score_ties() -> None:
-    selected = {"fertilization", "fellatio", "loli"}
+    selected = {"fertilization", "NTR", "fellatio", "loli"}
     # Equal weighted scores → fertilization wins by priority.
     folder, score, secondary = choose_best_destination(
-        {"fertilization": 0.8, "fellatio": 0.8, "loli": 0.8},
+        {"fertilization": 0.8, "netorare": 0.8, "fellatio": 0.8, "loli": 0.8},
         selected,
     )
     assert folder == "fertilization"
     assert score == 0.8
-    assert [row["tag"] for row in secondary] == ["fellatio", "loli"]
+    assert [row["tag"] for row in secondary][:2] == ["NTR", "fellatio"]
 
 
 def test_legacy_non_taxonomy_still_exact_match() -> None:
