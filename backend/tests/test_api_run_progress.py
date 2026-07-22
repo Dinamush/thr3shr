@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from app.api import _classify_from_scores
 from app.main import app
 from app.schemas import FolderMapping, ScanStats
 from app.services import ScanOutput
@@ -20,6 +21,119 @@ def test_providers_endpoint_shape():
         assert "likely_device" in payload
         assert "cuda_available" in payload
         assert "forced_cpu" in payload
+        assert "tagger_model" in payload
+        assert "note" in payload
+
+
+def test_settings_round_trip_includes_tagger_model(tmp_path: Path):
+    with TestClient(app) as client:
+        payload = {
+            "root_repo": str(tmp_path / "root"),
+            "categories_root": str(tmp_path / "cats"),
+            "confidence_threshold": 0.55,
+            "default_migrate_mode": "copy",
+            "scan_recursive": True,
+            "experimental_media_enabled": False,
+            "selected_tags": [],
+            "max_inference_workers": 2,
+            "inference_batch_size": 1,
+            "force_cpu_inference": False,
+            "tagger_model": "wd_eva02_large",
+            "wd_general_threshold": 0.4,
+        }
+        put_resp = client.put("/api/settings", json=payload)
+        put_resp.raise_for_status()
+        saved = put_resp.json()
+        assert saved["tagger_model"] == "wd_eva02_large"
+        assert saved["wd_general_threshold"] == 0.4
+        get_resp = client.get("/api/settings")
+        get_resp.raise_for_status()
+        loaded = get_resp.json()
+        assert loaded["tagger_model"] == "wd_eva02_large"
+        assert loaded["wd_general_threshold"] == 0.4
+        assert loaded["max_inference_workers"] == 2
+
+
+def test_below_threshold_null_primary_and_global_top_tags(monkeypatch, tmp_path: Path):
+    root = tmp_path / "root_thresh"
+    cats = tmp_path / "cats_thresh"
+    root.mkdir()
+    cats.mkdir()
+    (cats / "loli").mkdir()
+    file_path = root / "weak.jpg"
+    file_path.write_text("fake", encoding="utf-8")
+
+    def fake_scan_images(_root, **kwargs):
+        return ScanOutput(
+            image_paths=[file_path],
+            stats=ScanStats(
+                total_files=1,
+                eligible_images=1,
+                ignored_unsupported=0,
+                ignored_gif=0,
+                failed_to_read=0,
+            ),
+        )
+
+    monkeypatch.setattr("app.api.scan_images", fake_scan_images)
+    monkeypatch.setattr(
+        "app.api.extract_scores",
+        lambda *_a, **_k: {
+            "1girl": 0.97,
+            "solo": 0.9,
+            "loli": 0.27,
+        },
+    )
+    monkeypatch.setattr("app.api.load_known_tags", lambda _p: {"loli", "1girl", "solo"})
+    monkeypatch.setattr(
+        "app.api.discover_tag_folders",
+        lambda _root, _tags, _selected: [
+            FolderMapping(
+                folder_name="loli", normalized_name="loli", matched_tag="loli", matched=True
+            )
+        ],
+    )
+
+    with TestClient(app) as client:
+        start_resp = client.post(
+            "/api/runs/start",
+            json={
+                "root_repo": str(root),
+                "categories_root": str(cats),
+                "confidence_threshold": 0.6,
+                "selected_folders": ["loli"],
+            },
+        )
+        start_resp.raise_for_status()
+        run_id = start_resp.json()["run_id"]
+        final = _wait_for_status(client, run_id, {"completed", "failed", "cancelled"})
+        assert final is not None
+        assert final["status"] == "completed"
+        assert final.get("tagger_model")
+        items_resp = client.get(f"/api/runs/{run_id}/items")
+        items_resp.raise_for_status()
+        items = items_resp.json()
+        assert len(items) == 1
+        item = items[0]
+        assert item["primary_tag"] is None
+        assert item["needs_review"] is True
+        assert item["secondary_suggestions"]
+        assert item["secondary_suggestions"][0]["tag"] == "loli"
+        tops = [t["tag"] for t in item["global_top_tags"]]
+        assert tops[:2] == ["1girl", "solo"]
+
+
+def test_classify_noise_floor_clears_weak_primary(tmp_path: Path):
+    result = _classify_from_scores(
+        tmp_path / "x.jpg",
+        {"loli": 0.2, "1girl": 0.95},
+        {"loli"},
+        confidence_threshold=0.6,
+    )
+    assert result.primary_tag is None
+    assert result.needs_review is True
+    assert "noise floor" in (result.reason or "").lower()
+    assert result.secondary[0]["tag"] == "loli"
 
 
 def _wait_for_status(client: TestClient, run_id: int, terminal: set[str], timeout_s: float = 5.0):
@@ -58,7 +172,7 @@ def test_run_progress_reaches_completed(monkeypatch, tmp_path: Path):
         )
 
     monkeypatch.setattr("app.api.scan_images", fake_scan_images)
-    monkeypatch.setattr("app.api.extract_scores", lambda _p: {"1girl": 0.91})
+    monkeypatch.setattr("app.api.extract_scores", lambda *_a, **_k: {"1girl": 0.91})
     monkeypatch.setattr("app.api.load_known_tags", lambda _p: {"1girl"})
     monkeypatch.setattr(
         "app.api.discover_tag_folders",
@@ -116,7 +230,7 @@ def test_item_preview_returns_image(monkeypatch, tmp_path: Path):
         )
 
     monkeypatch.setattr("app.api.scan_images", fake_scan_images)
-    monkeypatch.setattr("app.api.extract_scores", lambda _p: {"1girl": 0.92})
+    monkeypatch.setattr("app.api.extract_scores", lambda *_a, **_k: {"1girl": 0.92})
     monkeypatch.setattr("app.api.load_known_tags", lambda _p: {"1girl"})
     monkeypatch.setattr(
         "app.api.discover_tag_folders",
@@ -177,7 +291,7 @@ def test_selected_tag_wins_when_global_top_not_selected(monkeypatch, tmp_path: P
     monkeypatch.setattr("app.api.scan_images", fake_scan_images)
     monkeypatch.setattr(
         "app.api.extract_scores",
-        lambda _p: {"1girl": 0.99, "monster_girl": 0.85, "slime_girl": 0.82},
+        lambda *_a, **_k: {"1girl": 0.99, "monster_girl": 0.85, "slime_girl": 0.82},
     )
     monkeypatch.setattr("app.api.load_known_tags", lambda _p: {"1girl", "monster_girl", "slime_girl"})
     monkeypatch.setattr(
@@ -243,7 +357,7 @@ def test_item_scores_debug_endpoint(monkeypatch, tmp_path: Path):
         )
 
     monkeypatch.setattr("app.api.scan_images", fake_scan_images)
-    monkeypatch.setattr("app.api.extract_scores", lambda _p: {"1girl": 0.92, "solo": 0.88})
+    monkeypatch.setattr("app.api.extract_scores", lambda *_a, **_k: {"1girl": 0.92, "solo": 0.88})
     monkeypatch.setattr("app.api.load_known_tags", lambda _p: {"1girl", "solo"})
     monkeypatch.setattr(
         "app.api.discover_tag_folders",
@@ -305,7 +419,7 @@ def test_run_cancel_sets_cancelled(monkeypatch, tmp_path: Path):
             ),
         )
 
-    def slow_scores(_p):
+    def slow_scores(_p, **_kwargs):
         time.sleep(0.03)
         return {"1girl": 0.88}
 
@@ -377,7 +491,7 @@ def test_seeded_queue_shuffle_is_deterministic(monkeypatch, tmp_path: Path):
             ),
         )
 
-    def record_scores(path: Path):
+    def record_scores(path: Path, **_kwargs):
         observed_order.append(path.name)
         return {"1girl": 0.88}
 
@@ -465,12 +579,12 @@ def test_batch_mode_falls_back_to_single(monkeypatch, tmp_path: Path):
             ),
         )
 
-    def fail_batch(_paths):
+    def fail_batch(_paths, **_kwargs):
         raise RuntimeError("synthetic batch failure")
 
     monkeypatch.setattr("app.api.scan_images", fake_scan_images)
     monkeypatch.setattr("app.api.extract_scores_batch", fail_batch)
-    monkeypatch.setattr("app.api.extract_scores", lambda _p: {"1girl": 0.9})
+    monkeypatch.setattr("app.api.extract_scores", lambda *_a, **_k: {"1girl": 0.9})
     monkeypatch.setattr("app.api.load_known_tags", lambda _p: {"1girl"})
     monkeypatch.setattr(
         "app.api.discover_tag_folders",

@@ -5,6 +5,7 @@ import logging
 import subprocess
 import shutil
 import tempfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,6 +27,9 @@ VIDEO_EXTENSIONS = {
 logger = logging.getLogger(__name__)
 _BATCH_INFERENCE_SUPPORTED: bool | None = None
 _WINDOWS_FORBIDDEN_CHARS = set('<>:"/\\|?*')
+# imgutils keeps one shared ORT session; concurrent Run() calls under GPU load
+# corrupt outputs (empty score dicts) and thrash VRAM. Serialize model execution.
+_INFERENCE_LOCK = threading.Lock()
 
 
 def normalize_tag_name(value: str) -> str:
@@ -213,24 +217,21 @@ def scan_images(
     )
 
 
-def extract_scores(image_path: Path) -> dict[str, float]:
-    from imgutils.tagging import get_mldanbooru_tags
+TAGGER_MODEL_ML = "ml_danbooru"
+TAGGER_MODEL_WD_SWINV2 = "wd_swinv2_v3"
+TAGGER_MODEL_WD_EVA02 = "wd_eva02_large"
+WD_MODEL_NAMES = {
+    TAGGER_MODEL_WD_SWINV2: "SwinV2_v3",
+    TAGGER_MODEL_WD_EVA02: "EVA02_Large",
+}
 
-    raw = get_mldanbooru_tags(
-        str(image_path),
-        threshold=0.0,
-        size=448,
-        keep_ratio=True,
-        drop_overlap=False,
-        use_real_name=False,
-    )
 
+def _parse_mldanbooru_raw(raw: object) -> dict[str, float]:
     scores: dict[str, float] = {}
     if isinstance(raw, dict):
         for tag, score in raw.items():
             scores[str(tag)] = float(score)
         return scores
-
     if isinstance(raw, list):
         for item in raw:
             if isinstance(item, (list, tuple)) and len(item) >= 2:
@@ -238,46 +239,161 @@ def extract_scores(image_path: Path) -> dict[str, float]:
     return scores
 
 
-def _extract_scores_from_pil_image(image: Image.Image) -> dict[str, float]:
+def _normalize_score_tags(scores: dict[str, float]) -> dict[str, float]:
+    """Normalize tag keys to underscore form so they match tags.csv / selected tags."""
+    normalized: dict[str, float] = {}
+    for tag, score in scores.items():
+        key = normalize_tag_name(str(tag))
+        if not key:
+            continue
+        current = normalized.get(key)
+        if current is None or float(score) > current:
+            normalized[key] = float(score)
+    return normalized
+
+
+def _parse_wd14_raw(raw: object) -> dict[str, float]:
+    scores: dict[str, float] = {}
+    if isinstance(raw, dict):
+        for tag, score in raw.items():
+            scores[str(tag)] = float(score)
+        return _normalize_score_tags(scores)
+    if isinstance(raw, (list, tuple)):
+        # fmt tuple returns ordered parts; flatten dict parts only.
+        for part in raw:
+            if isinstance(part, dict):
+                for tag, score in part.items():
+                    scores[str(tag)] = float(score)
+        return _normalize_score_tags(scores)
+    return {}
+
+
+def _run_mldanbooru(image: Path | Image.Image | str) -> dict[str, float]:
     from imgutils.tagging import get_mldanbooru_tags
 
     raw = get_mldanbooru_tags(
+        image if isinstance(image, Image.Image) else str(image),
+        threshold=0.0,
+        size=448,
+        keep_ratio=True,
+        drop_overlap=False,
+        use_real_name=False,
+    )
+    return _normalize_score_tags(_parse_mldanbooru_raw(raw))
+
+
+def _run_wd14(
+    image: Path | Image.Image | str,
+    *,
+    model_name: str,
+    general_threshold: float,
+) -> dict[str, float]:
+    from imgutils.tagging import get_wd14_tags
+
+    raw = get_wd14_tags(
+        image if isinstance(image, Image.Image) else str(image),
+        model_name=model_name,
+        general_threshold=general_threshold,
+        no_underline=False,
+        drop_overlap=False,
+        fmt="general",
+    )
+    return _parse_wd14_raw(raw)
+
+
+def extract_scores(
+    image_path: Path,
+    *,
+    tagger_model: str = TAGGER_MODEL_WD_SWINV2,
+    wd_general_threshold: float = 0.35,
+) -> dict[str, float]:
+    from .providers import ensure_nvidia_dll_search_path, preload_onnx_runtime_dlls
+
+    ensure_nvidia_dll_search_path()
+    preload_onnx_runtime_dlls()
+
+    with _INFERENCE_LOCK:
+        scores = _extract_scores_unlocked(
+            image_path,
+            tagger_model=tagger_model,
+            wd_general_threshold=wd_general_threshold,
+        )
+        # One retry: concurrent/GPU glitches occasionally return an empty map.
+        if not scores:
+            logger.warning(
+                "empty_scores_retry path=%s tagger_model=%s", image_path, tagger_model
+            )
+            scores = _extract_scores_unlocked(
+                image_path,
+                tagger_model=tagger_model,
+                wd_general_threshold=wd_general_threshold,
+            )
+    return scores
+
+
+def _extract_scores_unlocked(
+    image: Path | Image.Image | str,
+    *,
+    tagger_model: str,
+    wd_general_threshold: float,
+) -> dict[str, float]:
+    if tagger_model == TAGGER_MODEL_ML:
+        return _run_mldanbooru(image)
+    wd_name = WD_MODEL_NAMES.get(tagger_model)
+    if wd_name is None:
+        raise ValueError(f"Unsupported tagger_model: {tagger_model}")
+    return _run_wd14(
         image,
-        threshold=0.0,
-        size=448,
-        keep_ratio=True,
-        drop_overlap=False,
-        use_real_name=False,
+        model_name=wd_name,
+        general_threshold=wd_general_threshold,
     )
 
-    scores: dict[str, float] = {}
-    if isinstance(raw, dict):
-        for tag, score in raw.items():
-            scores[str(tag)] = float(score)
-        return scores
 
-    if isinstance(raw, list):
-        for item in raw:
-            if isinstance(item, (list, tuple)) and len(item) >= 2:
-                scores[str(item[0])] = float(item[1])
-    return scores
+def _extract_scores_from_pil_image(
+    image: Image.Image,
+    *,
+    tagger_model: str = TAGGER_MODEL_WD_SWINV2,
+    wd_general_threshold: float = 0.35,
+) -> dict[str, float]:
+    from .providers import ensure_nvidia_dll_search_path, preload_onnx_runtime_dlls
+
+    ensure_nvidia_dll_search_path()
+    preload_onnx_runtime_dlls()
+    with _INFERENCE_LOCK:
+        return _extract_scores_unlocked(
+            image,
+            tagger_model=tagger_model,
+            wd_general_threshold=wd_general_threshold,
+        )
 
 
 def extract_scores_with_experimental_media(
-    image_path: Path, experimental_media_enabled: bool = False
+    image_path: Path,
+    experimental_media_enabled: bool = False,
+    *,
+    tagger_model: str = TAGGER_MODEL_WD_SWINV2,
+    wd_general_threshold: float = 0.35,
 ) -> dict[str, float]:
     """
     Experimental path: supports GIF/video by sampling a representative frame.
     """
     if not experimental_media_enabled or not is_experimental_media(image_path):
-        return extract_scores(image_path)
+        return extract_scores(
+            image_path,
+            tagger_model=tagger_model,
+            wd_general_threshold=wd_general_threshold,
+        )
 
     ext = image_path.suffix.lower()
     if ext == ".gif":
         with Image.open(image_path) as gif:
             gif.seek(0)
             frame = gif.convert("RGB")
-            return _extract_scores_from_pil_image(frame)
+            return _extract_scores_from_pil_image(
+                frame,
+                tagger_model=tagger_model,
+                wd_general_threshold=wd_general_threshold,
+            )
 
     # Video path: extract first frame with ffmpeg to a temporary image.
     with tempfile.TemporaryDirectory(prefix="media_frame_") as temp_dir:
@@ -297,58 +413,46 @@ def extract_scores_with_experimental_media(
         if result.returncode != 0 or not frame_path.exists():
             err = (result.stderr or result.stdout or "").strip()
             raise RuntimeError(f"Video frame extraction failed: {err or 'ffmpeg unavailable'}")
-        return extract_scores(frame_path)
+        return extract_scores(
+            frame_path,
+            tagger_model=tagger_model,
+            wd_general_threshold=wd_general_threshold,
+        )
 
 
-def extract_scores_batch(image_paths: list[Path]) -> list[dict[str, float]]:
+def extract_scores_batch(
+    image_paths: list[Path],
+    *,
+    tagger_model: str = TAGGER_MODEL_WD_SWINV2,
+    wd_general_threshold: float = 0.35,
+) -> list[dict[str, float]]:
+    """
+    imgutils taggers do not accept image lists.
+
+    Fall back to sequential per-image scoring; the run executor provides
+    parallelism across workers (avoid nested pools on a shared ORT session).
+    """
     if not image_paths:
         return []
+
     global _BATCH_INFERENCE_SUPPORTED
+    if _BATCH_INFERENCE_SUPPORTED is not False:
+        logger.info("batch list API unsupported by imgutils; using per-image inference")
+        _BATCH_INFERENCE_SUPPORTED = False
 
-    if _BATCH_INFERENCE_SUPPORTED is False:
-        return [extract_scores(p) for p in image_paths]
-
-    from imgutils.tagging import get_mldanbooru_tags
-
-    try:
-        raw = get_mldanbooru_tags(
-            [str(p) for p in image_paths],
-            threshold=0.0,
-            size=448,
-            keep_ratio=True,
-            drop_overlap=False,
-            use_real_name=False,
+    return [
+        extract_scores(
+            path,
+            tagger_model=tagger_model,
+            wd_general_threshold=wd_general_threshold,
         )
-    except TypeError as err:
-        # Current imgutils build treats list input as invalid image type.
-        if "Unknown image type" in str(err):
-            if _BATCH_INFERENCE_SUPPORTED is not False:
-                logger.warning("batch inference not supported by imgutils; using per-image fallback")
-            _BATCH_INFERENCE_SUPPORTED = False
-            return [extract_scores(p) for p in image_paths]
-        raise
+        for path in image_paths
+    ]
 
-    parsed: list[dict[str, float]] = []
-    if isinstance(raw, list) and len(raw) == len(image_paths):
-        _BATCH_INFERENCE_SUPPORTED = True
-        for entry in raw:
-            if isinstance(entry, dict):
-                parsed.append({str(k): float(v) for k, v in entry.items()})
-                continue
-            if isinstance(entry, list):
-                scores: dict[str, float] = {}
-                for item in entry:
-                    if isinstance(item, (list, tuple)) and len(item) >= 2:
-                        scores[str(item[0])] = float(item[1])
-                parsed.append(scores)
-                continue
-            raise TypeError("Unexpected batch inference entry format")
-        return parsed
 
-    # If the backend or library returns an unexpected shape, fall back to per-image inference.
-    logger.warning("batch inference unsupported format; falling back to per-image path")
-    _BATCH_INFERENCE_SUPPORTED = False
-    return [extract_scores(p) for p in image_paths]
+def global_top_tags(scores: dict[str, float], limit: int = 5) -> list[dict[str, float]]:
+    ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)[:limit]
+    return [{"tag": tag, "score": float(score)} for tag, score in ranked]
 
 
 def choose_best_tags(
@@ -423,13 +527,16 @@ def resolve_settings(
     categories_root: str | None,
     confidence_threshold: float | None,
 ) -> AppSettings:
-    return AppSettings(
-        root_repo=root_repo if root_repo is not None else current.root_repo,
-        categories_root=categories_root if categories_root is not None else current.categories_root,
-        confidence_threshold=(
-            confidence_threshold if confidence_threshold is not None else current.confidence_threshold
-        ),
-        default_migrate_mode=current.default_migrate_mode,
-        scan_recursive=current.scan_recursive,
-        experimental_media_enabled=current.experimental_media_enabled,
+    return current.model_copy(
+        update={
+            "root_repo": root_repo if root_repo is not None else current.root_repo,
+            "categories_root": (
+                categories_root if categories_root is not None else current.categories_root
+            ),
+            "confidence_threshold": (
+                confidence_threshold
+                if confidence_threshold is not None
+                else current.confidence_threshold
+            ),
+        }
     )

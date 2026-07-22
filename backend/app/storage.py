@@ -81,6 +81,12 @@ def _ensure_settings_columns(conn: sqlite3.Connection) -> None:
     expected_columns = {
         "scan_recursive": "INTEGER NOT NULL DEFAULT 1",
         "experimental_media_enabled": "INTEGER NOT NULL DEFAULT 0",
+        "selected_tags_json": "TEXT NOT NULL DEFAULT '[]'",
+        "max_inference_workers": "INTEGER NOT NULL DEFAULT 2",
+        "inference_batch_size": "INTEGER NOT NULL DEFAULT 1",
+        "force_cpu_inference": "INTEGER NOT NULL DEFAULT 0",
+        "tagger_model": "TEXT NOT NULL DEFAULT 'wd_swinv2_v3'",
+        "wd_general_threshold": "REAL NOT NULL DEFAULT 0.35",
     }
     rows = conn.execute("PRAGMA table_info(settings)").fetchall()
     existing = {row[1] for row in rows}
@@ -99,6 +105,7 @@ def _ensure_runs_columns(conn: sqlite3.Connection) -> None:
         "finished_at": "TEXT",
         "last_error": "TEXT",
         "cancel_requested": "INTEGER NOT NULL DEFAULT 0",
+        "tagger_model": "TEXT NOT NULL DEFAULT 'wd_swinv2_v3'",
     }
     rows = conn.execute("PRAGMA table_info(runs)").fetchall()
     existing = {row[1] for row in rows}

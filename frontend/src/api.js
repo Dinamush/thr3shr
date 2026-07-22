@@ -8,6 +8,12 @@ const defaultSettings = {
   default_migrate_mode: "copy",
   scan_recursive: true,
   experimental_media_enabled: false,
+  selected_tags: [],
+  max_inference_workers: 2,
+  inference_batch_size: 1,
+  force_cpu_inference: false,
+  tagger_model: "wd_swinv2_v3",
+  wd_general_threshold: 0.35,
 };
 const mockTags = [
   "1girl",
@@ -136,6 +142,9 @@ function makeMockItems(runId, selectedFolders, threshold) {
         .filter((x) => x !== tag)
         .slice(0, 3)
         .map((x, i) => ({ tag: x, score: Math.max(0.2, score - 0.1 - i * 0.05) })),
+      global_top_tags: [tag, ...pool.filter((x) => x !== tag)]
+        .slice(0, 5)
+        .map((x, i) => ({ tag: x, score: Math.max(0.15, score - i * 0.07) })),
       suggested_destination: `${mockState.settings.categories_root || "/mock/categories"}/${tag}`,
       final_tag: tag,
       final_destination: `${mockState.settings.categories_root || "/mock/categories"}/${tag}`,
@@ -173,6 +182,7 @@ function computeMockStatus(run) {
     batch_size: 1,
     avg_infer_ms_per_image: null,
     queue_seed: null,
+    tagger_model: run.tagger_model || mockState.settings.tagger_model || "wd_swinv2_v3",
   };
 }
 
@@ -190,7 +200,27 @@ function mockRequest(path, options = {}) {
       cpu_available: true,
       forced_cpu: false,
       likely_device: "cpu",
+      cuda_usable: false,
+      tagger_model: mockState.settings.tagger_model || "wd_swinv2_v3",
       mock_mode: true,
+    });
+  }
+  if (path === "/scan/preview" && method === "GET") {
+    return Promise.resolve({
+      root_repo: mockState.settings.root_repo || "/mock/images",
+      recursive: Boolean(mockState.settings.scan_recursive),
+      experimental_media_enabled: Boolean(mockState.settings.experimental_media_enabled),
+      excluded_dirs: mockState.settings.categories_root
+        ? [mockState.settings.categories_root]
+        : [],
+      stats: {
+        total_files: 12,
+        eligible_images: 8,
+        ignored_unsupported: 3,
+        ignored_gif: 1,
+        failed_to_read: 0,
+      },
+      sample_paths: ["/mock/images/sample_1.jpg"],
     });
   }
   if (path.startsWith("/tags") && method === "GET") {
@@ -223,6 +253,7 @@ function mockRequest(path, options = {}) {
       root_repo: mockState.settings.root_repo,
       categories_root: mockState.settings.categories_root,
       confidence_threshold: threshold,
+      tagger_model: mockState.settings.tagger_model || "wd_swinv2_v3",
       status: "pending",
       total_images: items.length,
       processed_images: 0,
@@ -374,12 +405,12 @@ export const api = {
   },
   getSettings: () => request("/settings"),
   getProviders: () => request("/providers"),
+  previewScan: () => request("/scan/preview"),
   saveSettings: (payload) =>
     request("/settings", {
       method: "PUT",
       body: JSON.stringify(payload),
-    }),
-  startRun: (payload) =>
+    }),  startRun: (payload) =>
     request("/runs/start", {
       method: "POST",
       body: JSON.stringify(payload),

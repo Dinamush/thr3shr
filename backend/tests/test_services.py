@@ -3,9 +3,14 @@ from pathlib import Path
 from PIL import Image
 
 from app.services import (
+    TAGGER_MODEL_ML,
+    TAGGER_MODEL_WD_EVA02,
+    TAGGER_MODEL_WD_SWINV2,
     choose_best_tags,
     discover_tag_folders,
     ensure_collision_free_destination,
+    extract_scores,
+    global_top_tags,
     migrate_file,
     normalize_tag_name,
     sanitize_folder_name,
@@ -167,6 +172,73 @@ def test_choose_best_tags_matches_normalized_selected_tags() -> None:
     assert primary_tag == "monster_girl"
     assert primary_score == 0.88
     assert secondary == [{"tag": "slime_girl", "score": 0.84}]
+
+
+def test_global_top_tags_orders_by_score() -> None:
+    tops = global_top_tags({"a": 0.1, "b": 0.9, "c": 0.5}, limit=2)
+    assert tops == [{"tag": "b", "score": 0.9}, {"tag": "c", "score": 0.5}]
+
+
+def test_extract_scores_routes_ml_danbooru(monkeypatch, tmp_path: Path) -> None:
+    import app.services as services
+
+    calls: list[str] = []
+
+    monkeypatch.setattr("app.providers.ensure_nvidia_dll_search_path", lambda: [])
+    monkeypatch.setattr("app.providers.preload_onnx_runtime_dlls", lambda: None)
+    monkeypatch.setattr(
+        services,
+        "_run_mldanbooru",
+        lambda _image: calls.append("ml") or {"1girl": 0.9, "black_hair": 0.8},
+    )
+    monkeypatch.setattr(
+        services,
+        "_run_wd14",
+        lambda *_a, **_k: calls.append("wd") or {"solo": 0.7},
+    )
+
+    img = tmp_path / "x.jpg"
+    img.write_text("x", encoding="utf-8")
+    scores = extract_scores(img, tagger_model=TAGGER_MODEL_ML)
+    assert calls == ["ml"]
+    assert scores["1girl"] == 0.9
+    assert scores["black_hair"] == 0.8
+
+
+def test_extract_scores_routes_wd_models(monkeypatch, tmp_path: Path) -> None:
+    import app.services as services
+
+    seen: list[tuple[str, float]] = []
+
+    def fake_wd(image, *, model_name: str, general_threshold: float):
+        seen.append((model_name, general_threshold))
+        return {"solo": 0.66, "long_hair": 0.55}
+
+    monkeypatch.setattr("app.providers.ensure_nvidia_dll_search_path", lambda: [])
+    monkeypatch.setattr("app.providers.preload_onnx_runtime_dlls", lambda: None)
+    monkeypatch.setattr(services, "_run_mldanbooru", lambda _image: {"nope": 1.0})
+    monkeypatch.setattr(services, "_run_wd14", fake_wd)
+
+    img = tmp_path / "y.jpg"
+    img.write_text("y", encoding="utf-8")
+
+    scores = extract_scores(
+        img, tagger_model=TAGGER_MODEL_WD_SWINV2, wd_general_threshold=0.41
+    )
+    assert seen[-1] == ("SwinV2_v3", 0.41)
+    assert scores["solo"] == 0.66
+    assert scores["long_hair"] == 0.55
+
+    extract_scores(img, tagger_model=TAGGER_MODEL_WD_EVA02, wd_general_threshold=0.2)
+    assert seen[-1] == ("EVA02_Large", 0.2)
+
+
+def test_normalize_score_tags_collapses_space_forms() -> None:
+    from app.services import _normalize_score_tags
+
+    scores = _normalize_score_tags({"Black Hair": 0.8, "black_hair": 0.9, "solo": 0.5})
+    assert scores["black_hair"] == 0.9
+    assert scores["solo"] == 0.5
 
 
 def test_migrate_file_copy_with_collision_suffix(tmp_path: Path) -> None:

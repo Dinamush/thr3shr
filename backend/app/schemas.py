@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 ItemStatus = Literal["proposed", "reviewed", "approved", "rejected", "migrated"]
 MigrateMode = Literal["move", "copy"]
 RunLifecycleStatus = Literal["pending", "running", "completed", "failed", "cancelled"]
+TaggerModel = Literal["ml_danbooru", "wd_swinv2_v3", "wd_eva02_large"]
 
 
 class AppSettings(BaseModel):
@@ -17,6 +18,14 @@ class AppSettings(BaseModel):
     default_migrate_mode: MigrateMode = "copy"
     scan_recursive: bool = True
     experimental_media_enabled: bool = False
+    # Shuck3r-style persisted preferences (survive reload / restart).
+    selected_tags: list[str] = Field(default_factory=list)
+    # Shared ORT session is serialized; >2 workers mostly queues behind the lock.
+    max_inference_workers: int = Field(default=2, ge=1, le=16)
+    inference_batch_size: int = Field(default=1, ge=1, le=64)
+    force_cpu_inference: bool = False
+    tagger_model: TaggerModel = "wd_swinv2_v3"
+    wd_general_threshold: float = Field(default=0.35, ge=0.0, le=1.0)
 
 
 class SaveSettingsRequest(AppSettings):
@@ -58,6 +67,7 @@ class ClassifiedItem(BaseModel):
     primary_tag: str | None
     primary_score: float | None
     secondary_suggestions: list[SecondarySuggestion] = Field(default_factory=list)
+    global_top_tags: list[SecondarySuggestion] = Field(default_factory=list)
     full_scores: dict[str, float] | None = None
     suggested_destination: str | None
     final_tag: str | None
@@ -94,6 +104,7 @@ class RunStatusResponse(BaseModel):
     batch_size: int | None = None
     avg_infer_ms_per_image: float | None = None
     queue_seed: int | None = None
+    tagger_model: str | None = None
 
 
 class UpdateItemRequest(BaseModel):

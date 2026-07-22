@@ -31,13 +31,16 @@ from .services import (
     extract_scores,
     extract_scores_batch,
     extract_scores_with_experimental_media,
+    global_top_tags,
     is_experimental_media,
     load_known_tags,
     migrate_file,
+    normalize_tag_name,
     resolve_settings,
     sanitize_folder_name,
     scan_images,
 )
+from .providers import clear_provider_probe_cache, probe_execution_providers
 from .storage import execute, fetch_all, fetch_one, from_json, to_json
 
 router = APIRouter(prefix="/api")
@@ -67,11 +70,17 @@ class _ImageInferenceResult:
     inference_failed: bool
 
 
+def _assignment_noise_floor(confidence_threshold: float) -> float:
+    return max(0.15, float(confidence_threshold) * 0.5)
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _get_max_inference_workers() -> int:
+def _get_max_inference_workers(settings_workers: int | None = None) -> int:
+    if settings_workers is not None:
+        return max(1, min(int(settings_workers), 16))
     raw = os.getenv("MAX_INFERENCE_WORKERS", "2").strip()
     try:
         value = int(raw)
@@ -81,16 +90,19 @@ def _get_max_inference_workers() -> int:
 
 
 def _get_inference_mode() -> str:
-    raw = os.getenv("INFERENCE_MODE", "batch").strip().lower()
+    raw = os.getenv("INFERENCE_MODE", "single").strip().lower()
     return "single" if raw == "single" else "batch"
 
 
-def _get_inference_batch_size() -> int:
-    raw = os.getenv("INFERENCE_BATCH_SIZE", "8").strip()
+def _get_inference_batch_size(settings_batch: int | None = None) -> int:
+    # Default 1: imgutils cannot true-batch; small batches keep workers saturated.
+    if settings_batch is not None:
+        return max(1, min(int(settings_batch), 64))
+    raw = os.getenv("INFERENCE_BATCH_SIZE", "1").strip()
     try:
         value = int(raw)
     except ValueError:
-        value = 8
+        value = 1
     return max(1, min(value, 64))
 
 
@@ -127,37 +139,82 @@ def _is_provider_related_error(err: Exception) -> bool:
     return any(k in msg for k in keywords)
 
 
+def _classify_from_scores(
+    image_path: Path,
+    scores: dict[str, float],
+    matched_tags: set[str],
+    confidence_threshold: float,
+) -> _ImageInferenceResult:
+    primary_tag, primary_score, secondary = choose_best_tags(scores, matched_tags)
+    needs_review = False
+    reason = None
+    if not scores:
+        return _ImageInferenceResult(
+            image_path=image_path,
+            scores=scores,
+            primary_tag=None,
+            primary_score=None,
+            secondary=[],
+            needs_review=True,
+            reason="Inference returned no tag scores for this image.",
+            inference_failed=True,
+        )
+    if primary_tag is None:
+        needs_review = True
+        reason = "No matching tags found among selected tags."
+    elif primary_score is not None:
+        noise_floor = _assignment_noise_floor(confidence_threshold)
+        if primary_score < noise_floor:
+            needs_review = True
+            reason = (
+                f"Below noise floor ({primary_score:.3f} < {noise_floor:.3f}); "
+                "no reliable selected-tag match."
+            )
+            secondary = [{"tag": primary_tag, "score": float(primary_score)}, *secondary][:4]
+            primary_tag = None
+            primary_score = None
+        elif primary_score < confidence_threshold:
+            needs_review = True
+            reason = f"Below threshold ({primary_score:.3f} < {confidence_threshold:.3f})."
+            # Weak selected-tag winners are suggestions only — do not present as the label.
+            secondary = [{"tag": primary_tag, "score": float(primary_score)}, *secondary][:4]
+            primary_tag = None
+            primary_score = None
+    return _ImageInferenceResult(
+        image_path=image_path,
+        scores=scores,
+        primary_tag=primary_tag,
+        primary_score=primary_score,
+        secondary=secondary,
+        needs_review=needs_review,
+        reason=reason,
+        inference_failed=False,
+    )
+
+
 def _infer_one_image(
     image_path: Path,
     matched_tags: set[str],
     confidence_threshold: float,
     experimental_media_enabled: bool = False,
+    tagger_model: str = "wd_swinv2_v3",
+    wd_general_threshold: float = 0.35,
 ) -> _ImageInferenceResult:
     try:
         if experimental_media_enabled and is_experimental_media(image_path):
-            scores = extract_scores_with_experimental_media(image_path, experimental_media_enabled)
+            scores = extract_scores_with_experimental_media(
+                image_path,
+                experimental_media_enabled,
+                tagger_model=tagger_model,
+                wd_general_threshold=wd_general_threshold,
+            )
         else:
-            # Keep base path unchanged so existing mocks/tests and behavior remain stable.
-            scores = extract_scores(image_path)
-        primary_tag, primary_score, secondary = choose_best_tags(scores, matched_tags)
-        needs_review = False
-        reason = None
-        if primary_tag is None:
-            needs_review = True
-            reason = "No matching tags found in selected folders."
-        elif primary_score is not None and primary_score < confidence_threshold:
-            needs_review = True
-            reason = f"Below threshold ({primary_score:.3f} < {confidence_threshold:.3f})."
-        return _ImageInferenceResult(
-            image_path=image_path,
-            scores=scores,
-            primary_tag=primary_tag,
-            primary_score=primary_score,
-            secondary=secondary,
-            needs_review=needs_review,
-            reason=reason,
-            inference_failed=False,
-        )
+            scores = extract_scores(
+                image_path,
+                tagger_model=tagger_model,
+                wd_general_threshold=wd_general_threshold,
+            )
+        return _classify_from_scores(image_path, scores, matched_tags, confidence_threshold)
     except Exception as err:
         if _is_provider_related_error(err):
             logger.exception("inference_provider_failure image=%s", image_path)
@@ -181,6 +238,8 @@ def _infer_batch_with_fallback(
     confidence_threshold: float,
     requested_mode: str,
     experimental_media_enabled: bool = False,
+    tagger_model: str = "wd_swinv2_v3",
+    wd_general_threshold: float = 0.35,
 ) -> tuple[list[_ImageInferenceResult], float, str]:
     if not image_paths:
         return [], 0.0, "none"
@@ -189,7 +248,12 @@ def _infer_batch_with_fallback(
         start = time.perf_counter()
         rows = [
             _infer_one_image(
-                image_paths[0], matched_tags, confidence_threshold, experimental_media_enabled
+                image_paths[0],
+                matched_tags,
+                confidence_threshold,
+                experimental_media_enabled,
+                tagger_model,
+                wd_general_threshold,
             )
         ]
         elapsed_ms = (time.perf_counter() - start) * 1000.0
@@ -200,7 +264,14 @@ def _infer_batch_with_fallback(
     if any(is_experimental_media(p) for p in image_paths):
         start = time.perf_counter()
         rows = [
-            _infer_one_image(p, matched_tags, confidence_threshold, experimental_media_enabled)
+            _infer_one_image(
+                p,
+                matched_tags,
+                confidence_threshold,
+                experimental_media_enabled,
+                tagger_model,
+                wd_general_threshold,
+            )
             for p in image_paths
         ]
         elapsed_ms = (time.perf_counter() - start) * 1000.0
@@ -208,32 +279,17 @@ def _infer_batch_with_fallback(
 
     start = time.perf_counter()
     try:
-        scores_by_image = extract_scores_batch(image_paths)
+        scores_by_image = extract_scores_batch(
+            image_paths,
+            tagger_model=tagger_model,
+            wd_general_threshold=wd_general_threshold,
+        )
         if len(scores_by_image) != len(image_paths):
             raise RuntimeError("Batch inference result count mismatch")
-        rows: list[_ImageInferenceResult] = []
-        for image_path, scores in zip(image_paths, scores_by_image):
-            primary_tag, primary_score, secondary = choose_best_tags(scores, matched_tags)
-            needs_review = False
-            reason = None
-            if primary_tag is None:
-                needs_review = True
-                reason = "No matching tags found in selected folders."
-            elif primary_score is not None and primary_score < confidence_threshold:
-                needs_review = True
-                reason = f"Below threshold ({primary_score:.3f} < {confidence_threshold:.3f})."
-            rows.append(
-                _ImageInferenceResult(
-                    image_path=image_path,
-                    scores=scores,
-                    primary_tag=primary_tag,
-                    primary_score=primary_score,
-                    secondary=secondary,
-                    needs_review=needs_review,
-                    reason=reason,
-                    inference_failed=False,
-                )
-            )
+        rows = [
+            _classify_from_scores(image_path, scores, matched_tags, confidence_threshold)
+            for image_path, scores in zip(image_paths, scores_by_image)
+        ]
         elapsed_ms = (time.perf_counter() - start) * 1000.0
         return rows, elapsed_ms, "batch"
     except Exception as err:
@@ -249,6 +305,8 @@ def _infer_batch_with_fallback(
                 confidence_threshold,
                 "batch",
                 experimental_media_enabled,
+                tagger_model,
+                wd_general_threshold,
             )
             right_rows, right_ms, _ = _infer_batch_with_fallback(
                 image_paths[mid:],
@@ -256,10 +314,17 @@ def _infer_batch_with_fallback(
                 confidence_threshold,
                 "batch",
                 experimental_media_enabled,
+                tagger_model,
+                wd_general_threshold,
             )
             return left_rows + right_rows, left_ms + right_ms, "batch_fallback"
         row = _infer_one_image(
-            image_paths[0], matched_tags, confidence_threshold, experimental_media_enabled
+            image_paths[0],
+            matched_tags,
+            confidence_threshold,
+            experimental_media_enabled,
+            tagger_model,
+            wd_general_threshold,
         )
         elapsed_ms = (time.perf_counter() - start) * 1000.0
         return [row], elapsed_ms, "single_fallback"
@@ -269,6 +334,14 @@ def _settings_from_db() -> AppSettings:
     row = fetch_one("SELECT * FROM settings WHERE id = 1")
     if not row:
         return AppSettings()
+    selected_raw = row.get("selected_tags_json") or "[]"
+    selected_tags = from_json(selected_raw, default=[])
+    if not isinstance(selected_tags, list):
+        selected_tags = []
+    selected_tags = [str(t).strip() for t in selected_tags if str(t).strip()]
+    tagger_model = str(row.get("tagger_model") or "wd_swinv2_v3").strip()
+    if tagger_model not in {"ml_danbooru", "wd_swinv2_v3", "wd_eva02_large"}:
+        tagger_model = "wd_swinv2_v3"
     return AppSettings(
         root_repo=row["root_repo"],
         categories_root=row["categories_root"],
@@ -276,10 +349,30 @@ def _settings_from_db() -> AppSettings:
         default_migrate_mode=row["default_migrate_mode"],
         scan_recursive=bool(row.get("scan_recursive", 1)),
         experimental_media_enabled=bool(row.get("experimental_media_enabled", 0)),
+        selected_tags=selected_tags,
+        max_inference_workers=int(row.get("max_inference_workers") or 2),
+        inference_batch_size=int(row.get("inference_batch_size") or 1),
+        force_cpu_inference=bool(row.get("force_cpu_inference", 0)),
+        tagger_model=tagger_model,  # type: ignore[arg-type]
+        wd_general_threshold=float(row.get("wd_general_threshold") or 0.35),
     )
 
 
+def _apply_runtime_inference_env(settings: AppSettings) -> None:
+    """Mirror persisted settings into env knobs used by the run executor."""
+    os.environ["MAX_INFERENCE_WORKERS"] = str(settings.max_inference_workers)
+    os.environ["INFERENCE_BATCH_SIZE"] = str(settings.inference_batch_size)
+    if settings.force_cpu_inference:
+        os.environ["FORCE_CPU_INFERENCE"] = "true"
+    else:
+        os.environ.pop("FORCE_CPU_INFERENCE", None)
+    clear_provider_probe_cache()
+
+
 def _item_from_row(row: dict, include_full_scores: bool = False) -> ClassifiedItem:
+    scores = from_json(row.get("full_scores_json") or "{}", default={})
+    if not isinstance(scores, dict):
+        scores = {}
     return ClassifiedItem(
         id=row["id"],
         run_id=row["run_id"],
@@ -288,11 +381,8 @@ def _item_from_row(row: dict, include_full_scores: bool = False) -> ClassifiedIt
         primary_tag=row["primary_tag"],
         primary_score=row["primary_score"],
         secondary_suggestions=from_json(row.get("secondary_json") or "[]", default=[]),
-        full_scores=(
-            from_json(row.get("full_scores_json") or "{}", default={})
-            if include_full_scores
-            else None
-        ),
+        global_top_tags=global_top_tags({str(k): float(v) for k, v in scores.items()}),
+        full_scores=scores if include_full_scores else None,
         suggested_destination=row["suggested_destination"],
         final_tag=row["final_tag"],
         final_destination=row["final_destination"],
@@ -326,6 +416,7 @@ def _run_status_from_row(row: dict) -> RunStatusResponse:
         batch_size=telemetry.get("batch_size"),
         avg_infer_ms_per_image=telemetry.get("avg_infer_ms_per_image"),
         queue_seed=telemetry.get("queue_seed"),
+        tagger_model=row.get("tagger_model"),
     )
 
 
@@ -349,8 +440,14 @@ def _execute_run(
     matched_tags: set[str],
     scan_recursive: bool = True,
     experimental_media_enabled: bool = False,
+    max_inference_workers: int = 2,
+    inference_batch_size: int = 1,
+    tagger_model: str = "wd_swinv2_v3",
+    wd_general_threshold: float = 0.35,
 ) -> None:
     try:
+        provider_state = probe_execution_providers()
+        logger.info("run_provider_state run_id=%d state=%s", run_id, provider_state)
         execute(
             "UPDATE runs SET status = 'running', started_at = ?, last_error = NULL WHERE id = ?",
             (_now_iso(), run_id),
@@ -380,7 +477,8 @@ def _execute_run(
             rng = random.Random(queue_seed)
             rng.shuffle(ordered_paths)
         inference_mode = _get_inference_mode()
-        configured_batch_size = _get_inference_batch_size()
+        configured_batch_size = _get_inference_batch_size(inference_batch_size)
+        # Prefer single-image tasks so worker pool stays saturated (no true ORT batch).
         batch_size = 1 if inference_mode == "single" else configured_batch_size
         _set_run_telemetry(
             run_id,
@@ -403,12 +501,13 @@ def _execute_run(
         cancelled = False
         infer_elapsed_ms_total = 0.0
         infer_sample_count = 0
-        max_workers = _get_max_inference_workers()
+        max_workers = _get_max_inference_workers(max_inference_workers)
         logger.info(
-            "run_inference_workers run_id=%d workers=%d total_images=%d",
+            "run_inference_workers run_id=%d workers=%d total_images=%d device=%s",
             run_id,
             max_workers,
             scan_output.stats.eligible_images,
+            provider_state.get("likely_device"),
         )
 
         with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="infer") as executor:
@@ -432,6 +531,8 @@ def _execute_run(
                         confidence_threshold,
                         inference_mode,
                         experimental_media_enabled,
+                        tagger_model,
+                        wd_general_threshold,
                     )
                     pending[future] = next_batch
 
@@ -544,12 +645,25 @@ def get_settings() -> AppSettings:
 
 @router.put("/settings", response_model=AppSettings)
 def save_settings(payload: SaveSettingsRequest) -> AppSettings:
+    known = load_known_tags(TAGS_CSV)
+    known_by_norm = {normalize_tag_name(t): t for t in known}
+    cleaned_tags: list[str] = []
+    for tag in payload.selected_tags:
+        value = tag.strip()
+        if not value:
+            continue
+        matched = value if value in known else known_by_norm.get(normalize_tag_name(value))
+        if matched and matched not in cleaned_tags:
+            cleaned_tags.append(matched)
+    payload.selected_tags = cleaned_tags
     try:
         execute(
             """
             UPDATE settings
             SET root_repo = ?, categories_root = ?, confidence_threshold = ?,
-                default_migrate_mode = ?, scan_recursive = ?, experimental_media_enabled = ?
+                default_migrate_mode = ?, scan_recursive = ?, experimental_media_enabled = ?,
+                selected_tags_json = ?, max_inference_workers = ?, inference_batch_size = ?,
+                force_cpu_inference = ?, tagger_model = ?, wd_general_threshold = ?
             WHERE id = 1
             """,
             (
@@ -559,11 +673,18 @@ def save_settings(payload: SaveSettingsRequest) -> AppSettings:
                 payload.default_migrate_mode,
                 1 if payload.scan_recursive else 0,
                 1 if payload.experimental_media_enabled else 0,
+                to_json(cleaned_tags),
+                int(payload.max_inference_workers),
+                int(payload.inference_batch_size),
+                1 if payload.force_cpu_inference else 0,
+                payload.tagger_model,
+                float(payload.wd_general_threshold),
             ),
         )
     except Exception:
         logger.exception("failed to save settings")
         raise HTTPException(status_code=500, detail="Failed to persist settings")
+    _apply_runtime_inference_env(payload)
     return payload
 
 
@@ -606,34 +727,22 @@ def scan_preview() -> dict:
 
 @router.get("/providers")
 def get_providers() -> dict[str, object]:
-    force_cpu = os.getenv("FORCE_CPU_INFERENCE", "").strip().lower() in {"1", "true", "yes", "on"}
-    try:
-        import onnxruntime as ort
-
-        providers = list(ort.get_available_providers())
-        cuda_available = "CUDAExecutionProvider" in providers
-        return {
-            "available_providers": providers,
-            "cuda_available": cuda_available,
-            "cpu_available": "CPUExecutionProvider" in providers,
-            "forced_cpu": force_cpu,
-            "likely_device": "cpu" if force_cpu else ("gpu" if cuda_available else "cpu"),
-        }
-    except Exception as err:
-        return {
-            "available_providers": [],
-            "cuda_available": False,
-            "cpu_available": True,
-            "forced_cpu": force_cpu,
-            "likely_device": "cpu",
-            "error": str(err),
-        }
+    settings = _settings_from_db()
+    _apply_runtime_inference_env(settings)
+    info = probe_execution_providers()
+    info["tagger_model"] = settings.tagger_model
+    info["note"] = (
+        "CUDA usability reflects ORT GPU runtime readiness; "
+        "the active tagger model is selected separately in settings."
+    )
+    return info
 
 
 @router.post("/runs/start", response_model=StartRunResponse)
 def start_run(payload: StartRunRequest) -> StartRunResponse:
     logger.info("run_start_requested")
     current = _settings_from_db()
+    _apply_runtime_inference_env(current)
     resolved = resolve_settings(
         current, payload.root_repo, payload.categories_root, payload.confidence_threshold
     )
@@ -643,12 +752,19 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
     if not resolved.root_repo or not resolved.categories_root:
         raise HTTPException(status_code=400, detail="root_repo and categories_root are required")
 
+    selected_folders = payload.selected_folders
+    if not selected_folders:
+        selected_folders = list(current.selected_tags)
+
     try:
         known_tags = load_known_tags(TAGS_CSV)
-        mappings = discover_tag_folders(categories_root, known_tags, payload.selected_folders)
+        mappings = discover_tag_folders(categories_root, known_tags, selected_folders)
         matched_tags = {m.matched_tag for m in mappings if m.matched and m.matched_tag}
         if not matched_tags:
-            raise HTTPException(status_code=400, detail="No folder names map to known tags")
+            raise HTTPException(
+                status_code=400,
+                detail="No selected tags map to known tags.csv entries. Save tags in settings first.",
+            )
     except HTTPException:
         raise
     except Exception:
@@ -660,10 +776,15 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
             """
             INSERT INTO runs (
                 root_repo, categories_root, confidence_threshold, status,
-                total_images, processed_images, failed_images, cancel_requested
-            ) VALUES (?, ?, ?, 'pending', 0, 0, 0, 0)
+                total_images, processed_images, failed_images, cancel_requested, tagger_model
+            ) VALUES (?, ?, ?, 'pending', 0, 0, 0, 0, ?)
             """,
-            (str(root_repo), str(categories_root), resolved.confidence_threshold),
+            (
+                str(root_repo),
+                str(categories_root),
+                resolved.confidence_threshold,
+                current.tagger_model,
+            ),
         )
     except Exception:
         logger.exception("failed to create run row")
@@ -671,8 +792,19 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
 
     worker = threading.Thread(
         target=_execute_run,
-        args=(run_id, root_repo, categories_root, resolved.confidence_threshold, matched_tags,
-              resolved.scan_recursive, resolved.experimental_media_enabled),
+        args=(
+            run_id,
+            root_repo,
+            categories_root,
+            resolved.confidence_threshold,
+            matched_tags,
+            resolved.scan_recursive,
+            resolved.experimental_media_enabled,
+            current.max_inference_workers,
+            current.inference_batch_size,
+            current.tagger_model,
+            current.wd_general_threshold,
+        ),
         daemon=True,
     )
     worker.start()

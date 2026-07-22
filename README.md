@@ -105,16 +105,23 @@ The frontend automatically falls back to local mock mode when backend requests f
 
 ## GPU Acceleration
 
-Inference attempts to use ONNX Runtime CUDA provider when available. If CUDA/cuDNN dependencies are missing, runtime falls back to CPU and logs provider errors.
+Inference uses ONNX Runtime CUDA when the pip CUDA/cuDNN wheels are installed and discoverable.
 
-### Verify GPU visibility
+```bash
+pip install -r backend/requirements.txt
+# includes: onnxruntime-gpu[cuda,cudnn]==1.26.0
+```
+
+On Windows the API prepends `site-packages/nvidia/*/bin` to the DLL search path before creating sessions. Without that, ORT may *list* CUDA then fall back to CPU on the first Conv.
+
+### Verify GPU is actually usable
 
 ```bash
 curl http://127.0.0.1:8000/health/providers
 curl http://127.0.0.1:8000/api/providers
 ```
 
-`likely_device: "gpu"` means CUDA provider is visible and CPU is not being force-disabled.
+Look for `"cuda_usable": true`, `"likely_device": "gpu"`, and `active_providers` containing `CUDAExecutionProvider`. Listing CUDA alone is not enough.
 
 ### Runtime controls
 

@@ -8,11 +8,51 @@ const DEFAULT_SETTINGS = {
   default_migrate_mode: "copy",
   scan_recursive: true,
   experimental_media_enabled: false,
+  selected_tags: [],
+  max_inference_workers: 2,
+  inference_batch_size: 1,
+  force_cpu_inference: false,
+  tagger_model: "wd_swinv2_v3",
+  wd_general_threshold: 0.35,
 };
+
+const TAGGER_MODELS = [
+  {
+    id: "ml_danbooru",
+    label: "ML-Danbooru",
+    help: "Original ONNX tagger used by this app. Fast baseline.",
+  },
+  {
+    id: "wd_swinv2_v3",
+    label: "WD SwinV2 v3",
+    help: "Recommended default — strong general-tag accuracy on anime art.",
+  },
+  {
+    id: "wd_eva02_large",
+    label: "WD EVA02 Large",
+    help: "Largest WD tagger; slower, often slightly more accurate.",
+  },
+];
+
 const ACTIVE_RUN_STORAGE_KEY = "imageClassifierActiveRunId";
+
+function settingsSnapshot(settings, selectedTags) {
+  return JSON.stringify({
+    ...settings,
+    selected_tags: selectedTags,
+  });
+}
+
+function formatTagScore(entry) {
+  if (!entry) return "";
+  return `${entry.tag} (${Number(entry.score).toFixed(3)})`;
+}
 
 function App() {
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
+  const [savedSnapshot, setSavedSnapshot] = useState(
+    settingsSnapshot(DEFAULT_SETTINGS, [])
+  );
   const [offlineMode, setOfflineMode] = useState(false);
   const [runId, setRunId] = useState(null);
   const [runStatus, setRunStatus] = useState(null);
@@ -31,6 +71,8 @@ function App() {
   const [scoreDebugByItem, setScoreDebugByItem] = useState({});
   const [scoreLoadingByItem, setScoreLoadingByItem] = useState({});
   const [finalTagDrafts, setFinalTagDrafts] = useState({});
+  const [scanPreview, setScanPreview] = useState(null);
+  const [scanPreviewLoading, setScanPreviewLoading] = useState(false);
   const [opsLoading, setOpsLoading] = useState({
     saving: false,
     startingRun: false,
@@ -40,6 +82,18 @@ function App() {
   });
   const finalTagTimersRef = useRef({});
   const pollTimerRef = useRef(null);
+  const tagsHydratedRef = useRef(false);
+  const skipNextTagPersistRef = useRef(false);
+
+  const isDirty = useMemo(
+    () => settingsSnapshot(settings, selectedTags) !== savedSnapshot,
+    [settings, selectedTags, savedSnapshot]
+  );
+
+  const isWdModel = String(settings.tagger_model || "").startsWith("wd_");
+  const runActive = Boolean(
+    runStatus && ["pending", "running"].includes(runStatus.status)
+  );
 
   async function refreshItems(currentRunId) {
     if (!currentRunId) return;
@@ -57,10 +111,17 @@ function App() {
   }
 
   useEffect(() => {
-    api.getSettings()
+    api
+      .getSettings()
       .then((data) => {
-        setSettings(data);
+        const merged = { ...DEFAULT_SETTINGS, ...data };
+        const tags = Array.isArray(data.selected_tags) ? data.selected_tags : [];
+        setSettings(merged);
+        skipNextTagPersistRef.current = true;
+        setSelectedTags(tags);
+        tagsHydratedRef.current = true;
         setMigrateMode(data.default_migrate_mode || "copy");
+        setSavedSnapshot(settingsSnapshot(merged, tags));
         setOfflineMode(api.isOfflineMode());
       })
       .catch((err) => setError(err.message));
@@ -68,15 +129,46 @@ function App() {
     if (storedRunId > 0) {
       setRunId(storedRunId);
     }
-    api.getProviders()
+    api
+      .getProviders()
       .then((info) => setProviderInfo(info))
       .catch(() => setProviderInfo(null));
   }, []);
 
+  // Persist typed/selected tags (Shuck3r-style preference survival across reloads).
+  useEffect(() => {
+    if (!tagsHydratedRef.current) return;
+    if (skipNextTagPersistRef.current) {
+      skipNextTagPersistRef.current = false;
+      return;
+    }
+    if (!Array.isArray(selectedTags)) return;
+    const timer = setTimeout(() => {
+      const next = { ...settings, selected_tags: selectedTags };
+      setSettings(next);
+      api
+        .saveSettings(next)
+        .then((saved) => {
+          const merged = { ...DEFAULT_SETTINGS, ...saved };
+          setSettings(merged);
+          setSavedSnapshot(
+            settingsSnapshot(merged, Array.isArray(saved.selected_tags) ? saved.selected_tags : selectedTags)
+          );
+        })
+        .catch(() => {
+          /* ignore transient save errors while typing */
+        });
+    }, 400);
+    return () => clearTimeout(timer);
+    // Intentionally depend on selectedTags only to avoid save loops from settings edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTags]);
+
   useEffect(() => {
     let cancelled = false;
     const timer = setTimeout(() => {
-      api.getTags(tagQuery, 50)
+      api
+        .getTags(tagQuery, 50)
         .then((data) => {
           if (cancelled) return;
           setTagOptions(data.items || []);
@@ -155,14 +247,23 @@ function App() {
   }, [runId]);
 
   async function handleSaveSettings(e) {
-    e.preventDefault();
+    if (e) e.preventDefault();
     setLoading(true);
     setOpsLoading((prev) => ({ ...prev, saving: true }));
     setError("");
     try {
-      const saved = await api.saveSettings(settings);
-      setSettings(saved);
+      const saved = await api.saveSettings({ ...settings, selected_tags: selectedTags });
+      const merged = { ...DEFAULT_SETTINGS, ...saved };
+      setSettings(merged);
+      const tags = Array.isArray(saved.selected_tags) ? saved.selected_tags : selectedTags;
+      if (Array.isArray(saved.selected_tags)) {
+        skipNextTagPersistRef.current = true;
+        setSelectedTags(saved.selected_tags);
+      }
+      setSavedSnapshot(settingsSnapshot(merged, tags));
       setOfflineMode(api.isOfflineMode());
+      const providers = await api.getProviders();
+      setProviderInfo(providers);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -171,11 +272,31 @@ function App() {
     }
   }
 
+  async function handlePreviewScan() {
+    setScanPreviewLoading(true);
+    setError("");
+    try {
+      if (isDirty) {
+        await handleSaveSettings();
+      }
+      const preview = await api.previewScan();
+      setScanPreview(preview);
+    } catch (err) {
+      setError(err.message);
+      setScanPreview(null);
+    } finally {
+      setScanPreviewLoading(false);
+    }
+  }
+
   async function handleStartRun() {
     setLoading(true);
     setOpsLoading((prev) => ({ ...prev, startingRun: true }));
     setError("");
     try {
+      if (isDirty) {
+        await handleSaveSettings();
+      }
       const result = await api.startRun({
         ...settings,
         selected_folders: selectedTags.length > 0 ? selectedTags : null,
@@ -191,6 +312,7 @@ function App() {
         failed_images: 0,
         progress_pct: 0,
         cancel_requested: false,
+        tagger_model: settings.tagger_model,
       });
     } catch (err) {
       setError(err.message);
@@ -315,13 +437,11 @@ function App() {
     if (!value) return;
     if (selectedTags.includes(value)) return;
 
-    // Fast path when current dropdown options already include the tag.
     if (tagOptions.includes(value)) {
       addSelectedTag(value);
       return;
     }
 
-    // Validate against backend tag index to avoid accidental typo tags.
     const result = await api.getTags(value, 200);
     if ((result.items || []).includes(value)) {
       addSelectedTag(value);
@@ -349,95 +469,256 @@ function App() {
 
   return (
     <div className="container">
-      <h1>Image Classifier Workflow</h1>
-      <p>
-        Configure source + category roots, run tagging, review predictions, then approve and
-        migrate using move/copy.
-      </p>
+      <header className="app-header">
+        <h1>Image Classifier</h1>
+        <p className="lede">
+          Configure paths and tagger model, select destination tags, run inference, then review
+          and migrate.
+        </p>
+        {providerInfo && !offlineMode && (
+          <div className="provider-strip">
+            <span>
+              Device: <strong>{providerInfo.likely_device || "unknown"}</strong>
+            </span>
+            <span>
+              CUDA: <strong>{String(Boolean(providerInfo.cuda_usable))}</strong>
+            </span>
+            <span>
+              Active: <strong>{(providerInfo.active_providers || []).join(", ") || "n/a"}</strong>
+            </span>
+            <span>
+              Tagger: <strong>{providerInfo.tagger_model || settings.tagger_model}</strong>
+            </span>
+            <span>
+              Forced CPU: <strong>{String(Boolean(providerInfo.forced_cpu))}</strong>
+            </span>
+          </div>
+        )}
+      </header>
+
       {offlineMode && (
         <div className="error">
           Backend is offline. Running in browser-only demo mode with local mock data.
         </div>
       )}
-      {providerInfo && !offlineMode && (
-        <div className="stats">
-          <span>Inference device: {providerInfo.likely_device || "unknown"}</span>
-          <span>CUDA available: {String(Boolean(providerInfo.cuda_available))}</span>
-          <span>Forced CPU: {String(Boolean(providerInfo.forced_cpu))}</span>
-        </div>
+      {providerInfo?.provider_error && !offlineMode && (
+        <div className="error">{providerInfo.provider_error}</div>
       )}
-
       {error && <div className="error">{error}</div>}
 
-      <section className="card">
-        <h2>Configuration</h2>
-        <form onSubmit={handleSaveSettings} className="grid">
-          <label>
-            Root Repository
-            <input
-              value={settings.root_repo}
-              onChange={(e) => setSettings({ ...settings, root_repo: e.target.value })}
-            />
-          </label>
-          <label>
-            Categories Root
-            <input
-              value={settings.categories_root}
-              onChange={(e) => setSettings({ ...settings, categories_root: e.target.value })}
-            />
-          </label>
-          <label>
-            Confidence Threshold
-            <input
-              type="number"
-              step="0.01"
-              min="0"
-              max="1"
-              value={settings.confidence_threshold}
-              onChange={(e) =>
-                setSettings({ ...settings, confidence_threshold: Number(e.target.value) })
-              }
-            />
-          </label>
-          <label>
-            Default Migrate Mode
-            <select
-              value={settings.default_migrate_mode}
-              onChange={(e) => setSettings({ ...settings, default_migrate_mode: e.target.value })}
-            >
-              <option value="copy">copy</option>
-              <option value="move">move</option>
-            </select>
-          </label>
-          <label style={{ flexDirection: "row", alignItems: "center", gap: "0.5rem" }}>
-            <input
-              type="checkbox"
-              checked={Boolean(settings.scan_recursive)}
-              onChange={(e) => setSettings({ ...settings, scan_recursive: e.target.checked })}
-            />
-            Scan subfolders recursively
-          </label>
-          <label style={{ flexDirection: "row", alignItems: "center", gap: "0.5rem" }}>
-            <input
-              type="checkbox"
-              checked={Boolean(settings.experimental_media_enabled)}
-              onChange={(e) =>
-                setSettings({ ...settings, experimental_media_enabled: e.target.checked })
-              }
-            />
-            Experimental: classify GIF/videos using sampled frames
-          </label>
-          <button disabled={loading || opsLoading.saving}>Save Settings</button>
+      <section className="panel">
+        <h2>Settings</h2>
+        <span className="kicker">Paths, model, thresholds, and performance. Save before runs.</span>
+        <form onSubmit={handleSaveSettings}>
+          <fieldset className="settings-section">
+            <legend>Paths &amp; scan</legend>
+            <div className="grid">
+              <label>
+                Root repository
+                <input
+                  value={settings.root_repo}
+                  onChange={(e) => setSettings({ ...settings, root_repo: e.target.value })}
+                  placeholder="Folder of unsorted images"
+                />
+              </label>
+              <label>
+                Categories root
+                <input
+                  value={settings.categories_root}
+                  onChange={(e) => setSettings({ ...settings, categories_root: e.target.value })}
+                  placeholder="Destination folders root (not tags.csv)"
+                />
+              </label>
+              <label>
+                Default migrate mode
+                <select
+                  value={settings.default_migrate_mode}
+                  onChange={(e) =>
+                    setSettings({ ...settings, default_migrate_mode: e.target.value })
+                  }
+                >
+                  <option value="copy">copy</option>
+                  <option value="move">move</option>
+                </select>
+              </label>
+              <label className="inline-check">
+                <input
+                  type="checkbox"
+                  checked={Boolean(settings.scan_recursive)}
+                  onChange={(e) => setSettings({ ...settings, scan_recursive: e.target.checked })}
+                />
+                Scan subfolders recursively
+              </label>
+            </div>
+            <div className="actions">
+              <button
+                type="button"
+                className="secondary"
+                disabled={scanPreviewLoading}
+                onClick={handlePreviewScan}
+              >
+                {scanPreviewLoading ? "Scanning…" : "Preview scan"}
+              </button>
+            </div>
+            {scanPreview?.stats && (
+              <div className="scan-preview">
+                Eligible: {scanPreview.stats.eligible_images} · Total files:{" "}
+                {scanPreview.stats.total_files} · Ignored GIF: {scanPreview.stats.ignored_gif} ·
+                Unsupported: {scanPreview.stats.ignored_unsupported}
+              </div>
+            )}
+          </fieldset>
+
+          <fieldset className="settings-section">
+            <legend>Tagger model</legend>
+            <div className="model-options">
+              {TAGGER_MODELS.map((model) => (
+                <label key={model.id} className="model-option">
+                  <input
+                    type="radio"
+                    name="tagger_model"
+                    value={model.id}
+                    checked={settings.tagger_model === model.id}
+                    onChange={() => setSettings({ ...settings, tagger_model: model.id })}
+                  />
+                  <span>
+                    <strong>{model.label}</strong>
+                    <span>{model.help}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+
+          <fieldset className="settings-section">
+            <legend>Thresholds</legend>
+            <div className="grid">
+              <label>
+                Assignment confidence
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  max="1"
+                  value={settings.confidence_threshold}
+                  onChange={(e) =>
+                    setSettings({ ...settings, confidence_threshold: Number(e.target.value) })
+                  }
+                />
+                <span className="help">
+                  Selected-tag scores below this are suggestions only (no primary assignment).
+                </span>
+              </label>
+              {isWdModel && (
+                <label>
+                  WD general threshold
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max="1"
+                    value={settings.wd_general_threshold}
+                    onChange={(e) =>
+                      setSettings({
+                        ...settings,
+                        wd_general_threshold: Number(e.target.value),
+                      })
+                    }
+                  />
+                  <span className="help">
+                    WD14 inference cutoff for general tags (default 0.35).
+                  </span>
+                </label>
+              )}
+            </div>
+          </fieldset>
+
+          <fieldset className="settings-section">
+            <legend>Performance</legend>
+            <div className="grid">
+              <label>
+                Max inference workers
+                <input
+                  type="number"
+                  min="1"
+                  max="16"
+                  value={settings.max_inference_workers ?? 2}
+                  onChange={(e) =>
+                    setSettings({
+                      ...settings,
+                      max_inference_workers: Math.max(
+                        1,
+                        Math.min(16, Number(e.target.value) || 1)
+                      ),
+                    })
+                  }
+                />
+                <span className="help">Keep at 2 for GPU ORT sessions (serialized lock).</span>
+              </label>
+              <label>
+                Inference batch size
+                <input
+                  type="number"
+                  min="1"
+                  max="64"
+                  value={settings.inference_batch_size ?? 1}
+                  onChange={(e) =>
+                    setSettings({
+                      ...settings,
+                      inference_batch_size: Math.max(
+                        1,
+                        Math.min(64, Number(e.target.value) || 1)
+                      ),
+                    })
+                  }
+                />
+              </label>
+              <label className="inline-check">
+                <input
+                  type="checkbox"
+                  checked={Boolean(settings.force_cpu_inference)}
+                  onChange={(e) =>
+                    setSettings({ ...settings, force_cpu_inference: e.target.checked })
+                  }
+                />
+                Force CPU inference
+              </label>
+              <label className="inline-check">
+                <input
+                  type="checkbox"
+                  checked={Boolean(settings.experimental_media_enabled)}
+                  onChange={(e) =>
+                    setSettings({ ...settings, experimental_media_enabled: e.target.checked })
+                  }
+                />
+                Experimental: classify GIF/videos via sampled frames
+              </label>
+            </div>
+          </fieldset>
+
+          <div className="sticky-save">
+            <span className={isDirty ? "dirty" : "clean"}>
+              {isDirty ? "Unsaved settings changes" : "Settings saved"}
+            </span>
+            <button type="submit" disabled={loading || opsLoading.saving || !isDirty}>
+              {opsLoading.saving ? "Saving…" : "Save settings"}
+            </button>
+          </div>
         </form>
       </section>
 
-      <section className="card">
-        <h2>Run Classification</h2>
+      <section className="panel">
+        <h2>Tag selection</h2>
+        <span className="kicker">
+          Only these tags compete for folder assignment. Changes auto-save.
+        </span>
         <label>
           Tag match search (from tags.csv)
           <input
             value={tagQuery}
             onChange={(e) => setTagQuery(e.target.value)}
+            list="tag-match-suggestions"
+            autoComplete="off"
             onKeyDown={async (e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
@@ -449,21 +730,40 @@ function App() {
                 }
               }
             }}
-            placeholder="Type to search tags..."
+            placeholder="Type to search tags (e.g. monster_girl)..."
           />
-        </label>
-        <div className="actions">
-          <select defaultValue="" onChange={(e) => addSelectedTag(e.target.value)}>
-            <option value="" disabled>
-              Select matching tag
-            </option>
+          <datalist id="tag-match-suggestions">
             {tagOptions.map((tag) => (
-              <option key={tag} value={tag}>
-                {tag}
-              </option>
+              <option key={tag} value={tag} />
             ))}
-          </select>
+          </datalist>
+        </label>
+        {tagQuery.trim() && (
+          <div className="tag-suggestions">
+            {tagOptions.length === 0 ? (
+              <span className="muted">No matching tags</span>
+            ) : (
+              tagOptions.slice(0, 30).map((tag) => (
+                <button
+                  key={tag}
+                  type="button"
+                  className="tag-suggestion"
+                  onClick={() => {
+                    addSelectedTag(tag);
+                    setTagQuery("");
+                    setError("");
+                  }}
+                >
+                  {tag}
+                </button>
+              ))
+            )}
+          </div>
+        )}
+        <div className="actions">
           <button
+            type="button"
+            className="secondary"
             onClick={async () => {
               setError("");
               try {
@@ -475,77 +775,124 @@ function App() {
           >
             Add typed tag(s)
           </button>
+          <button
+            type="button"
+            disabled={loading || opsLoading.startingRun || runActive}
+            onClick={handleStartRun}
+          >
+            {opsLoading.startingRun ? "Starting…" : "Start run"}
+          </button>
         </div>
         <div className="stats">
-          <span>Selected tags:</span>
-          {selectedTags.length === 0 && <span>none</span>}
-          {selectedTags.map((tag) => (
-            <span key={tag}>
-              {tag} <button onClick={() => removeSelectedTag(tag)}>x</button>
-            </span>
-          ))}
+          {selectedTags.length === 0 ? (
+            <span className="muted">No tags selected</span>
+          ) : (
+            selectedTags.map((tag) => (
+              <span key={tag} className="chip">
+                {tag}
+                <button type="button" onClick={() => removeSelectedTag(tag)} aria-label={`Remove ${tag}`}>
+                  ×
+                </button>
+              </span>
+            ))
+          )}
         </div>
-        <button
-          disabled={
-            loading ||
-            opsLoading.startingRun ||
-            (runStatus && ["pending", "running"].includes(runStatus.status))
-          }
-          onClick={handleStartRun}
-        >
-          Start Run
-        </button>
       </section>
 
-      {runId && (
-        <section className="card">
-          <h2>Review Queue (Run #{runId})</h2>
-          {runStatus && (
-            <div className="stats">
-              <span>Status: {runStatus.status}</span>
-              <span>
-                Progress: {runStatus.processed_images}/{runStatus.total_images} (
-                {Number(runStatus.progress_pct || 0).toFixed(1)}%)
-              </span>
-              <span>Failed: {runStatus.failed_images}</span>
-              {runStatus.inference_mode && <span>Inference mode: {runStatus.inference_mode}</span>}
-              {runStatus.batch_size ? <span>Batch size: {runStatus.batch_size}</span> : null}
-              {runStatus.avg_infer_ms_per_image !== null &&
-              runStatus.avg_infer_ms_per_image !== undefined ? (
-                <span>
-                  Avg infer ms/image: {Number(runStatus.avg_infer_ms_per_image).toFixed(1)}
-                </span>
-              ) : null}
-              {runStatus.queue_seed !== null && runStatus.queue_seed !== undefined ? (
-                <span>Queue seed: {runStatus.queue_seed}</span>
-              ) : null}
-              {runStatus.cancel_requested && <span>Cancel requested</span>}
-            </div>
-          )}
-          {runStatus && ["pending", "running"].includes(runStatus.status) && (
-            <div className="actions">
-              <button onClick={cancelActiveRun}>Cancel Run</button>
-            </div>
-          )}
+      {runId && runStatus && (
+        <section className="panel">
+          <h2>Run dashboard</h2>
+          <span className="kicker">
+            Run #{runId}
+            {runStatus.tagger_model ? ` · ${runStatus.tagger_model}` : ""}
+          </span>
           <div className="stats">
-            <span>Total: {stats.total}</span>
-            <span>Needs Review: {stats.reviewNeeded}</span>
+            <div className="metric">
+              <span className="label">Status</span>
+              <span className="value">{runStatus.status}</span>
+            </div>
+            <div className="metric">
+              <span className="label">Total</span>
+              <span className="value">{runStatus.total_images}</span>
+            </div>
+            <div className="metric">
+              <span className="label">Processed</span>
+              <span className="value">{runStatus.processed_images}</span>
+            </div>
+            <div className="metric">
+              <span className="label">Failed</span>
+              <span className="value">{runStatus.failed_images}</span>
+            </div>
+            <div className="metric">
+              <span className="label">Needs review</span>
+              <span className="value">{stats.reviewNeeded}</span>
+            </div>
+            <div className="metric">
+              <span className="label">Progress</span>
+              <span className="value">{Number(runStatus.progress_pct || 0).toFixed(1)}%</span>
+            </div>
+          </div>
+          <div className="progress-track">
+            <div
+              className="progress-fill"
+              style={{ width: `${Math.min(100, Number(runStatus.progress_pct || 0))}%` }}
+            />
+          </div>
+          <div className="stats">
+            {runStatus.avg_infer_ms_per_image != null && (
+              <span>
+                Avg infer: {Number(runStatus.avg_infer_ms_per_image).toFixed(1)} ms/image
+              </span>
+            )}
+            {runStatus.inference_mode && <span>Mode: {runStatus.inference_mode}</span>}
+            {runStatus.cancel_requested && <span>Cancel requested</span>}
+          </div>
+          {runActive && (
+            <div className="actions">
+              <button type="button" className="danger" onClick={cancelActiveRun}>
+                Cancel run
+              </button>
+            </div>
+          )}
+          {runStatus.last_error && <div className="error">{runStatus.last_error}</div>}
+        </section>
+      )}
+
+      {runId && (
+        <section className="panel">
+          <h2>Review</h2>
+          <span className="kicker">
+            Primary is assigned only when a selected tag clears confidence and noise floor.
+            Global tops help spot mis-assignments.
+          </span>
+          <div className="stats">
+            <span>Listed: {stats.total}</span>
+            <span>Needs review: {stats.reviewNeeded}</span>
             <span>Approved: {stats.approved}</span>
             <span>Migrated: {stats.migrated}</span>
           </div>
           <div className="actions">
-            <button disabled={opsLoading.applyingBatch} onClick={() => applyBatch("approved")}>
-              Approve Selected
+            <button
+              type="button"
+              disabled={opsLoading.applyingBatch}
+              onClick={() => applyBatch("approved")}
+            >
+              Approve selected
             </button>
-            <button disabled={opsLoading.applyingBatch} onClick={() => applyBatch("rejected")}>
-              Reject Selected
+            <button
+              type="button"
+              className="secondary"
+              disabled={opsLoading.applyingBatch}
+              onClick={() => applyBatch("rejected")}
+            >
+              Reject selected
             </button>
             <select value={migrateMode} onChange={(e) => setMigrateMode(e.target.value)}>
               <option value="copy">copy</option>
               <option value="move">move</option>
             </select>
-            <button disabled={opsLoading.migrating} onClick={migrateApproved}>
-              {opsLoading.migrating ? "Migrating..." : "Migrate Approved"}
+            <button type="button" disabled={opsLoading.migrating} onClick={migrateApproved}>
+              {opsLoading.migrating ? "Migrating…" : "Migrate approved"}
             </button>
           </div>
 
@@ -554,13 +901,13 @@ function App() {
               <tr>
                 <th>Select</th>
                 <th>Image</th>
-                <th>Primary (Selected)</th>
-                <th>Score</th>
-                <th>Secondary (Selected)</th>
+                <th>Primary</th>
+                <th>Secondary</th>
+                <th>Global top</th>
                 <th>Status</th>
-                <th>Final Tag</th>
-                <th>Debug Scores</th>
-                <th>Review</th>
+                <th>Final tag</th>
+                <th>Debug</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -596,14 +943,42 @@ function App() {
                         />
                       ) : null}
                       <div className="image-path">{item.relative_path || item.file_path || "-"}</div>
+                      {item.review_reason && (
+                        <div className="help">{item.review_reason}</div>
+                      )}
                     </div>
                   </td>
-                  <td>{item.primary_tag || "-"}</td>
-                  <td>{item.primary_score?.toFixed(3) || "-"}</td>
                   <td>
-                    {(item.secondary_suggestions || [])
-                      .map((s) => `${s.tag} (${Number(s.score).toFixed(3)})`)
-                      .join(", ") || "-"}
+                    {item.primary_tag ? (
+                      <>
+                        {item.primary_tag}
+                        <div className="muted">
+                          {item.primary_score != null
+                            ? Number(item.primary_score).toFixed(3)
+                            : ""}
+                        </div>
+                      </>
+                    ) : (
+                      <span className="primary-empty">needs review</span>
+                    )}
+                  </td>
+                  <td>
+                    <div className="tag-list">
+                      {(item.secondary_suggestions || []).length === 0
+                        ? "-"
+                        : (item.secondary_suggestions || []).map((s) => (
+                            <span key={`${item.id}-${s.tag}`}>{formatTagScore(s)}</span>
+                          ))}
+                    </div>
+                  </td>
+                  <td>
+                    <div className="tag-list">
+                      {(item.global_top_tags || []).length === 0
+                        ? "-"
+                        : (item.global_top_tags || []).slice(0, 5).map((s) => (
+                            <span key={`${item.id}-g-${s.tag}`}>{formatTagScore(s)}</span>
+                          ))}
+                    </div>
                   </td>
                   <td>{item.status}</td>
                   <td>
@@ -613,7 +988,7 @@ function App() {
                     />
                   </td>
                   <td>
-                    <button onClick={() => toggleScoreDebug(item.id)}>
+                    <button type="button" className="secondary" onClick={() => toggleScoreDebug(item.id)}>
                       {expandedScoreRows[item.id] ? "Hide JSON" : "Show JSON"}
                     </button>
                     {expandedScoreRows[item.id] && (
@@ -625,30 +1000,37 @@ function App() {
                     )}
                   </td>
                   <td>
-                    <button
-                      disabled={opsLoading.updatingStatus}
-                      onClick={() => updateStatus(item.id, "approved")}
-                    >
-                      Approve
-                    </button>
-                    <button
-                      disabled={opsLoading.updatingStatus}
-                      onClick={() => updateStatus(item.id, "rejected")}
-                    >
-                      Reject
-                    </button>
-                    <button
-                      disabled={opsLoading.updatingStatus}
-                      onClick={() => updateStatus(item.id, "reviewed")}
-                    >
-                      Reviewed
-                    </button>
+                    <div className="actions">
+                      <button
+                        type="button"
+                        disabled={opsLoading.updatingStatus}
+                        onClick={() => updateStatus(item.id, "approved")}
+                      >
+                        Approve
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary"
+                        disabled={opsLoading.updatingStatus}
+                        onClick={() => updateStatus(item.id, "rejected")}
+                      >
+                        Reject
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary"
+                        disabled={opsLoading.updatingStatus}
+                        onClick={() => updateStatus(item.id, "reviewed")}
+                      >
+                        Reviewed
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
-          {runMeta && <pre>{JSON.stringify(runMeta.counts, null, 2)}</pre>}
+          {runMeta && <pre className="debug-json">{JSON.stringify(runMeta.counts, null, 2)}</pre>}
         </section>
       )}
     </div>
