@@ -6,14 +6,19 @@ from app.services import (
     TAGGER_MODEL_ML,
     TAGGER_MODEL_WD_EVA02,
     TAGGER_MODEL_WD_SWINV2,
+    _even_frame_indices,
     choose_best_tags,
     discover_tag_folders,
     ensure_collision_free_destination,
     extract_scores,
+    extract_scores_with_experimental_media,
     global_top_tags,
     migrate_file,
     normalize_tag_name,
+    pool_frame_scores,
+    sample_gif_frames,
     sanitize_folder_name,
+    scaled_media_sample_count,
     scan_images,
 )
 
@@ -272,3 +277,107 @@ def test_collision_resolution_has_max_attempts(tmp_path: Path) -> None:
         assert "collision" in str(err).lower()
     else:
         raise AssertionError("Expected RuntimeError for collision exhaustion")
+
+
+def test_even_frame_indices_covers_span() -> None:
+    assert _even_frame_indices(1, 8) == [0]
+    assert _even_frame_indices(8, 8) == list(range(8))
+    idxs = _even_frame_indices(100, 4)
+    assert len(idxs) == 4
+    assert idxs[0] < idxs[-1]
+    assert idxs[0] >= 0 and idxs[-1] <= 99
+
+
+def test_scaled_media_sample_count_grows_with_length(monkeypatch) -> None:
+    monkeypatch.delenv("MEDIA_SAMPLE_FRAMES", raising=False)
+    monkeypatch.setenv("MEDIA_SAMPLE_FRAMES_MIN", "4")
+    monkeypatch.setenv("MEDIA_SAMPLE_FRAMES_MAX", "24")
+    monkeypatch.setenv("MEDIA_SAMPLE_SECONDS", "0.75")
+    monkeypatch.setenv("MEDIA_GIF_FRAME_STRIDE", "3")
+
+    short = scaled_media_sample_count(duration_seconds=2.0)
+    medium = scaled_media_sample_count(duration_seconds=12.0)
+    long = scaled_media_sample_count(duration_seconds=60.0)
+    assert short == 4  # clamped to min
+    assert medium >= short
+    assert long == 24  # clamped to max
+    assert long >= medium
+
+    gif_short = scaled_media_sample_count(total_frames=6)
+    gif_long = scaled_media_sample_count(total_frames=90)
+    assert gif_short == 4
+    assert gif_long == 24
+
+
+def test_pool_frame_scores_mean_and_presence_boost() -> None:
+    pooled = pool_frame_scores(
+        [
+            {"loli": 0.9, "1girl": 0.8},
+            {"1girl": 0.7},
+            {"loli": 0.0, "1girl": 0.6},
+            {},
+        ]
+    )
+    # loli present in 1/4 strongly -> mean=0.225, presence=0.9*(1/4)=0.225
+    assert abs(pooled["loli"] - 0.225) < 1e-6
+    # 1girl mean=0.525, presence=0.8*(3/4)=0.6 -> max = 0.6
+    assert abs(pooled["1girl"] - 0.6) < 1e-6
+
+
+def test_sample_gif_frames_evenly(tmp_path: Path) -> None:
+    path = tmp_path / "anim.gif"
+    frames = [Image.new("RGB", (8, 8), color=c) for c in ("red", "green", "blue", "yellow", "purple", "cyan")]
+    frames[0].save(
+        path,
+        format="GIF",
+        save_all=True,
+        append_images=frames[1:],
+        duration=40,
+        loop=0,
+    )
+    sampled = sample_gif_frames(path, sample_count=3)
+    assert len(sampled) == 3
+    assert all(frame.mode == "RGB" for frame in sampled)
+
+
+def test_experimental_media_gif_pools_frame_scores(monkeypatch, tmp_path: Path) -> None:
+    path = tmp_path / "multi.gif"
+    frames = [Image.new("RGB", (8, 8), color=c) for c in ("red", "green", "blue", "yellow")]
+    frames[0].save(
+        path,
+        format="GIF",
+        save_all=True,
+        append_images=frames[1:],
+        duration=40,
+        loop=0,
+    )
+
+    calls: list[int] = []
+
+    def fake_score_many(images, **kwargs):
+        calls.append(len(images))
+        # Distinct scores per frame index so pooling is exercised.
+        out = []
+        for idx, _img in enumerate(images):
+            out.append({"loli": 0.2 * (idx + 1), "1girl": 0.5})
+        return out
+
+    class _Engine:
+        def score_many(self, images, **kwargs):
+            return fake_score_many(images, **kwargs)
+
+    monkeypatch.setattr("app.inference_engine.get_engine", lambda: _Engine())
+    monkeypatch.setattr("app.services.get_engine", lambda: _Engine(), raising=False)
+    # Patch where used inside _score_pil_frames
+    monkeypatch.setattr("app.services._score_pil_frames", lambda frames, **kw: pool_frame_scores(
+        [{"loli": 0.2 * (i + 1), "1girl": 0.5} for i in range(len(frames))]
+    ))
+
+    scores = extract_scores_with_experimental_media(
+        path,
+        experimental_media_enabled=True,
+        tagger_model=TAGGER_MODEL_WD_SWINV2,
+    )
+    assert "loli" in scores
+    assert "1girl" in scores
+    assert scores["1girl"] == 0.5

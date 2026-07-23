@@ -54,9 +54,17 @@ logger = logging.getLogger(__name__)
 SUPPORTED_PREVIEW_SUFFIXES = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
+    ".jfif": "image/jpeg",
     ".png": "image/png",
     ".webp": "image/webp",
     ".bmp": "image/bmp",
+    ".gif": "image/gif",
+    ".mp4": "video/mp4",
+    ".m4v": "video/mp4",
+    ".webm": "video/webm",
+    ".mov": "video/quicktime",
+    ".mkv": "video/x-matroska",
+    ".avi": "video/x-msvideo",
 }
 _RUN_TELEMETRY: dict[int, dict[str, object]] = {}
 _RUN_TELEMETRY_LOCK = threading.Lock()
@@ -1476,16 +1484,28 @@ def get_item_scores(item_id: int) -> dict:
 
 @router.get("/items/{item_id}/preview")
 def get_item_preview(item_id: int) -> FileResponse:
-    row = fetch_one("SELECT file_path FROM items WHERE id = ?", (item_id,))
+    row = fetch_one("SELECT file_path, migrated_to FROM items WHERE id = ?", (item_id,))
     if not row:
         raise HTTPException(status_code=404, detail="Item not found")
-    image_path = Path(row["file_path"]).expanduser()
-    if not image_path.exists() or not image_path.is_file():
-        raise HTTPException(status_code=404, detail="Preview image not found")
+    candidates = []
+    for key in ("file_path", "migrated_to"):
+        raw = row.get(key)
+        if raw:
+            candidates.append(Path(str(raw)).expanduser())
+    image_path = next((p for p in candidates if p.exists() and p.is_file()), None)
+    if image_path is None:
+        raise HTTPException(status_code=404, detail="Preview media not found")
     media_type = SUPPORTED_PREVIEW_SUFFIXES.get(image_path.suffix.lower())
     if not media_type:
-        raise HTTPException(status_code=415, detail="Unsupported image type for preview")
-    return FileResponse(path=image_path, media_type=media_type, filename=image_path.name)
+        raise HTTPException(status_code=415, detail="Unsupported media type for preview")
+    # Must be inline so <img>/<video> can render; "attachment" + filename makes
+    # browsers refuse to display the bytes in media elements.
+    return FileResponse(
+        path=image_path,
+        media_type=media_type,
+        filename=image_path.name,
+        content_disposition_type="inline",
+    )
 
 
 @router.post("/runs/{run_id}/batch")
@@ -1693,5 +1713,10 @@ def debug_sfw_eval_preview(source_id: str, file_name: str) -> FileResponse:
         raise HTTPException(status_code=400, detail=str(err)) from err
     suffix = path.suffix.lower()
     media = SUPPORTED_PREVIEW_SUFFIXES.get(suffix, "application/octet-stream")
-    return FileResponse(path, media_type=media)
+    return FileResponse(
+        path,
+        media_type=media,
+        filename=path.name,
+        content_disposition_type="inline",
+    )
 

@@ -311,6 +311,52 @@ def test_item_preview_returns_image(monkeypatch, tmp_path: Path):
         assert preview_resp.content == b"fake-image-bytes"
 
 
+def test_item_preview_supports_gif_and_mp4(tmp_path: Path):
+    gif_path = tmp_path / "clip.gif"
+    mp4_path = tmp_path / "clip.mp4"
+    gif_path.write_bytes(b"GIF89a-fake")
+    mp4_path.write_bytes(b"ftypisom-fake")
+
+    with TestClient(app) as client:
+        run_id = execute(
+            """
+            INSERT INTO runs (root_repo, categories_root, confidence_threshold, status, total_images, processed_images)
+            VALUES (?, ?, 0.6, 'completed', 2, 2)
+            """,
+            (str(tmp_path), str(tmp_path / "cats")),
+        )
+        gif_id = execute(
+            """
+            INSERT INTO items (
+                run_id, file_path, relative_path, primary_tag, primary_score, secondary_json,
+                suggested_destination, final_tag, final_destination, status, needs_review
+            ) VALUES (?, ?, 'clip.gif', NULL, NULL, '[]', NULL, NULL, NULL, 'proposed', 1)
+            """,
+            (run_id, str(gif_path)),
+        )
+        mp4_id = execute(
+            """
+            INSERT INTO items (
+                run_id, file_path, relative_path, primary_tag, primary_score, secondary_json,
+                suggested_destination, final_tag, final_destination, status, needs_review
+            ) VALUES (?, ?, 'clip.mp4', NULL, NULL, '[]', NULL, NULL, NULL, 'proposed', 1)
+            """,
+            (run_id, str(mp4_path)),
+        )
+
+        gif_resp = client.get(f"/api/items/{gif_id}/preview")
+        gif_resp.raise_for_status()
+        assert gif_resp.headers["content-type"].startswith("image/gif")
+        assert "inline" in (gif_resp.headers.get("content-disposition") or "").lower()
+        assert gif_resp.content == b"GIF89a-fake"
+
+        mp4_resp = client.get(f"/api/items/{mp4_id}/preview")
+        mp4_resp.raise_for_status()
+        assert mp4_resp.headers["content-type"].startswith("video/mp4")
+        assert "inline" in (mp4_resp.headers.get("content-disposition") or "").lower()
+        assert mp4_resp.content == b"ftypisom-fake"
+
+
 def test_selected_tag_wins_when_global_top_not_selected(monkeypatch, tmp_path: Path):
     root = tmp_path / "root_selected"
     cats = tmp_path / "cats_selected"

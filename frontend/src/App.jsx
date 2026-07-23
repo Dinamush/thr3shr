@@ -36,6 +36,27 @@ const TAGGER_MODELS = [
 ];
 
 const ACTIVE_RUN_STORAGE_KEY = "imageClassifierActiveRunId";
+const VIDEO_PREVIEW_EXTS = new Set([
+  ".mp4",
+  ".m4v",
+  ".webm",
+  ".mov",
+  ".mkv",
+  ".avi",
+  ".flv",
+  ".wmv",
+]);
+
+function mediaExtFromPath(path) {
+  if (!path || typeof path !== "string") return "";
+  const clean = path.split(/[?#]/)[0];
+  const idx = clean.lastIndexOf(".");
+  return idx >= 0 ? clean.slice(idx).toLowerCase() : "";
+}
+
+function isVideoPreviewPath(path) {
+  return VIDEO_PREVIEW_EXTS.has(mediaExtFromPath(path));
+}
 
 function settingsSnapshot(settings, selectedTags) {
   return JSON.stringify({
@@ -140,6 +161,8 @@ function App() {
       ]);
       setRunMeta(runInfo);
       setItems(runItems);
+      // Clear sticky thumb failures so a fixed preview endpoint can retry.
+      setPreviewErrors({});
     } catch (err) {
       console.error("refreshItems failed", err);
       setError(`Failed to refresh items: ${err.message}`);
@@ -778,7 +801,7 @@ function App() {
                     setSettings({ ...settings, experimental_media_enabled: e.target.checked })
                   }
                 />
-                Experimental: classify GIF/videos via sampled frames
+                Experimental: classify GIF/videos via length-scaled multi-frame sampling
               </label>
             </div>
           </fieldset>
@@ -1077,18 +1100,36 @@ function App() {
                   <td title={item.file_path}>
                     <div className="image-cell">
                       {!previewErrors[item.id] && api.getItemPreviewUrl(item.id) ? (
-                        <img
-                          className="image-thumb"
-                          src={api.getItemPreviewUrl(item.id)}
-                          alt={item.relative_path || item.file_path}
-                          loading="lazy"
-                          onError={() =>
-                            setPreviewErrors((prev) => ({
-                              ...prev,
-                              [item.id]: true,
-                            }))
-                          }
-                        />
+                        isVideoPreviewPath(item.file_path || item.relative_path) ? (
+                          <video
+                            className="image-thumb"
+                            src={api.getItemPreviewUrl(item.id)}
+                            muted
+                            playsInline
+                            loop
+                            preload="metadata"
+                            controls
+                            onError={() =>
+                              setPreviewErrors((prev) => ({
+                                ...prev,
+                                [item.id]: true,
+                              }))
+                            }
+                          />
+                        ) : (
+                          <img
+                            className="image-thumb"
+                            src={api.getItemPreviewUrl(item.id)}
+                            alt={item.relative_path || item.file_path}
+                            loading="lazy"
+                            onError={() =>
+                              setPreviewErrors((prev) => ({
+                                ...prev,
+                                [item.id]: true,
+                              }))
+                            }
+                          />
+                        )
                       ) : null}
                       <div className="image-path">{item.relative_path || item.file_path || "-"}</div>
                       {item.review_reason && (
