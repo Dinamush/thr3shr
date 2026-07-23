@@ -146,6 +146,47 @@ class SfwDebugEvalResponse(BaseModel):
     errors: list[str] = Field(default_factory=list)
 
 
+class RealismDebugEvalRequest(BaseModel):
+    count_per_class: int = Field(default=12, ge=5, le=40)
+    tagger_model: str | None = None
+    compare_models: bool = False
+
+
+class RealismDebugEvalItem(BaseModel):
+    sample_id: str
+    label: str
+    bucket: str
+    source: str
+    query: str = ""
+    title: str = ""
+    file_name: str
+    predicted_bucket: str
+    correct: bool
+    primary_folder: str | None = None
+    primary_score: float | None = None
+    evidence_scores: dict[str, float] = Field(default_factory=dict)
+    global_top_tags: list[SecondarySuggestion] = Field(default_factory=list)
+
+
+class RealismDebugEvalResponse(BaseModel):
+    count_per_class_requested: int
+    count_photos_fetched: int = 0
+    count_anime_fetched: int = 0
+    count_evaluated: int
+    tagger_model: str
+    wd_general_threshold: float
+    selected_destinations: list[str] = Field(default_factory=list)
+    metrics: dict[str, object] = Field(default_factory=dict)
+    by_label: dict[str, object] = Field(default_factory=dict)
+    conclusion: dict[str, object] = Field(default_factory=dict)
+    items: list[RealismDebugEvalItem] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    photo_source: str = ""
+    anime_source: str = ""
+    # Present when compare_models=true (loose dict payload).
+    multi_model: dict[str, object] | None = None
+
+
 class RunStatusResponse(BaseModel):
     run_id: int
     status: RunLifecycleStatus

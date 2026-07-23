@@ -21,6 +21,8 @@ from .schemas import (
     MigrateResponse,
     ReclassifyRequest,
     ReclassifyResponse,
+    RealismDebugEvalRequest,
+    RealismDebugEvalResponse,
     RunStatusResponse,
     SaveSettingsRequest,
     SfwDebugEvalRequest,
@@ -1735,6 +1737,64 @@ def debug_sfw_eval(payload: SfwDebugEvalRequest) -> SfwDebugEvalResponse:
         logger.exception("debug_sfw_eval_failed")
         raise HTTPException(status_code=500, detail=f"SFW eval failed: {err}") from err
     return SfwDebugEvalResponse.model_validate(result)
+
+
+@router.post("/debug/realism-eval", response_model=None)
+def debug_realism_eval(payload: RealismDebugEvalRequest):
+    """People-photo vs anime separation eval (remote samples + taxonomy routing)."""
+    from .realism_eval import run_realism_eval, run_realism_eval_multi_model
+
+    settings = _settings_from_db()
+    _apply_runtime_inference_env(settings)
+    try:
+        if payload.compare_models:
+            multi = run_realism_eval_multi_model(
+                count_per_class=payload.count_per_class,
+                settings=settings,
+            )
+            # Surface best single-model report at top-level for the UI table.
+            best_id = multi.get("best_model")
+            best = next(
+                (r for r in multi.get("reports") or [] if r.get("tagger_model") == best_id),
+                (multi.get("reports") or [None])[0],
+            )
+            if not isinstance(best, dict):
+                raise RuntimeError("multi-model realism eval produced no reports")
+            best = {**best, "multi_model": multi}
+            return best
+        result = run_realism_eval(
+            count_per_class=payload.count_per_class,
+            settings=settings,
+            tagger_model=payload.tagger_model,
+        )
+        return RealismDebugEvalResponse.model_validate(result)
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+    except Exception as err:
+        logger.exception("debug_realism_eval_failed")
+        raise HTTPException(
+            status_code=500, detail=f"Realism eval failed: {err}"
+        ) from err
+
+
+@router.get("/debug/realism-eval/preview/{source_id}/{file_name}")
+def debug_realism_eval_preview(source_id: str, file_name: str) -> FileResponse:
+    from .realism_sources import resolve_realism_cached_file
+
+    try:
+        path = resolve_realism_cached_file(source_id, file_name)
+    except FileNotFoundError as err:
+        raise HTTPException(status_code=404, detail="Preview not found") from err
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+    suffix = path.suffix.lower()
+    media = SUPPORTED_PREVIEW_SUFFIXES.get(suffix, "application/octet-stream")
+    return FileResponse(
+        path,
+        media_type=media,
+        filename=path.name,
+        content_disposition_type="inline",
+    )
 
 
 @router.get("/debug/sfw-eval/preview/{source_id}/{file_name}")

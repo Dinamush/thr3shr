@@ -36,7 +36,8 @@ WD_DEEPGHS_PREFIX = {
 # Always surface these for real_life routing even when below wd_general_threshold.
 # Probe (debug_realism_probe.py): EVA02 anime max realistic≈0.004; photos often 0.11–0.99.
 WD_REALISM_ALWAYS_TAGS = frozenset({"realistic", "photorealistic"})
-WD_REALISM_FLOOR = 0.10
+# Align with default general threshold so ultra-weak realism noise cannot route.
+WD_REALISM_FLOOR = 0.35
 
 
 def _force_cpu() -> bool:

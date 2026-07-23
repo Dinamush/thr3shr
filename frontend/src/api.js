@@ -583,6 +583,17 @@ export const api = {
     if (backendAvailable === false) return null;
     return `${API_BASE}/debug/sfw-eval/preview/${encodeURIComponent(sourceId)}/${encodeURIComponent(fileName)}`;
   },
+  runRealismDebugEval: (payload) =>
+    request("/debug/realism-eval", {
+      method: "POST",
+      body: JSON.stringify(payload),
+      // Remote download + multi-model GPU scoring can take a long time.
+      timeoutMs: 60 * 60 * 1000,
+    }),
+  getRealismDebugPreviewUrl: (sourceId, fileName) => {
+    if (backendAvailable === false) return null;
+    return `${API_BASE}/debug/realism-eval/preview/${encodeURIComponent(sourceId)}/${encodeURIComponent(fileName)}`;
+  },
   getRunItems: (runId, filters = {}) => {
     const params = new URLSearchParams();
     if (filters.status) params.set("status", filters.status);

@@ -2,6 +2,25 @@
 
 Utility / probe scripts for tagging accuracy, throughput, and model audits.
 
+## Classifier debug: real-life vs anime eval
+
+UI: **Classifier debug → Real-life vs anime**.
+
+API: `POST /api/debug/realism-eval` with
+`{"count_per_class": 20, "compare_models": true}`.
+
+CLI (thorough, multi-model + local video probe):
+
+```text
+.venv\Scripts\python.exe backend\scripts\run_realism_debug_eval.py 20
+```
+
+Latest report: `backend/scripts/out/realism_debug_eval_latest.json`.
+
+Photos: RandomUser people portraits (remote). Anime: Safebooru typical +
+`realistic` / `photorealistic` / `3d` edges. Routing uses production
+`real_life` taxonomy.
+
 ## Real-life vs anime (`real_life` bucket)
 
 Production `backend/app/data/taxonomy.json` includes a priority-`0` `real_life`

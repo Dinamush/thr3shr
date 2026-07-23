@@ -6,6 +6,11 @@ const DEFAULT_SOURCES = [
   { id: "danbooru", label: "Danbooru", sfw_policy: "rating:g", max_content_tags: 2 },
 ]
 
+function pct(value) {
+  if (value == null || Number.isNaN(Number(value))) return "n/a"
+  return `${(Number(value) * 100).toFixed(1)}%`
+}
+
 export default function ClassifierDebugPage() {
   const [sources, setSources] = useState(DEFAULT_SOURCES)
   const [source, setSource] = useState("safebooru")
@@ -21,6 +26,12 @@ export default function ClassifierDebugPage() {
     confidence_threshold: 0.6,
     selected_tags: [],
   })
+
+  const [realismCount, setRealismCount] = useState(12)
+  const [realismCompare, setRealismCompare] = useState(true)
+  const [realismLoading, setRealismLoading] = useState(false)
+  const [realismError, setRealismError] = useState("")
+  const [realismResult, setRealismResult] = useState(null)
 
   const sourceMeta = useMemo(
     () => sources.find((s) => s.id === source) || sources[0],
@@ -111,6 +122,28 @@ export default function ClassifierDebugPage() {
     }
   }
 
+  const handleRealismEval = async () => {
+    setRealismLoading(true)
+    setRealismError("")
+    try {
+      const next = await api.runRealismDebugEval({
+        count_per_class: realismCount,
+        compare_models: realismCompare,
+        tagger_model: realismCompare ? null : settingsSummary.tagger_model,
+      })
+      setRealismResult(next)
+    } catch (err) {
+      setRealismError(`Realism eval failed: ${err.message}`)
+    } finally {
+      setRealismLoading(false)
+    }
+  }
+
+  const multi = realismResult?.multi_model
+  const overall = multi?.overall_conclusion
+  const metrics = realismResult?.metrics || {}
+  const conclusion = realismResult?.conclusion || {}
+
   return (
     <div className="container">
       <header className="app-header">
@@ -124,15 +157,246 @@ export default function ClassifierDebugPage() {
         </div>
         <h1>Classifier debug</h1>
         <p className="lede">
-          Download SFW samples for chosen tags, measure recall @ threshold, and preview destination
-          assignment. Uses saved settings from the main page — no migrate.
+          SFW tag recall plus real-life vs anime separation. Uses saved settings from the main page —
+          no migrate.
         </p>
       </header>
 
-      {error && <div className="error">{error}</div>}
+      {(error || realismError) && <div className="error">{error || realismError}</div>}
+
+      <section className="panel" aria-label="Real-life vs anime eval">
+        <h2>Real-life vs anime</h2>
+        <span className="kicker">
+          Remote people portraits (RandomUser CDN) vs Safebooru anime, including realistic /
+          photorealistic / 3d edge cases. Scores through production <code>real_life</code> taxonomy
+          routing.
+        </span>
+        <div className="grid">
+          <label>
+            Samples per class
+            <input
+              type="number"
+              min="5"
+              max="40"
+              value={realismCount}
+              disabled={realismLoading}
+              onChange={(e) =>
+                setRealismCount(Math.max(5, Math.min(40, Number(e.target.value) || 12)))
+              }
+              aria-label="Realism samples per class"
+            />
+          </label>
+          <label className="inline-check">
+            <input
+              type="checkbox"
+              checked={realismCompare}
+              disabled={realismLoading}
+              onChange={(e) => setRealismCompare(e.target.checked)}
+            />
+            Compare all models (EVA02 / SwinV2 / ML-Danbooru)
+          </label>
+        </div>
+        <p className="muted">
+          Current settings model: <strong>{settingsSummary.tagger_model}</strong>
+          {!realismCompare ? " (used when compare is off)" : " (ignored while comparing)"}
+        </p>
+        <div className="actions">
+          <button
+            type="button"
+            disabled={realismLoading}
+            onClick={handleRealismEval}
+            aria-label="Run real-life versus anime evaluation"
+          >
+            {realismLoading
+              ? "Fetching photos/anime & scoring… (can take a while)"
+              : "Run real-life vs anime eval"}
+          </button>
+        </div>
+      </section>
+
+      {realismResult && (
+        <section className="panel debug-eval-results" aria-label="Realism eval results">
+          <h2>Realism results</h2>
+          <div className="stats">
+            <span>
+              Decision:{" "}
+              <strong>
+                {(overall && overall.decision) || conclusion.decision || "—"}
+              </strong>
+            </span>
+            <span>
+              Evaluated: {realismResult.count_evaluated} (photos fetched{" "}
+              {realismResult.count_photos_fetched}, anime {realismResult.count_anime_fetched})
+            </span>
+            <span>Model shown: {realismResult.tagger_model}</span>
+            {overall?.best_model ? <span>Best model: {overall.best_model}</span> : null}
+          </div>
+          <p className="muted">
+            {(overall && overall.summary) || conclusion.summary}
+          </p>
+          <p className="muted">
+            {(overall && overall.video_and_gif) || conclusion.video_note}
+          </p>
+
+          <h3>Typical photo vs anime (GO gate)</h3>
+          <div className="stats">
+            {[
+              ["Precision", (conclusion.typical_metrics || metrics).precision],
+              ["Recall", (conclusion.typical_metrics || metrics).recall],
+              ["F1", (conclusion.typical_metrics || metrics).f1],
+              [
+                "Anime FP",
+                (conclusion.typical_metrics || metrics).anime_false_positive_rate,
+              ],
+            ].map(([label, value]) => (
+              <div key={label} className="metric">
+                <span className="label">{label}</span>
+                <span className="value">{pct(value)}</span>
+              </div>
+            ))}
+            <div className="metric">
+              <span className="label">Edge quarantine</span>
+              <span className="value">
+                {conclusion.edge_quarantine_count ?? "—"}/{conclusion.edge_sample_count ?? "—"}
+              </span>
+            </div>
+          </div>
+          <h3>Including photoreal/3d edges</h3>
+          <div className="stats">
+            <div className="metric">
+              <span className="label">Precision</span>
+              <span className="value">{pct(metrics.precision)}</span>
+            </div>
+            <div className="metric">
+              <span className="label">Recall</span>
+              <span className="value">{pct(metrics.recall)}</span>
+            </div>
+            <div className="metric">
+              <span className="label">Anime FP rate</span>
+              <span className="value">{pct(metrics.anime_false_positive_rate)}</span>
+            </div>
+          </div>
+
+          {multi?.reports?.length ? (
+            <>
+              <h3>Per-model</h3>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Model</th>
+                      <th>Decision</th>
+                      <th>P</th>
+                      <th>R</th>
+                      <th>F1</th>
+                      <th>Anime FP</th>
+                      <th>N</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {multi.reports.map((row) => (
+                      <tr key={row.tagger_model}>
+                        <td>{row.tagger_model}</td>
+                        <td>{row.conclusion?.decision}</td>
+                        <td>{pct(row.metrics?.precision)}</td>
+                        <td>{pct(row.metrics?.recall)}</td>
+                        <td>{pct(row.metrics?.f1)}</td>
+                        <td>{pct(row.metrics?.anime_false_positive_rate)}</td>
+                        <td>{row.count_evaluated}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          ) : null}
+
+          {realismResult.by_label && Object.keys(realismResult.by_label).length > 0 ? (
+            <>
+              <h3>Edge / label breakdown</h3>
+              <div className="stats">
+                {Object.entries(realismResult.by_label).map(([label, row]) => (
+                  <div key={label} className="metric">
+                    <span className="label">{label}</span>
+                    <span className="value">
+                      acc {pct(row.accuracy)} (n={row.count})
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : null}
+
+          {realismResult.errors?.length > 0 && (
+            <div className="error">{realismResult.errors.join(" · ")}</div>
+          )}
+
+          <h3>Samples</h3>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Preview</th>
+                  <th>Truth</th>
+                  <th>Predicted</th>
+                  <th>Evidence</th>
+                  <th>Folder</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(realismResult.items || []).map((item) => {
+                  const previewUrl = api.getRealismDebugPreviewUrl(item.source, item.file_name)
+                  const ev = item.evidence_scores || {}
+                  const evText = ["realistic", "photorealistic", "photo_(medium)", "3d"]
+                    .map((tag) => `${tag}:${Number(ev[tag] || 0).toFixed(2)}`)
+                    .join(" ")
+                  return (
+                    <tr
+                      key={item.sample_id}
+                      className={item.correct ? "" : "needs-review"}
+                    >
+                      <td>
+                        {previewUrl ? (
+                          <img
+                            src={previewUrl}
+                            alt={item.title || item.sample_id}
+                            className="debug-thumb"
+                          />
+                        ) : (
+                          <span className="muted">n/a</span>
+                        )}
+                      </td>
+                      <td>
+                        {item.bucket}
+                        <div className="muted">
+                          {item.label} · {item.query}
+                        </div>
+                      </td>
+                      <td>
+                        {item.predicted_bucket}{" "}
+                        {item.correct ? (
+                          <span className="muted">ok</span>
+                        ) : (
+                          <strong>miss</strong>
+                        )}
+                      </td>
+                      <td>{evText}</td>
+                      <td>
+                        {item.primary_folder
+                          ? `${item.primary_folder} (${Number(item.primary_score || 0).toFixed(3)})`
+                          : "—"}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       <section className="panel" aria-label="Classifier debug controls">
-        <h2>Fetch samples</h2>
+        <h2>SFW tag recall</h2>
         <span className="kicker">
           Safebooru / Danbooru only. Change tagger and destination tags on the main Classifier page,
           then return here.
@@ -252,7 +516,7 @@ export default function ClassifierDebugPage() {
 
       {result && (
         <section className="panel debug-eval-results" aria-label="Classifier debug results">
-          <h2>Results</h2>
+          <h2>SFW results</h2>
           <div className="stats">
             <span>
               Query: <code>{result.query}</code>
