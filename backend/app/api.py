@@ -23,6 +23,7 @@ from .schemas import (
     ReclassifyResponse,
     RealismDebugEvalRequest,
     RealismDebugEvalResponse,
+    StyleDebugEvalRequest,
     RunStatusResponse,
     SaveSettingsRequest,
     SfwDebugEvalRequest,
@@ -160,6 +161,7 @@ def _classify_from_scores(
     scores: dict[str, float],
     matched_tags: set[str],
     confidence_threshold: float,
+    experimental_style_detector_enabled: bool = False,
 ) -> _ImageInferenceResult:
     primary_tag, primary_score, secondary = choose_best_destination(scores, matched_tags)
     needs_review = False
@@ -196,7 +198,7 @@ def _classify_from_scores(
             secondary = [{"tag": primary_tag, "score": float(primary_score)}, *secondary][:4]
             primary_tag = None
             primary_score = None
-    return _ImageInferenceResult(
+    result = _ImageInferenceResult(
         image_path=image_path,
         scores=scores,
         primary_tag=primary_tag,
@@ -204,6 +206,115 @@ def _classify_from_scores(
         secondary=secondary,
         needs_review=needs_review,
         reason=reason,
+        inference_failed=False,
+    )
+    if experimental_style_detector_enabled:
+        return _apply_experimental_style_gate(result, matched_tags)
+    return result
+
+
+def _apply_experimental_style_gate(
+    result: _ImageInferenceResult,
+    matched_tags: set[str],
+) -> _ImageInferenceResult:
+    """Override taxonomy routing when dedicated real-vs-anime detector fires."""
+    from .style_detectors import (
+        BUCKET_ANIME,
+        BUCKET_UNCERTAIN,
+        REAL_LIFE_FOLDER,
+        detect_production_style,
+    )
+
+    if result.inference_failed:
+        return result
+    try:
+        style = detect_production_style(result.image_path)
+    except Exception:
+        logger.exception("experimental_style_detector_failed path=%s", result.image_path)
+        return _ImageInferenceResult(
+            image_path=result.image_path,
+            scores=result.scores,
+            primary_tag=result.primary_tag,
+            primary_score=result.primary_score,
+            secondary=result.secondary,
+            needs_review=True,
+            reason=(
+                (result.reason + " · " if result.reason else "")
+                + "Experimental style detector failed; manual review required."
+            ),
+            inference_failed=False,
+        )
+
+    style_note = f"style={style.label} ({style.confidence:.3f} via {style.method})"
+    if style.bucket == BUCKET_ANIME:
+        if result.needs_review and result.reason:
+            return _ImageInferenceResult(
+                image_path=result.image_path,
+                scores=result.scores,
+                primary_tag=result.primary_tag,
+                primary_score=result.primary_score,
+                secondary=result.secondary,
+                needs_review=True,
+                reason=f"{result.reason} · {style_note}",
+                inference_failed=False,
+            )
+        return result
+
+    if style.bucket == BUCKET_UNCERTAIN:
+        secondary = list(result.secondary or [])
+        if result.primary_tag is not None and result.primary_score is not None:
+            secondary = [
+                {"tag": result.primary_tag, "score": float(result.primary_score)},
+                *secondary,
+            ][:4]
+        return _ImageInferenceResult(
+            image_path=result.image_path,
+            scores=result.scores,
+            primary_tag=None,
+            primary_score=None,
+            secondary=secondary,
+            needs_review=True,
+            reason=(
+                "Experimental style detector uncertain "
+                f"(real={style.scores.get('real', 0):.3f}, "
+                f"anime={style.scores.get('anime', 0):.3f}); manual review."
+            ),
+            inference_failed=False,
+        )
+
+    has_real_life = REAL_LIFE_FOLDER in matched_tags or any(
+        str(t).lower().replace(" ", "_") in {REAL_LIFE_FOLDER, "photo"}
+        for t in matched_tags
+    )
+    if not has_real_life:
+        return _ImageInferenceResult(
+            image_path=result.image_path,
+            scores=result.scores,
+            primary_tag=None,
+            primary_score=None,
+            secondary=result.secondary,
+            needs_review=True,
+            reason=(
+                f"Experimental style detector: real photo ({style.confidence:.3f}) "
+                "but real_life is not among selected destinations."
+            ),
+            inference_failed=False,
+        )
+
+    secondary = list(result.secondary or [])
+    if result.primary_tag and result.primary_tag != REAL_LIFE_FOLDER:
+        secondary = [
+            {"tag": result.primary_tag, "score": float(result.primary_score or 0.0)},
+            *secondary,
+        ][:4]
+    return _ImageInferenceResult(
+        image_path=result.image_path,
+        scores=result.scores,
+        primary_tag=REAL_LIFE_FOLDER,
+        primary_score=float(style.confidence),
+        secondary=secondary,
+        needs_review=False,
+        reason=None,
         inference_failed=False,
     )
 
@@ -215,6 +326,7 @@ def _infer_one_image(
     experimental_media_enabled: bool = False,
     tagger_model: str = "wd_swinv2_v3",
     wd_general_threshold: float = 0.35,
+    experimental_style_detector_enabled: bool = False,
 ) -> _ImageInferenceResult:
     try:
         if experimental_media_enabled and is_experimental_media(image_path):
@@ -230,7 +342,13 @@ def _infer_one_image(
                 tagger_model=tagger_model,
                 wd_general_threshold=wd_general_threshold,
             )
-        return _classify_from_scores(image_path, scores, matched_tags, confidence_threshold)
+        return _classify_from_scores(
+            image_path,
+            scores,
+            matched_tags,
+            confidence_threshold,
+            experimental_style_detector_enabled=experimental_style_detector_enabled,
+        )
     except Exception as err:
         if _is_provider_related_error(err):
             logger.exception("inference_provider_failure image=%s", image_path)
@@ -256,6 +374,7 @@ def _infer_batch_with_fallback(
     experimental_media_enabled: bool = False,
     tagger_model: str = "wd_swinv2_v3",
     wd_general_threshold: float = 0.35,
+    experimental_style_detector_enabled: bool = False,
 ) -> tuple[list[_ImageInferenceResult], float, str]:
     if not image_paths:
         return [], 0.0, "none"
@@ -270,6 +389,7 @@ def _infer_batch_with_fallback(
                 experimental_media_enabled,
                 tagger_model,
                 wd_general_threshold,
+                experimental_style_detector_enabled,
             )
         ]
         elapsed_ms = (time.perf_counter() - start) * 1000.0
@@ -287,6 +407,7 @@ def _infer_batch_with_fallback(
                 experimental_media_enabled,
                 tagger_model,
                 wd_general_threshold,
+                experimental_style_detector_enabled,
             )
             for p in image_paths
         ]
@@ -303,7 +424,13 @@ def _infer_batch_with_fallback(
         if len(scores_by_image) != len(image_paths):
             raise RuntimeError("Batch inference result count mismatch")
         rows = [
-            _classify_from_scores(image_path, scores, matched_tags, confidence_threshold)
+            _classify_from_scores(
+                image_path,
+                scores,
+                matched_tags,
+                confidence_threshold,
+                experimental_style_detector_enabled=experimental_style_detector_enabled,
+            )
             for image_path, scores in zip(image_paths, scores_by_image)
         ]
         elapsed_ms = (time.perf_counter() - start) * 1000.0
@@ -323,6 +450,7 @@ def _infer_batch_with_fallback(
                 experimental_media_enabled,
                 tagger_model,
                 wd_general_threshold,
+                experimental_style_detector_enabled,
             )
             right_rows, right_ms, _ = _infer_batch_with_fallback(
                 image_paths[mid:],
@@ -332,6 +460,7 @@ def _infer_batch_with_fallback(
                 experimental_media_enabled,
                 tagger_model,
                 wd_general_threshold,
+                experimental_style_detector_enabled,
             )
             return left_rows + right_rows, left_ms + right_ms, "batch_fallback"
         row = _infer_one_image(
@@ -341,6 +470,7 @@ def _infer_batch_with_fallback(
             experimental_media_enabled,
             tagger_model,
             wd_general_threshold,
+            experimental_style_detector_enabled,
         )
         elapsed_ms = (time.perf_counter() - start) * 1000.0
         return [row], elapsed_ms, "single_fallback"
@@ -365,6 +495,9 @@ def _settings_from_db() -> AppSettings:
         default_migrate_mode=row["default_migrate_mode"],
         scan_recursive=bool(row.get("scan_recursive", 1)),
         experimental_media_enabled=bool(row.get("experimental_media_enabled", 0)),
+        experimental_style_detector_enabled=bool(
+            row.get("experimental_style_detector_enabled", 0)
+        ),
         selected_tags=selected_tags,
         max_inference_workers=int(row.get("max_inference_workers") or 2),
         inference_batch_size=int(row.get("inference_batch_size") or 4),
@@ -539,6 +672,7 @@ def _execute_run(
     inference_batch_size: int = 1,
     tagger_model: str = "wd_swinv2_v3",
     wd_general_threshold: float = 0.35,
+    experimental_style_detector_enabled: bool = False,
 ) -> None:
     try:
         # Mark running immediately so clients can cancel during provider probe / scan.
@@ -662,6 +796,7 @@ def _execute_run(
                         experimental_media_enabled,
                         tagger_model,
                         wd_general_threshold,
+                        experimental_style_detector_enabled,
                     )
                     pending[future] = next_batch
 
@@ -853,6 +988,7 @@ def _execute_reclassify(
     inference_batch_size: int = 1,
     tagger_model: str = "wd_eva02_large",
     wd_general_threshold: float = 0.35,
+    experimental_style_detector_enabled: bool = False,
 ) -> None:
     try:
         # Claim already set status=running; only refresh bookkeeping here.
@@ -956,6 +1092,7 @@ def _execute_reclassify(
                         experimental_media_enabled,
                         tagger_model,
                         wd_general_threshold,
+                        experimental_style_detector_enabled,
                     )
                     pending[future] = next_batch
 
@@ -1114,6 +1251,7 @@ def save_settings(payload: SaveSettingsRequest) -> AppSettings:
             UPDATE settings
             SET root_repo = ?, categories_root = ?, confidence_threshold = ?,
                 default_migrate_mode = ?, scan_recursive = ?, experimental_media_enabled = ?,
+                experimental_style_detector_enabled = ?,
                 selected_tags_json = ?, max_inference_workers = ?, inference_batch_size = ?,
                 force_cpu_inference = ?, tagger_model = ?, wd_general_threshold = ?
             WHERE id = 1
@@ -1125,6 +1263,7 @@ def save_settings(payload: SaveSettingsRequest) -> AppSettings:
                 payload.default_migrate_mode,
                 1 if payload.scan_recursive else 0,
                 1 if payload.experimental_media_enabled else 0,
+                1 if payload.experimental_style_detector_enabled else 0,
                 to_json(cleaned_tags),
                 int(payload.max_inference_workers),
                 int(payload.inference_batch_size),
@@ -1230,6 +1369,8 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
         known_tags = load_known_tags(TAGS_CSV)
         mappings = discover_tag_folders(categories_root, known_tags, selected_folders)
         matched_tags = {m.matched_tag for m in mappings if m.matched and m.matched_tag}
+        if current.experimental_style_detector_enabled:
+            matched_tags.add("real_life")
         if not matched_tags:
             raise HTTPException(
                 status_code=400,
@@ -1277,6 +1418,7 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
             current.inference_batch_size,
             current.tagger_model,
             current.wd_general_threshold,
+            current.experimental_style_detector_enabled,
         ),
         daemon=True,
     )
@@ -1361,6 +1503,8 @@ def reclassify_run(run_id: int, payload: ReclassifyRequest) -> ReclassifyRespons
         known_tags = load_known_tags(TAGS_CSV)
         mappings = discover_tag_folders(categories_root, known_tags, selected_folders)
         matched_tags = {m.matched_tag for m in mappings if m.matched and m.matched_tag}
+        if current.experimental_style_detector_enabled:
+            matched_tags.add("real_life")
         if not matched_tags:
             raise HTTPException(
                 status_code=400,
@@ -1408,6 +1552,7 @@ def reclassify_run(run_id: int, payload: ReclassifyRequest) -> ReclassifyRespons
             current.inference_batch_size,
             payload.tagger_model,
             current.wd_general_threshold,
+            current.experimental_style_detector_enabled,
         ),
         daemon=True,
     )
@@ -1774,6 +1919,38 @@ def debug_realism_eval(payload: RealismDebugEvalRequest):
         logger.exception("debug_realism_eval_failed")
         raise HTTPException(
             status_code=500, detail=f"Realism eval failed: {err}"
+        ) from err
+
+
+@router.get("/debug/style-detectors")
+def debug_style_detectors():
+    """List debug-only real-vs-anime style detectors available for compare."""
+    from .style_detectors import list_style_detectors
+
+    return {"detectors": list_style_detectors()}
+
+
+@router.post("/debug/style-eval", response_model=None)
+def debug_style_eval(payload: StyleDebugEvalRequest):
+    """Compare dedicated style detectors vs WD taxonomy on the realism corpus."""
+    from .style_eval import run_style_detector_eval
+
+    settings = _settings_from_db()
+    _apply_runtime_inference_env(settings)
+    try:
+        return run_style_detector_eval(
+            count_per_class=payload.count_per_class,
+            settings=settings,
+            detector_ids=payload.detectors,
+            tagger_model=payload.tagger_model,
+            uncertain_threshold=float(payload.uncertain_threshold),
+        )
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+    except Exception as err:
+        logger.exception("debug_style_eval_failed")
+        raise HTTPException(
+            status_code=500, detail=f"Style detector eval failed: {err}"
         ) from err
 
 

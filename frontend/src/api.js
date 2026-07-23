@@ -594,6 +594,13 @@ export const api = {
     if (backendAvailable === false) return null;
     return `${API_BASE}/debug/realism-eval/preview/${encodeURIComponent(sourceId)}/${encodeURIComponent(fileName)}`;
   },
+  getStyleDetectors: () => request("/debug/style-detectors"),
+  runStyleDebugEval: (payload) =>
+    request("/debug/style-eval", {
+      method: "POST",
+      body: JSON.stringify(payload),
+      timeoutMs: 60 * 60 * 1000,
+    }),
   getRunItems: (runId, filters = {}) => {
     const params = new URLSearchParams();
     if (filters.status) params.set("status", filters.status);

@@ -143,6 +143,23 @@ def test_ntr_requires_netorare_or_cheating() -> None:
     assert folder == "NTR"
     assert score == 0.8
 
+    folder, score, _ = choose_best_destination(
+        {"cheating_(relationship)": 0.9, "caught": 0.99},
+        selected,
+    )
+    assert folder == "NTR"
+    assert abs(score - 0.9 * 0.85) < 1e-9
+
+
+def test_mesugaki_and_onee_shota_route() -> None:
+    folder, score, _ = choose_best_destination({"mesugaki": 0.88}, {"loli", "shota"})
+    assert folder == "loli"
+    assert abs(score - 0.88 * 0.8) < 1e-9
+
+    folder, score, _ = choose_best_destination({"onee-shota": 0.91}, {"loli", "shota"})
+    assert folder == "shota"
+    assert abs(score - 0.91 * 0.9) < 1e-9
+
 
 def test_incest_ignores_siblings_alone() -> None:
     selected = {"incest", "loli"}
@@ -217,14 +234,36 @@ def test_soft_evidence_alone_does_not_win() -> None:
 
 def test_priority_breaks_score_ties() -> None:
     selected = {"fertilization", "NTR", "fellatio", "loli"}
-    # Equal weighted scores → fertilization wins by priority.
+    # Equal weighted scores → loli wins among these (incest not selected).
     folder, score, secondary = choose_best_destination(
         {"fertilization": 0.8, "netorare": 0.8, "fellatio": 0.8, "loli": 0.8},
         selected,
     )
-    assert folder == "fertilization"
+    assert folder == "loli"
     assert score == 0.8
-    assert [row["tag"] for row in secondary][:2] == ["NTR", "fellatio"]
+    assert [row["tag"] for row in secondary][:3] == ["fertilization", "NTR", "fellatio"]
+
+
+def test_incest_priority_beats_loli_and_shota_on_tie() -> None:
+    selected = {"incest", "loli", "shota"}
+    folder, score, secondary = choose_best_destination(
+        {"incest": 0.85, "loli": 0.85, "shota": 0.85},
+        selected,
+    )
+    assert folder == "incest"
+    assert score == 0.85
+    assert [row["tag"] for row in secondary][:2] == ["loli", "shota"]
+
+
+def test_loli_priority_beats_shota_on_tie() -> None:
+    selected = {"loli", "shota"}
+    folder, score, secondary = choose_best_destination(
+        {"loli": 0.85, "shota": 0.85},
+        selected,
+    )
+    assert folder == "loli"
+    assert score == 0.85
+    assert secondary[0]["tag"] == "shota"
 
 
 def test_legacy_non_taxonomy_still_exact_match() -> None:

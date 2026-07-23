@@ -9,6 +9,7 @@ const DEFAULT_SETTINGS = {
   default_migrate_mode: "copy",
   scan_recursive: true,
   experimental_media_enabled: false,
+  experimental_style_detector_enabled: false,
   selected_tags: [],
   max_inference_workers: 2,
   inference_batch_size: 8,
@@ -804,6 +805,20 @@ function App() {
                   }
                 />
                 Experimental: classify GIF/videos via length-scaled multi-frame sampling
+              </label>
+              <label className="inline-check">
+                <input
+                  type="checkbox"
+                  checked={Boolean(settings.experimental_style_detector_enabled)}
+                  onChange={(e) =>
+                    setSettings({
+                      ...settings,
+                      experimental_style_detector_enabled: e.target.checked,
+                    })
+                  }
+                />
+                Experimental: real vs anime style gate (dedicated ONNX →{" "}
+                <code>real_life</code>; uncertain → needs review)
               </label>
             </div>
           </fieldset>

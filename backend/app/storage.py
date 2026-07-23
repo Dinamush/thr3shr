@@ -81,6 +81,7 @@ def _ensure_settings_columns(conn: sqlite3.Connection) -> None:
     expected_columns = {
         "scan_recursive": "INTEGER NOT NULL DEFAULT 1",
         "experimental_media_enabled": "INTEGER NOT NULL DEFAULT 0",
+        "experimental_style_detector_enabled": "INTEGER NOT NULL DEFAULT 0",
         "selected_tags_json": "TEXT NOT NULL DEFAULT '[]'",
         "max_inference_workers": "INTEGER NOT NULL DEFAULT 2",
         "inference_batch_size": "INTEGER NOT NULL DEFAULT 4",

@@ -25,6 +25,7 @@ export default function ClassifierDebugPage() {
     tagger_model: "wd_swinv2_v3",
     confidence_threshold: 0.6,
     selected_tags: [],
+    experimental_style_detector_enabled: false,
   })
 
   const [realismCount, setRealismCount] = useState(12)
@@ -32,6 +33,11 @@ export default function ClassifierDebugPage() {
   const [realismLoading, setRealismLoading] = useState(false)
   const [realismError, setRealismError] = useState("")
   const [realismResult, setRealismResult] = useState(null)
+
+  const [styleCount, setStyleCount] = useState(12)
+  const [styleLoading, setStyleLoading] = useState(false)
+  const [styleError, setStyleError] = useState("")
+  const [styleResult, setStyleResult] = useState(null)
 
   const sourceMeta = useMemo(
     () => sources.find((s) => s.id === source) || sources[0],
@@ -54,6 +60,9 @@ export default function ClassifierDebugPage() {
           tagger_model: data.tagger_model || "wd_swinv2_v3",
           confidence_threshold: Number(data.confidence_threshold ?? 0.6),
           selected_tags: Array.isArray(data.selected_tags) ? data.selected_tags : [],
+          experimental_style_detector_enabled: Boolean(
+            data.experimental_style_detector_enabled
+          ),
         })
       })
       .catch((err) => setError(err.message))
@@ -114,6 +123,9 @@ export default function ClassifierDebugPage() {
         selected_tags: Array.isArray(refreshed.selected_tags)
           ? refreshed.selected_tags
           : next.destination_tags || [],
+        experimental_style_detector_enabled: Boolean(
+          refreshed.experimental_style_detector_enabled
+        ),
       })
     } catch (err) {
       setError(`SFW debug eval failed: ${err.message}`)
@@ -139,10 +151,28 @@ export default function ClassifierDebugPage() {
     }
   }
 
+  const handleStyleEval = async () => {
+    setStyleLoading(true)
+    setStyleError("")
+    try {
+      const next = await api.runStyleDebugEval({
+        count_per_class: styleCount,
+        tagger_model: settingsSummary.tagger_model,
+      })
+      setStyleResult(next)
+    } catch (err) {
+      setStyleError(`Style detector eval failed: ${err.message}`)
+    } finally {
+      setStyleLoading(false)
+    }
+  }
+
   const multi = realismResult?.multi_model
   const overall = multi?.overall_conclusion
   const metrics = realismResult?.metrics || {}
   const conclusion = realismResult?.conclusion || {}
+  const styleOverall = styleResult?.overall_conclusion || {}
+  const styleReports = styleResult?.reports || []
 
   return (
     <div className="container">
@@ -162,7 +192,168 @@ export default function ClassifierDebugPage() {
         </p>
       </header>
 
-      {(error || realismError) && <div className="error">{error || realismError}</div>}
+      {(error || realismError || styleError) && (
+        <div className="error">{error || realismError || styleError}</div>
+      )}
+
+      <section className="panel" aria-label="Style detector compare">
+        <h2>Style detectors (real vs anime)</h2>
+        <span className="kicker">
+          Debug-only compare: dedicated ONNX classifiers (
+          <code>deepghs/anime_real_cls</code> via imgutils) vs WD{" "}
+          <code>real_life</code> taxonomy. Same photo/anime corpus as below. Enable the
+          experimental style gate on the main Classifier settings (next to GIF/video) to use
+          CAFormer in production runs.
+        </span>
+        <div className="grid">
+          <label>
+            Samples per class
+            <input
+              type="number"
+              min="5"
+              max="40"
+              value={styleCount}
+              disabled={styleLoading}
+              onChange={(e) =>
+                setStyleCount(Math.max(5, Math.min(40, Number(e.target.value) || 12)))
+              }
+              aria-label="Style detector samples per class"
+            />
+          </label>
+        </div>
+        <p className="muted">
+          WD baseline uses settings model: <strong>{settingsSummary.tagger_model}</strong>
+          {" · "}
+          Experimental style gate:{" "}
+          <strong>
+            {settingsSummary.experimental_style_detector_enabled ? "ON" : "OFF"}
+          </strong>{" "}
+          (toggle on Classifier settings)
+        </p>
+        <div className="actions">
+          <button
+            type="button"
+            disabled={styleLoading}
+            onClick={handleStyleEval}
+            aria-label="Run style detector comparison"
+          >
+            {styleLoading
+              ? "Downloading samples & scoring detectors…"
+              : "Compare style detectors"}
+          </button>
+        </div>
+      </section>
+
+      {styleResult && (
+        <section className="panel debug-eval-results" aria-label="Style detector results">
+          <h2>Style detector results</h2>
+          <div className="stats">
+            <span>
+              Decision: <strong>{styleOverall.decision || "—"}</strong>
+            </span>
+            <span>Best: {styleOverall.best_detector || "—"}</span>
+            <span>
+              Paths: {styleResult.count_paths} (photos {styleResult.count_photos_fetched},
+              anime {styleResult.count_anime_fetched})
+            </span>
+          </div>
+          <p className="muted">{styleOverall.summary}</p>
+          <p className="muted">{styleOverall.note}</p>
+          <h3>Per detector</h3>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Detector</th>
+                  <th scope="col">Decision</th>
+                  <th scope="col">Typical P</th>
+                  <th scope="col">Typical R</th>
+                  <th scope="col">Typical F1</th>
+                  <th scope="col">Anime FP</th>
+                  <th scope="col">Uncertain</th>
+                  <th scope="col">N</th>
+                </tr>
+              </thead>
+              <tbody>
+                {styleReports.map((row) => {
+                  const t = row.conclusion?.typical_metrics || {}
+                  return (
+                    <tr key={row.detector_id}>
+                      <td>{row.detector_id}</td>
+                      <td>{row.conclusion?.decision}</td>
+                      <td>{pct(t.precision)}</td>
+                      <td>{pct(t.recall)}</td>
+                      <td>{pct(t.f1)}</td>
+                      <td>{pct(t.anime_false_positive_rate)}</td>
+                      <td>{row.conclusion?.uncertain_count ?? 0}</td>
+                      <td>{row.count_evaluated}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          {styleReports[0]?.items?.length > 0 && (
+            <>
+              <h3>Samples ({styleResult.best_detector || styleReports[0].detector_id})</h3>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th scope="col">Preview</th>
+                      <th scope="col">Truth</th>
+                      {styleReports.map((r) => (
+                        <th key={r.detector_id} scope="col">
+                          {r.detector_id}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(styleReports[0].items || []).map((item, idx) => {
+                      const preview = api.getRealismDebugPreviewUrl(
+                        item.source,
+                        item.file_name
+                      )
+                      return (
+                        <tr key={item.sample_id}>
+                          <td>
+                            {preview ? (
+                              <img
+                                src={preview}
+                                alt={item.title || item.sample_id}
+                                className="debug-thumb"
+                              />
+                            ) : (
+                              "—"
+                            )}
+                          </td>
+                          <td>
+                            {item.label}
+                            <div className="muted">{item.bucket}</div>
+                          </td>
+                          {styleReports.map((r) => {
+                            const cell = (r.items || [])[idx]
+                            if (!cell) return <td key={r.detector_id}>—</td>
+                            return (
+                              <td key={r.detector_id}>
+                                {cell.predicted_bucket}
+                                <div className="muted">
+                                  {pct(cell.confidence)} {cell.correct ? "ok" : "miss"}
+                                </div>
+                              </td>
+                            )
+                          })}
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </section>
+      )}
 
       <section className="panel" aria-label="Real-life vs anime eval">
         <h2>Real-life vs anime</h2>

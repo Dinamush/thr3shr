@@ -50,122 +50,34 @@
       ]
     },
     {
-      "id": "fertilization",
-      "folder": "fertilization",
-      "priority": 1,
-      "aliases": ["impregnation", "Impregnation", "Fertilization"],
-      "ignore": [
-        "pregnant",
-        "birth",
-        "cum_in_pussy",
-        "internal_cumshot",
-        "after_vaginal",
-        "overflow",
-        "cumdrip",
-        "pussy_juice",
-        "cum_in_ass",
-        "excessive_cum"
-      ],
-      "evidence": [
-        { "tag": "fertilization", "weight": 1.0 },
-        { "tag": "impregnation", "weight": 1.0 },
-        { "tag": "ovum", "weight": 0.9 },
-        { "tag": "sperm_cell", "weight": 0.85 },
-        { "tag": "x-ray", "weight": 0.45 },
-        { "tag": "cross-section", "weight": 0.45 }
-      ]
-    },
-    {
-      "id": "ntr",
-      "folder": "NTR",
-      "priority": 2,
-      "aliases": ["ntr", "netorare", "Netorare"],
-      "ignore": [
-        "voyeurism",
-        "watching",
-        "caught",
-        "prostitution",
-        "rape",
-        "forced",
-        "ahegao",
-        "crying",
-        "mind_break"
-      ],
-      "evidence": [
-        { "tag": "netorare", "weight": 1.0 },
-        { "tag": "cheating", "weight": 0.7 }
-      ]
-    },
-    {
       "id": "incest",
       "folder": "incest",
-      "priority": 3,
+      "priority": 1,
       "ignore": [
         "siblings",
+        "sisters",
+        "brothers",
         "parent_and_child",
-        "mother_and_child"
+        "mother_and_child",
+        "motherly",
+        "fatherly"
       ],
       "evidence": [
         { "tag": "incest", "weight": 1.0 },
         { "tag": "twincest", "weight": 0.95 },
-        { "tag": "group_incest", "weight": 0.9 },
         { "tag": "mother_and_son", "weight": 0.85 },
         { "tag": "father_and_daughter", "weight": 0.85 },
         { "tag": "brother_and_sister", "weight": 0.8 },
         { "tag": "mother_and_daughter", "weight": 0.75 },
         { "tag": "father_and_son", "weight": 0.75 },
-        { "tag": "uncle_and_niece", "weight": 0.75 },
-        { "tag": "aunt_and_niece", "weight": 0.7 },
-        { "tag": "cousins", "weight": 0.65 },
-        { "tag": "grandfather_and_granddaughter", "weight": 0.7 },
-        { "tag": "grandmother_and_granddaughter", "weight": 0.7 }
-      ]
-    },
-    {
-      "id": "nakadashi",
-      "folder": "nakadashi",
-      "priority": 4,
-      "aliases": ["creampie", "Nakadashi"],
-      "ignore": [
-        "cum_in_ass",
-        "cum_in_mouth",
-        "cumdrip",
-        "pussy_juice",
-        "excessive_cum",
-        "pregnant",
-        "fertilization",
-        "impregnation",
-        "ovum",
-        "sperm_cell",
-        "fellatio",
-        "oral"
-      ],
-      "evidence": [
-        { "tag": "internal_cumshot", "weight": 1.0 },
-        { "tag": "cum_in_pussy", "weight": 0.72 },
-        { "tag": "after_vaginal", "weight": 0.55 },
-        { "tag": "overflow", "weight": 0.5 }
-      ]
-    },
-    {
-      "id": "fellatio",
-      "folder": "fellatio",
-      "priority": 5,
-      "ignore": ["oral", "cunnilingus", "fellatio_gesture"],
-      "evidence": [
-        { "tag": "fellatio", "weight": 1.0 },
-        { "tag": "irrumatio", "weight": 0.95 },
-        { "tag": "deepthroat", "weight": 0.95 },
-        { "tag": "autofellatio", "weight": 0.9 },
-        { "tag": "after_fellatio", "weight": 0.85 },
-        { "tag": "implied_fellatio", "weight": 0.5 },
-        { "tag": "imminent_fellatio", "weight": 0.5 }
+        { "tag": "selfcest", "weight": 0.85 },
+        { "tag": "cousins", "weight": 0.65 }
       ]
     },
     {
       "id": "loli",
       "folder": "loli",
-      "priority": 6,
+      "priority": 2,
       "ignore": [
         "lolita_fashion",
         "gothic_lolita",
@@ -183,21 +95,34 @@
         "hololive_fantasy",
         "hololive_gamers",
         "hololive_idol_uniform",
+        "irys_(hololive)",
+        "azki_(hololive)",
         "age_regression",
-        "shota"
+        "younger",
+        "kindergarten_uniform",
+        "school_swimsuit",
+        "low_twintails",
+        "babydoll",
+        "baby_bottle",
+        "child_carry",
+        "shota",
+        "onee-shota",
+        "onii-shota",
+        "miniboy"
       ],
       "evidence": [
         { "tag": "loli", "weight": 1.0 },
-        { "tag": "oppai_loli", "weight": 0.85 },
-        { "tag": "toddler", "weight": 0.8 },
-        { "tag": "toddlercon", "weight": 0.75 },
+        { "tag": "oppai_loli", "weight": 0.9 },
+        { "tag": "onee-loli", "weight": 0.85 },
+        { "tag": "mesugaki", "weight": 0.8 },
+        { "tag": "lolidom", "weight": 0.75 },
         { "tag": "child_on_child", "weight": 0.55 }
       ]
     },
     {
       "id": "shota",
       "folder": "shota",
-      "priority": 7,
+      "priority": 3,
       "ignore": [
         "child",
         "paper_child",
@@ -230,19 +155,133 @@
         "boy_on_top",
         "cum_on_boy",
         "loli",
+        "oppai_loli",
+        "onee-loli",
+        "mesugaki",
         "flat_chest",
         "petite",
         "small_breasts",
         "age_regression",
         "age_difference",
-        "size_difference"
+        "size_difference",
+        "younger",
+        "kindergarten_uniform",
+        "babydoll",
+        "baby_bottle",
+        "child_carry"
       ],
       "evidence": [
         { "tag": "shota", "weight": 1.0 },
-        { "tag": "miniboy", "weight": 0.75 },
-        { "tag": "toddlercon", "weight": 0.7 },
-        { "tag": "toddler", "weight": 0.65 },
+        { "tag": "onee-shota", "weight": 0.9 },
+        { "tag": "onii-shota", "weight": 0.85 },
+        { "tag": "miniboy", "weight": 0.8 },
         { "tag": "child_on_child", "weight": 0.55 }
+      ]
+    },
+    {
+      "id": "fertilization",
+      "folder": "fertilization",
+      "priority": 4,
+      "aliases": ["impregnation", "Impregnation", "Fertilization"],
+      "ignore": [
+        "pregnant",
+        "birth",
+        "cum_in_pussy",
+        "internal_cumshot",
+        "after_vaginal",
+        "overflow",
+        "cumdrip",
+        "pussy_juice",
+        "cum_in_ass",
+        "excessive_cum",
+        "cum_inflation",
+        "belly",
+        "big_belly",
+        "egg"
+      ],
+      "evidence": [
+        { "tag": "fertilization", "weight": 1.0 },
+        { "tag": "impregnation", "weight": 1.0 },
+        { "tag": "ovum", "weight": 0.9 },
+        { "tag": "sperm_cell", "weight": 0.85 },
+        { "tag": "uterus", "weight": 0.5 },
+        { "tag": "cervix", "weight": 0.45 },
+        { "tag": "x-ray", "weight": 0.45 },
+        { "tag": "cross-section", "weight": 0.45 }
+      ]
+    },
+    {
+      "id": "ntr",
+      "folder": "NTR",
+      "priority": 5,
+      "aliases": ["ntr", "netorare", "Netorare"],
+      "ignore": [
+        "voyeurism",
+        "watching",
+        "caught",
+        "prostitution",
+        "rape",
+        "forced",
+        "ahegao",
+        "crying",
+        "mind_break",
+        "mind_control"
+      ],
+      "evidence": [
+        { "tag": "netorare", "weight": 1.0 },
+        { "tag": "cheating_(relationship)", "weight": 0.85 }
+      ]
+    },
+    {
+      "id": "nakadashi",
+      "folder": "nakadashi",
+      "priority": 6,
+      "aliases": ["creampie", "Nakadashi"],
+      "ignore": [
+        "cum_in_ass",
+        "cum_in_mouth",
+        "cumdrip",
+        "pussy_juice",
+        "excessive_cum",
+        "pregnant",
+        "fertilization",
+        "impregnation",
+        "ovum",
+        "sperm_cell",
+        "fellatio",
+        "oral",
+        "bukkake",
+        "overflow"
+      ],
+      "evidence": [
+        { "tag": "internal_cumshot", "weight": 1.0 },
+        { "tag": "cum_in_pussy", "weight": 0.72 },
+        { "tag": "after_vaginal", "weight": 0.55 }
+      ]
+    },
+    {
+      "id": "fellatio",
+      "folder": "fellatio",
+      "priority": 7,
+      "ignore": [
+        "oral",
+        "cunnilingus",
+        "fellatio_gesture",
+        "covering_mouth",
+        "cum_in_mouth",
+        "paizuri"
+      ],
+      "evidence": [
+        { "tag": "fellatio", "weight": 1.0 },
+        { "tag": "irrumatio", "weight": 0.95 },
+        { "tag": "deepthroat", "weight": 0.95 },
+        { "tag": "cooperative_fellatio", "weight": 0.9 },
+        { "tag": "after_fellatio", "weight": 0.85 },
+        { "tag": "licking_penis", "weight": 0.8 },
+        { "tag": "imminent_fellatio", "weight": 0.5 },
+        { "tag": "implied_fellatio", "weight": 0.5 },
+        { "tag": "oral_invitation", "weight": 0.5 },
+        { "tag": "simulated_fellatio", "weight": 0.45 }
       ]
     },
     {
@@ -265,7 +304,12 @@
         "girl_on_top",
         "furry",
         "pokemon_(creature)",
-        "kemonomimi_mode"
+        "kemonomimi_mode",
+        "fox_girl",
+        "dog_girl",
+        "wolf_girl",
+        "cat_girl",
+        "monsterification"
       ],
       "evidence": [
         { "tag": "monster_girl", "weight": 1.0 },
@@ -279,6 +323,7 @@
         { "tag": "centauroid", "weight": 0.75 },
         { "tag": "mermaid", "weight": 0.7 },
         { "tag": "female_goblin", "weight": 0.75 },
+        { "tag": "goblin", "weight": 0.55 },
         { "tag": "demon_girl", "weight": 0.65 }
       ]
     },
@@ -286,13 +331,27 @@
       "id": "furry",
       "folder": "furry",
       "priority": 9,
-      "ignore": ["animal_ears", "fake_animal_ears", "kemonomimi_mode"],
+      "ignore": [
+        "animal_ears",
+        "fake_animal_ears",
+        "kemonomimi_mode",
+        "fox_girl",
+        "dog_girl",
+        "wolf_girl",
+        "cat_girl",
+        "animal_focus",
+        "animalization"
+      ],
       "evidence": [
         { "tag": "furry", "weight": 1.0 },
         { "tag": "furry_male", "weight": 0.95 },
         { "tag": "furry_female", "weight": 0.95 },
         { "tag": "furry_with_furry", "weight": 0.9 },
-        { "tag": "furry_with_non-furry", "weight": 0.85 }
+        { "tag": "furry_with_non-furry", "weight": 0.85 },
+        { "tag": "body_fur", "weight": 0.55 },
+        { "tag": "digitigrade", "weight": 0.5 },
+        { "tag": "animal_nose", "weight": 0.5 },
+        { "tag": "snout", "weight": 0.5 }
       ]
     },
     {
@@ -304,16 +363,27 @@
         "pokemon_ears",
         "pokemon_tail",
         "jessie_(pokemon)_(cosplay)",
-        "female_protagonist_(pokemon_go)_(cosplay)"
+        "female_protagonist_(pokemon_go)_(cosplay)",
+        "dawn_(pokemon)",
+        "lillie_(pokemon)",
+        "may_(pokemon)",
+        "marnie_(pokemon)",
+        "hilda_(pokemon)",
+        "gloria_(pokemon)",
+        "cynthia_(pokemon)",
+        "red_(pokemon)",
+        "berry_(pokemon)"
       ],
       "evidence": [
         { "tag": "pokemon_(creature)", "weight": 1.0 },
         { "tag": "holding_pokemon", "weight": 0.9 },
         { "tag": "shiny_pokemon", "weight": 0.9 },
         { "tag": "mega_pokemon", "weight": 0.9 },
-        { "tag": "legendary_pokemon", "weight": 0.9 },
+        { "tag": "clothed_pokemon", "weight": 0.9 },
+        { "tag": "starter_pokemon_trio", "weight": 0.85 },
         { "tag": "pokemon_on_shoulder", "weight": 0.85 },
         { "tag": "pokemon_on_head", "weight": 0.85 },
+        { "tag": "riding_pokemon", "weight": 0.8 },
         { "tag": "poke_ball", "weight": 0.45 }
       ]
     }

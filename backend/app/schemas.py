@@ -18,6 +18,8 @@ class AppSettings(BaseModel):
     default_migrate_mode: MigrateMode = "copy"
     scan_recursive: bool = True
     experimental_media_enabled: bool = False
+    # Dedicated real-vs-anime ONNX gate (imgutils / deepghs anime_real_cls).
+    experimental_style_detector_enabled: bool = False
     # Shuck3r-style persisted preferences (survive reload / restart).
     selected_tags: list[str] = Field(default_factory=list)
     # Shared ORT run lock; preprocess overlaps across workers. Prefer 2 on GPU.
@@ -150,6 +152,13 @@ class RealismDebugEvalRequest(BaseModel):
     count_per_class: int = Field(default=12, ge=5, le=40)
     tagger_model: str | None = None
     compare_models: bool = False
+
+
+class StyleDebugEvalRequest(BaseModel):
+    count_per_class: int = Field(default=12, ge=5, le=40)
+    tagger_model: str | None = None
+    detectors: list[str] | None = None
+    uncertain_threshold: float = Field(default=0.85, ge=0.5, le=0.99)
 
 
 class RealismDebugEvalItem(BaseModel):
