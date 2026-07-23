@@ -33,6 +33,12 @@ WD_DEEPGHS_PREFIX = {
     "EVA02_Large": "SmilingWolf/wd-eva02-large-tagger-v3",
 }
 
+# Always surface these for real_life routing even when below wd_general_threshold.
+# Probe (debug_realism_probe.py): EVA02 anime max realistic≈0.004; photos often 0.11–0.99.
+WD_REALISM_ALWAYS_TAGS = frozenset({"realistic", "photorealistic"})
+WD_REALISM_FLOOR = 0.10
+
+
 def _force_cpu() -> bool:
     return os.getenv("FORCE_CPU_INFERENCE", "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -290,12 +296,16 @@ class InferenceEngine:
         results: list[dict[str, float]] = []
         for pred in preds_list:
             labels = list(zip(tag_names, pred.astype(float)))
-            general = {
-                name: float(score)
-                for i in general_idx
-                for name, score in [labels[i]]
-                if score > general_threshold
-            }
+            general: dict[str, float] = {}
+            for i in general_idx:
+                name, score = labels[i]
+                value = float(score)
+                if value > general_threshold:
+                    general[name] = value
+                elif name in WD_REALISM_ALWAYS_TAGS and value >= WD_REALISM_FLOOR:
+                    # Keep weak-but-discriminative realism for accidental photos
+                    # (moon/sky etc.) without lowering the global general threshold.
+                    general[name] = value
             results.append(_normalize_scores(general))
         return results
 
