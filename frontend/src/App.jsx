@@ -131,7 +131,7 @@ function App() {
     migrating: false,
     reclassifying: false,
   });
-  const [reclassifyModel, setReclassifyModel] = useState("wd_eva02_large");
+  const [reclassifyModel, setReclassifyModel] = useState("wd_swinv2_v3");
   const finalTagTimersRef = useRef({});
   const pollTimerRef = useRef(null);
   const tagsHydratedRef = useRef(false);
@@ -260,6 +260,7 @@ function App() {
       total: items.length,
       reviewNeeded: items.filter((x) => x.needs_review).length,
       approved: items.filter((x) => x.status === "approved").length,
+      rejected: items.filter((x) => x.status === "rejected").length,
       migrated: items.filter((x) => x.status === "migrated").length,
     };
   }, [items]);
@@ -351,7 +352,7 @@ function App() {
     }
   }
 
-  async function handleStartRun() {
+  async function handleStartRun(runMode = "classify") {
     setLoading(true);
     setOpsLoading((prev) => ({ ...prev, startingRun: true }));
     setError("");
@@ -361,7 +362,16 @@ function App() {
       }
       const result = await api.startRun({
         ...settings,
-        selected_folders: selectedTags.length > 0 ? selectedTags : null,
+        selected_folders:
+          runMode === "real_life_filter"
+            ? ["real_life"]
+            : selectedTags.length > 0
+              ? selectedTags
+              : null,
+        run_mode: runMode,
+        // Filter mode always enables GIF/video scanning server-side; keep UI in sync.
+        experimental_media_enabled:
+          runMode === "real_life_filter" ? true : settings.experimental_media_enabled,
       });
       setOfflineMode(api.isOfflineMode());
       setRunId(result.run_id);
@@ -418,7 +428,9 @@ function App() {
   async function applyBatch(status) {
     if (selectedIds.length === 0) return;
     if (status === "rejected") {
-      const confirmed = window.confirm("Reject selected items? This may require manual recovery.");
+      const confirmed = window.confirm(
+        "Reject selected items? They stay on disk and are skipped by migrate/reclassify."
+      );
       if (!confirmed) return;
     }
     setOpsLoading((prev) => ({ ...prev, applyingBatch: true }));
@@ -448,9 +460,24 @@ function App() {
       return;
     }
     try {
-      await api.migrateRun(runId, { mode: migrateMode, create_missing_folders: true });
+      const result = await api.migrateRun(runId, {
+        mode: migrateMode,
+        create_missing_folders: true,
+      });
       setOfflineMode(api.isOfflineMode());
       await refreshItems(runId);
+      const failed = Number(result?.failed_count || 0);
+      const moved = Number(result?.migrated_count || 0);
+      if (failed > 0) {
+        const sample = (result?.results || [])
+          .filter((r) => !r.success && r.error)
+          .slice(0, 3)
+          .map((r) => r.error)
+          .join("; ");
+        setError(
+          `Migrate finished: ${moved} ok, ${failed} failed${sample ? ` (${sample})` : ""}`
+        );
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -471,16 +498,8 @@ function App() {
   }
 
   useEffect(() => {
-    const runModel = runStatus?.tagger_model || settings.tagger_model;
-    if (runModel === "wd_swinv2_v3") {
-      setReclassifyModel("wd_eva02_large");
-      return;
-    }
-    if (runModel === "wd_eva02_large") {
-      setReclassifyModel("ml_danbooru");
-      return;
-    }
-    setReclassifyModel("wd_eva02_large");
+    // Default reclassify to SwinV2 — EVA02 is accurate but ~10–20s/image on GPU.
+    setReclassifyModel("wd_swinv2_v3");
   }, [runStatus?.tagger_model, settings.tagger_model]);
 
   async function handleReclassifyNeedsReview() {
@@ -905,11 +924,24 @@ function App() {
           <button
             type="button"
             disabled={loading || opsLoading.startingRun || runActive}
-            onClick={handleStartRun}
+            onClick={() => handleStartRun("classify")}
           >
             {opsLoading.startingRun ? "Starting…" : "Start run"}
           </button>
+          <button
+            type="button"
+            className="secondary"
+            title="Scan root (including GIF/video). Keep only confident real_life hits — nothing else."
+            disabled={loading || opsLoading.startingRun || runActive}
+            onClick={() => handleStartRun("real_life_filter")}
+          >
+            {opsLoading.startingRun ? "Starting…" : "Filter real-life only"}
+          </button>
         </div>
+        <p className="help">
+          Filter real-life only: style-first hybrid (skip WD on clear anime), capped GIF/video
+          frames, stills stay batched. Only blended <code>real_life</code> hits are kept.
+        </p>
         <div className="stats">
           {selectedTags.length === 0 ? (
             <span className="muted">No tags selected</span>
@@ -1014,8 +1046,9 @@ function App() {
             ["completed", "failed", "cancelled"].includes(runStatus.status) && (
               <div className="actions reclassify-banner" role="region" aria-label="Reclassify needs review">
                 <span>
-                  {stats.reviewNeeded} item{stats.reviewNeeded === 1 ? "" : "s"} need review — retry with a
-                  stronger model (approved/rejected/migrated stay untouched).
+                  {stats.reviewNeeded} item{stats.reviewNeeded === 1 ? "" : "s"} need review — retry with
+                  another model (approved/rejected/migrated stay untouched). SwinV2 is much faster than
+                  EVA02.
                 </span>
                 <label className="reclassify-model">
                   <span className="sr-only">Reclassify model</span>
@@ -1057,6 +1090,7 @@ function App() {
             <span>Listed: {stats.total}</span>
             <span>Needs review: {stats.reviewNeeded}</span>
             <span>Approved: {stats.approved}</span>
+            <span>Rejected: {stats.rejected}</span>
             <span>Migrated: {stats.migrated}</span>
           </div>
           <div className="actions">

@@ -162,6 +162,7 @@ def _classify_from_scores(
     matched_tags: set[str],
     confidence_threshold: float,
     experimental_style_detector_enabled: bool = False,
+    hybrid_real_life: bool = False,
 ) -> _ImageInferenceResult:
     primary_tag, primary_score, secondary = choose_best_destination(scores, matched_tags)
     needs_review = False
@@ -208,9 +209,300 @@ def _classify_from_scores(
         reason=reason,
         inference_failed=False,
     )
+    if hybrid_real_life:
+        return _apply_hybrid_real_life_filter(result)
     if experimental_style_detector_enabled:
         return _apply_experimental_style_gate(result, matched_tags)
     return result
+
+
+def _hybrid_reject(
+    image_path: Path,
+    scores: dict[str, float] | None,
+    reason: str,
+) -> _ImageInferenceResult:
+    return _ImageInferenceResult(
+        image_path=image_path,
+        scores=scores or {},
+        primary_tag=None,
+        primary_score=None,
+        secondary=[],
+        needs_review=False,
+        reason=reason,
+        inference_failed=False,
+    )
+
+
+def _apply_hybrid_real_life_filter(
+    result: _ImageInferenceResult,
+    style=None,
+) -> _ImageInferenceResult:
+    """Blend WD realism tags with experimental real-vs-anime detector scores."""
+    from .style_detectors import (
+        REAL_LIFE_FOLDER,
+        blend_real_life_scores,
+        detect_production_style,
+        is_style_anime_early_reject,
+    )
+
+    if result.inference_failed:
+        return result
+    if style is None:
+        try:
+            # Raw scores (no uncertain band) so weak-but-useful style signal can blend.
+            style = detect_production_style(result.image_path, uncertain_threshold=None)
+        except Exception:
+            logger.exception("hybrid_style_detector_failed path=%s", result.image_path)
+            return _ImageInferenceResult(
+                image_path=result.image_path,
+                scores=result.scores,
+                primary_tag=None,
+                primary_score=None,
+                secondary=result.secondary,
+                needs_review=True,
+                reason="Hybrid style detector failed; skipped for real_life filter.",
+                inference_failed=False,
+            )
+
+    if is_style_anime_early_reject(style) and not result.scores:
+        # Style-first path already rejected; keep a clear reason.
+        return _hybrid_reject(
+            result.image_path,
+            {},
+            (
+                f"style_early_reject "
+                f"(style_real={float(style.scores.get('real', 0.0)):.3f}, "
+                f"style_anime={float(style.scores.get('anime', 0.0)):.3f})"
+            ),
+        )
+
+    accepted, hybrid, detail = blend_real_life_scores(result.scores, style)
+    note = (
+        f"hybrid={hybrid:.3f} "
+        f"(wd={detail['wd_realism']:.3f}, style_real={detail['style_real']:.3f}, "
+        f"style_anime={detail['style_anime']:.3f})"
+    )
+    if not accepted:
+        return _hybrid_reject(result.image_path, result.scores, f"Not real_life ({note})")
+    secondary = list(result.secondary or [])
+    if result.primary_tag and result.primary_tag != REAL_LIFE_FOLDER:
+        secondary = [
+            {"tag": result.primary_tag, "score": float(result.primary_score or 0.0)},
+            *secondary,
+        ][:4]
+    return _ImageInferenceResult(
+        image_path=result.image_path,
+        scores=result.scores,
+        primary_tag=REAL_LIFE_FOLDER,
+        primary_score=float(hybrid),
+        secondary=secondary,
+        needs_review=False,
+        reason=note,
+        inference_failed=False,
+    )
+
+
+def _extract_scores_for_hybrid(
+    image_path: Path,
+    *,
+    experimental_media_enabled: bool,
+    tagger_model: str,
+    wd_general_threshold: float,
+) -> dict[str, float]:
+    from .style_detectors import FILTER_MEDIA_SAMPLE_MAX
+
+    if experimental_media_enabled and is_experimental_media(image_path):
+        return extract_scores_with_experimental_media(
+            image_path,
+            experimental_media_enabled,
+            tagger_model=tagger_model,
+            wd_general_threshold=wd_general_threshold,
+            sample_count=FILTER_MEDIA_SAMPLE_MAX,
+        )
+    return extract_scores(
+        image_path,
+        tagger_model=tagger_model,
+        wd_general_threshold=wd_general_threshold,
+    )
+
+
+def _infer_hybrid_one_image(
+    image_path: Path,
+    matched_tags: set[str],
+    confidence_threshold: float,
+    experimental_media_enabled: bool,
+    tagger_model: str,
+    wd_general_threshold: float,
+) -> _ImageInferenceResult:
+    """Style-first hybrid: skip WD when CAFormer is strongly anime."""
+    from .style_detectors import detect_production_style, is_style_anime_early_reject
+
+    try:
+        style = detect_production_style(image_path, uncertain_threshold=None)
+    except Exception:
+        logger.exception("hybrid_style_detector_failed path=%s", image_path)
+        return _ImageInferenceResult(
+            image_path=image_path,
+            scores={},
+            primary_tag=None,
+            primary_score=None,
+            secondary=[],
+            needs_review=True,
+            reason="Hybrid style detector failed; skipped for real_life filter.",
+            inference_failed=False,
+        )
+
+    if is_style_anime_early_reject(style):
+        return _hybrid_reject(
+            image_path,
+            {},
+            (
+                f"style_early_reject "
+                f"(style_real={float(style.scores.get('real', 0.0)):.3f}, "
+                f"style_anime={float(style.scores.get('anime', 0.0)):.3f})"
+            ),
+        )
+
+    try:
+        scores = _extract_scores_for_hybrid(
+            image_path,
+            experimental_media_enabled=experimental_media_enabled,
+            tagger_model=tagger_model,
+            wd_general_threshold=wd_general_threshold,
+        )
+    except Exception as err:
+        if _is_provider_related_error(err):
+            logger.exception("inference_provider_failure image=%s", image_path)
+        else:
+            logger.exception("inference_failed image=%s", image_path)
+        return _ImageInferenceResult(
+            image_path=image_path,
+            scores={},
+            primary_tag=None,
+            primary_score=None,
+            secondary=[],
+            needs_review=True,
+            reason="Inference failed for this image; requires manual review.",
+            inference_failed=True,
+        )
+
+    base = _classify_from_scores(
+        image_path,
+        scores,
+        matched_tags,
+        confidence_threshold,
+        hybrid_real_life=False,
+    )
+    return _apply_hybrid_real_life_filter(base, style=style)
+
+
+def _infer_hybrid_batch(
+    image_paths: list[Path],
+    matched_tags: set[str],
+    confidence_threshold: float,
+    experimental_media_enabled: bool,
+    tagger_model: str,
+    wd_general_threshold: float,
+) -> list[_ImageInferenceResult]:
+    """Style-first batch: early-reject anime, WD-batch still survivors only."""
+    from .style_detectors import detect_production_style, is_style_anime_early_reject
+
+    results: list[_ImageInferenceResult | None] = [None] * len(image_paths)
+    survivors: list[tuple[int, Path, object]] = []
+
+    for idx, path in enumerate(image_paths):
+        try:
+            style = detect_production_style(path, uncertain_threshold=None)
+        except Exception:
+            logger.exception("hybrid_style_detector_failed path=%s", path)
+            results[idx] = _ImageInferenceResult(
+                image_path=path,
+                scores={},
+                primary_tag=None,
+                primary_score=None,
+                secondary=[],
+                needs_review=True,
+                reason="Hybrid style detector failed; skipped for real_life filter.",
+                inference_failed=False,
+            )
+            continue
+        if is_style_anime_early_reject(style):
+            results[idx] = _hybrid_reject(
+                path,
+                {},
+                (
+                    f"style_early_reject "
+                    f"(style_real={float(style.scores.get('real', 0.0)):.3f}, "
+                    f"style_anime={float(style.scores.get('anime', 0.0)):.3f})"
+                ),
+            )
+            continue
+        survivors.append((idx, path, style))
+
+    stills = [(i, p, s) for i, p, s in survivors if not is_experimental_media(p)]
+    media = [(i, p, s) for i, p, s in survivors if is_experimental_media(p)]
+
+    if stills:
+        still_paths = [p for _i, p, _s in stills]
+        try:
+            scores_list = extract_scores_batch(
+                still_paths,
+                tagger_model=tagger_model,
+                wd_general_threshold=wd_general_threshold,
+            )
+            if len(scores_list) != len(still_paths):
+                raise RuntimeError("Batch inference result count mismatch")
+            for (idx, path, style), scores in zip(stills, scores_list):
+                base = _classify_from_scores(
+                    path,
+                    scores,
+                    matched_tags,
+                    confidence_threshold,
+                    hybrid_real_life=False,
+                )
+                results[idx] = _apply_hybrid_real_life_filter(base, style=style)
+        except Exception:
+            logger.exception("hybrid_still_batch_failed n=%d", len(stills))
+            for idx, path, style in stills:
+                results[idx] = _infer_hybrid_one_image(
+                    path,
+                    matched_tags,
+                    confidence_threshold,
+                    experimental_media_enabled,
+                    tagger_model,
+                    wd_general_threshold,
+                )
+
+    for idx, path, style in media:
+        try:
+            scores = _extract_scores_for_hybrid(
+                path,
+                experimental_media_enabled=experimental_media_enabled,
+                tagger_model=tagger_model,
+                wd_general_threshold=wd_general_threshold,
+            )
+            base = _classify_from_scores(
+                path,
+                scores,
+                matched_tags,
+                confidence_threshold,
+                hybrid_real_life=False,
+            )
+            results[idx] = _apply_hybrid_real_life_filter(base, style=style)
+        except Exception:
+            logger.exception("hybrid_media_failed path=%s", path)
+            results[idx] = _ImageInferenceResult(
+                image_path=path,
+                scores={},
+                primary_tag=None,
+                primary_score=None,
+                secondary=[],
+                needs_review=True,
+                reason="Inference failed for this image; requires manual review.",
+                inference_failed=True,
+            )
+
+    return [r if r is not None else _hybrid_reject(p, {}, "hybrid_internal_miss") for r, p in zip(results, image_paths)]
 
 
 def _apply_experimental_style_gate(
@@ -327,14 +619,27 @@ def _infer_one_image(
     tagger_model: str = "wd_swinv2_v3",
     wd_general_threshold: float = 0.35,
     experimental_style_detector_enabled: bool = False,
+    hybrid_real_life: bool = False,
 ) -> _ImageInferenceResult:
+    if hybrid_real_life:
+        return _infer_hybrid_one_image(
+            image_path,
+            matched_tags,
+            confidence_threshold,
+            experimental_media_enabled,
+            tagger_model,
+            wd_general_threshold,
+        )
     try:
         if experimental_media_enabled and is_experimental_media(image_path):
+            from .style_detectors import FILTER_MEDIA_SAMPLE_MAX
+
             scores = extract_scores_with_experimental_media(
                 image_path,
                 experimental_media_enabled,
                 tagger_model=tagger_model,
                 wd_general_threshold=wd_general_threshold,
+                sample_count=FILTER_MEDIA_SAMPLE_MAX,
             )
         else:
             scores = extract_scores(
@@ -348,6 +653,7 @@ def _infer_one_image(
             matched_tags,
             confidence_threshold,
             experimental_style_detector_enabled=experimental_style_detector_enabled,
+            hybrid_real_life=False,
         )
     except Exception as err:
         if _is_provider_related_error(err):
@@ -375,9 +681,37 @@ def _infer_batch_with_fallback(
     tagger_model: str = "wd_swinv2_v3",
     wd_general_threshold: float = 0.35,
     experimental_style_detector_enabled: bool = False,
+    hybrid_real_life: bool = False,
 ) -> tuple[list[_ImageInferenceResult], float, str]:
     if not image_paths:
         return [], 0.0, "none"
+
+    if hybrid_real_life:
+        start = time.perf_counter()
+        if requested_mode != "batch" or len(image_paths) == 1:
+            rows = [
+                _infer_hybrid_one_image(
+                    image_paths[0],
+                    matched_tags,
+                    confidence_threshold,
+                    experimental_media_enabled,
+                    tagger_model,
+                    wd_general_threshold,
+                )
+            ]
+            elapsed_ms = (time.perf_counter() - start) * 1000.0
+            mode = "single" if requested_mode == "single" else "hybrid_single"
+            return rows, elapsed_ms, mode
+        rows = _infer_hybrid_batch(
+            image_paths,
+            matched_tags,
+            confidence_threshold,
+            experimental_media_enabled,
+            tagger_model,
+            wd_general_threshold,
+        )
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
+        return rows, elapsed_ms, "hybrid_batch"
 
     if requested_mode != "batch" or len(image_paths) == 1:
         start = time.perf_counter()
@@ -390,6 +724,7 @@ def _infer_batch_with_fallback(
                 tagger_model,
                 wd_general_threshold,
                 experimental_style_detector_enabled,
+                False,
             )
         ]
         elapsed_ms = (time.perf_counter() - start) * 1000.0
@@ -408,6 +743,7 @@ def _infer_batch_with_fallback(
                 tagger_model,
                 wd_general_threshold,
                 experimental_style_detector_enabled,
+                False,
             )
             for p in image_paths
         ]
@@ -430,6 +766,7 @@ def _infer_batch_with_fallback(
                 matched_tags,
                 confidence_threshold,
                 experimental_style_detector_enabled=experimental_style_detector_enabled,
+                hybrid_real_life=False,
             )
             for image_path, scores in zip(image_paths, scores_by_image)
         ]
@@ -451,6 +788,7 @@ def _infer_batch_with_fallback(
                 tagger_model,
                 wd_general_threshold,
                 experimental_style_detector_enabled,
+                False,
             )
             right_rows, right_ms, _ = _infer_batch_with_fallback(
                 image_paths[mid:],
@@ -461,6 +799,7 @@ def _infer_batch_with_fallback(
                 tagger_model,
                 wd_general_threshold,
                 experimental_style_detector_enabled,
+                False,
             )
             return left_rows + right_rows, left_ms + right_ms, "batch_fallback"
         row = _infer_one_image(
@@ -471,6 +810,7 @@ def _infer_batch_with_fallback(
             tagger_model,
             wd_general_threshold,
             experimental_style_detector_enabled,
+            False,
         )
         elapsed_ms = (time.perf_counter() - start) * 1000.0
         return [row], elapsed_ms, "single_fallback"
@@ -673,6 +1013,7 @@ def _execute_run(
     tagger_model: str = "wd_swinv2_v3",
     wd_general_threshold: float = 0.35,
     experimental_style_detector_enabled: bool = False,
+    real_life_filter: bool = False,
 ) -> None:
     try:
         # Mark running immediately so clients can cancel during provider probe / scan.
@@ -765,20 +1106,43 @@ def _execute_run(
         infer_elapsed_ms_total = 0.0
         infer_sample_count = 0
         max_workers = _get_max_inference_workers(max_inference_workers)
+        if real_life_filter:
+            # Style-first cascade benefits from a bit more CPU overlap.
+            max_workers = max(max_workers, 3)
+            max_workers = min(max_workers, 4)
         logger.info(
-            "run_inference_workers run_id=%d workers=%d total_images=%d device=%s",
+            "run_inference_workers run_id=%d workers=%d total_images=%d device=%s hybrid=%s",
             run_id,
             max_workers,
             scan_output.stats.eligible_images,
             provider_state.get("likely_device"),
+            real_life_filter,
         )
 
         with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="infer") as executor:
             pending: dict[Future[tuple[list[_ImageInferenceResult], float, str]], list[Path]] = {}
-            batches = [
-                ordered_paths[idx : idx + batch_size]
-                for idx in range(0, len(ordered_paths), batch_size)
-            ]
+            # Keep stills in true WD batches; process GIF/video one-at-a-time so a
+            # single media file cannot collapse an entire batch to single mode.
+            if experimental_media_enabled or real_life_filter:
+                stills = [p for p in ordered_paths if not is_experimental_media(p)]
+                media = [p for p in ordered_paths if is_experimental_media(p)]
+                batches = [
+                    stills[idx : idx + batch_size]
+                    for idx in range(0, len(stills), batch_size)
+                ]
+                batches.extend([[p] for p in media])
+                logger.info(
+                    "run_queue_split run_id=%d stills=%d media=%d still_batches=%d",
+                    run_id,
+                    len(stills),
+                    len(media),
+                    len(batches) - len(media),
+                )
+            else:
+                batches = [
+                    ordered_paths[idx : idx + batch_size]
+                    for idx in range(0, len(ordered_paths), batch_size)
+                ]
             iterator = iter(batches)
 
             def _submit_until_capacity() -> None:
@@ -797,6 +1161,7 @@ def _execute_run(
                         tagger_model,
                         wd_general_threshold,
                         experimental_style_detector_enabled,
+                        real_life_filter,
                     )
                     pending[future] = next_batch
 
@@ -828,11 +1193,29 @@ def _execute_run(
 
                     for result in batch_results:
                         relative_path = str(result.image_path.relative_to(root_repo))
+                        is_real_life_hit = (
+                            result.primary_tag is not None
+                            and normalize_tag_name(result.primary_tag)
+                            in {"real_life", "photo"}
+                            and not result.needs_review
+                            and not result.inference_failed
+                        )
+                        # Filter mode: only persist real_life hits (approved).
+                        if real_life_filter and not is_real_life_hit:
+                            processed += 1
+                            if result.inference_failed:
+                                failed += 1
+                            _update_run_progress(run_id, processed, failed)
+                            continue
+
                         suggested_destination = (
                             str(categories_root / sanitize_folder_name(result.primary_tag))
                             if result.primary_tag is not None
                             else None
                         )
+                        status = "approved" if not result.needs_review else "proposed"
+                        if real_life_filter and is_real_life_hit:
+                            status = "approved"
                         execute(
                             """
                             INSERT INTO items (
@@ -851,8 +1234,8 @@ def _execute_run(
                                 suggested_destination,
                                 result.primary_tag,
                                 suggested_destination,
-                                "approved" if not result.needs_review else "proposed",
-                                1 if result.needs_review else 0,
+                                status,
+                                1 if result.needs_review and not real_life_filter else 0,
                                 result.reason,
                             ),
                         )
@@ -1061,6 +1444,12 @@ def _execute_reclassify(
         )
 
         max_workers = _get_max_inference_workers(max_inference_workers)
+        # EVA02 is heavy; keep workers modest. SwinV2/ML can overlap a bit more.
+        if tagger_model == "wd_eva02_large":
+            max_workers = min(max_workers, 2)
+        else:
+            max_workers = max(max_workers, 3)
+            max_workers = min(max_workers, 4)
         cancelled = False
         infer_elapsed_ms_total = 0.0
         infer_sample_count = 0
@@ -1069,10 +1458,29 @@ def _execute_reclassify(
         executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="reclass")
         pending: dict[Future[tuple[list[_ImageInferenceResult], float, str]], list[Path]] = {}
         try:
-            batches = [
-                ordered_paths[idx : idx + batch_size]
-                for idx in range(0, len(ordered_paths), batch_size)
-            ]
+            # Keep stills in true WD batches; media one-at-a-time so one GIF/video
+            # cannot collapse an entire batch to single-file fallback.
+            if experimental_media_enabled:
+                stills = [p for p in ordered_paths if not is_experimental_media(p)]
+                media = [p for p in ordered_paths if is_experimental_media(p)]
+                batches = [
+                    stills[idx : idx + batch_size]
+                    for idx in range(0, len(stills), batch_size)
+                ]
+                batches.extend([[p] for p in media])
+                logger.info(
+                    "reclassify_queue_split run_id=%d stills=%d media=%d workers=%d model=%s",
+                    run_id,
+                    len(stills),
+                    len(media),
+                    max_workers,
+                    tagger_model,
+                )
+            else:
+                batches = [
+                    ordered_paths[idx : idx + batch_size]
+                    for idx in range(0, len(ordered_paths), batch_size)
+                ]
             iterator = iter(batches)
 
             def _submit_until_capacity() -> None:
@@ -1331,7 +1739,7 @@ def get_providers() -> dict[str, object]:
 
 @router.post("/runs/start", response_model=StartRunResponse)
 def start_run(payload: StartRunRequest) -> StartRunResponse:
-    logger.info("run_start_requested")
+    logger.info("run_start_requested mode=%s", payload.run_mode)
     current = _settings_from_db()
     _apply_runtime_inference_env(current)
     resolved = resolve_settings(
@@ -1339,6 +1747,7 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
     )
     root_repo = Path(resolved.root_repo).expanduser()
     categories_root = Path(resolved.categories_root).expanduser()
+    real_life_filter = payload.run_mode == "real_life_filter"
 
     if not resolved.root_repo or not resolved.categories_root:
         raise HTTPException(status_code=400, detail="root_repo and categories_root are required")
@@ -1361,15 +1770,25 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
                 detail=f"Unable to create categories_root ({categories_root}): {err}",
             )
 
-    selected_folders = payload.selected_folders
-    if not selected_folders:
-        selected_folders = list(current.selected_tags)
+    # Real-life filter: GIF/video on + hybrid WD realism × style detector.
+    experimental_media_enabled = (
+        True if real_life_filter else bool(resolved.experimental_media_enabled)
+    )
+    style_detector_enabled = (
+        True if real_life_filter else bool(current.experimental_style_detector_enabled)
+    )
+    if real_life_filter:
+        selected_folders = ["real_life"]
+    else:
+        selected_folders = payload.selected_folders
+        if not selected_folders:
+            selected_folders = list(current.selected_tags)
 
     try:
         known_tags = load_known_tags(TAGS_CSV)
         mappings = discover_tag_folders(categories_root, known_tags, selected_folders)
         matched_tags = {m.matched_tag for m in mappings if m.matched and m.matched_tag}
-        if current.experimental_style_detector_enabled:
+        if style_detector_enabled or real_life_filter:
             matched_tags.add("real_life")
         if not matched_tags:
             raise HTTPException(
@@ -1406,29 +1825,36 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
 
     worker = threading.Thread(
         target=_execute_run,
-        args=(
-            run_id,
-            root_repo,
-            categories_root,
-            resolved.confidence_threshold,
-            matched_tags,
-            resolved.scan_recursive,
-            resolved.experimental_media_enabled,
-            current.max_inference_workers,
-            current.inference_batch_size,
-            current.tagger_model,
-            current.wd_general_threshold,
-            current.experimental_style_detector_enabled,
-        ),
+        kwargs={
+            "run_id": run_id,
+            "root_repo": root_repo,
+            "categories_root": categories_root,
+            "confidence_threshold": resolved.confidence_threshold,
+            "matched_tags": matched_tags,
+            "scan_recursive": resolved.scan_recursive,
+            "experimental_media_enabled": experimental_media_enabled,
+            "max_inference_workers": current.max_inference_workers,
+            "inference_batch_size": current.inference_batch_size,
+            "tagger_model": current.tagger_model,
+            "wd_general_threshold": current.wd_general_threshold,
+            "experimental_style_detector_enabled": style_detector_enabled,
+            "real_life_filter": real_life_filter,
+        },
         daemon=True,
     )
     worker.start()
+    mode_note = (
+        " Real-life filter: experimental media on; hybrid WD realism + style detector; "
+        "only real_life hits are kept (auto-approved)."
+        if real_life_filter
+        else ""
+    )
     return StartRunResponse(
         run_id=run_id,
         status="pending",
         mappings=mappings,
         unmatched_folders=[m.folder_name for m in mappings if not m.matched],
-        message=f"Run queued; poll /api/runs/{run_id}/status for progress.",
+        message=f"Run queued; poll /api/runs/{run_id}/status for progress.{mode_note}",
     )
 
 
@@ -1589,18 +2015,95 @@ def get_run_items(
     return [_item_from_row(r, include_full_scores=include_scores) for r in rows]
 
 
+def _secondary_tags_from_row(row: dict) -> list[str]:
+    secondary = from_json(row.get("secondary_json") or "[]", default=[])
+    tags: list[str] = []
+    if isinstance(secondary, list):
+        for entry in secondary:
+            if isinstance(entry, dict) and entry.get("tag"):
+                tags.append(str(entry["tag"]).strip())
+            elif isinstance(entry, str) and entry.strip():
+                tags.append(entry.strip())
+    return [t for t in tags if t]
+
+
+def _resolve_item_assignment(
+    row: dict,
+    *,
+    final_tag_override: str | None = None,
+    categories_root: Path | None = None,
+) -> tuple[str | None, str | None]:
+    """Pick (final_tag, final_destination) for approve/migrate.
+
+    Needs-review items often have primary_tag cleared but keep a secondary
+    suggestion — approve must still resolve a folder or migrate cannot run.
+    """
+    tag = (final_tag_override or "").strip() or None
+    if not tag:
+        for candidate in (
+            row.get("final_tag"),
+            row.get("primary_tag"),
+            *(_secondary_tags_from_row(row)[:1]),
+        ):
+            if candidate and str(candidate).strip():
+                tag = str(candidate).strip()
+                break
+
+    destination = row.get("final_destination") or row.get("suggested_destination")
+    if destination and tag:
+        # If an existing destination folder already matches the tag, keep it.
+        dest_path = Path(str(destination))
+        if sanitize_folder_name(dest_path.name) == sanitize_folder_name(tag):
+            return tag, str(dest_path)
+    if tag and categories_root is not None:
+        return tag, str(Path(categories_root) / sanitize_folder_name(tag))
+    if destination:
+        return tag, str(destination)
+    return tag, None
+
+
 @router.patch("/items/{item_id}", response_model=ClassifiedItem)
 def update_item(item_id: int, payload: UpdateItemRequest) -> ClassifiedItem:
     row = fetch_one("SELECT * FROM items WHERE id = ?", (item_id,))
     if not row:
         raise HTTPException(status_code=404, detail="Item not found")
+    run = fetch_one("SELECT categories_root FROM runs WHERE id = ?", (row["run_id"],))
+    categories_root = Path(run["categories_root"]) if run and run.get("categories_root") else None
     new_status = payload.status if payload.status is not None else row["status"]
-    new_final_tag = payload.final_tag if payload.final_tag is not None else row["final_tag"]
-    new_final_destination = (
-        str(Path(row["suggested_destination"]).parent / sanitize_folder_name(new_final_tag))
-        if row["suggested_destination"] and new_final_tag
-        else row["final_destination"]
-    )
+    tag_override = payload.final_tag if payload.final_tag is not None else None
+
+    if new_status == "rejected":
+        # Reject = leave file in place; never invent a migrate destination.
+        new_final_tag = tag_override.strip() if isinstance(tag_override, str) and tag_override.strip() else None
+        new_final_destination = None
+        new_needs_review = 0
+        new_review_reason = "Rejected by user"
+    else:
+        new_final_tag, new_final_destination = _resolve_item_assignment(
+            row,
+            final_tag_override=tag_override,
+            categories_root=categories_root,
+        )
+        # Approving without any resolvable destination cannot migrate later.
+        if new_status == "approved" and not new_final_destination:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Cannot approve without a destination tag. "
+                    "Set Final tag (or ensure a secondary suggestion exists) first."
+                ),
+            )
+        new_needs_review = (
+            0
+            if new_status in {"reviewed", "approved", "migrated"}
+            else row["needs_review"]
+        )
+        new_review_reason = (
+            None
+            if new_status in {"reviewed", "approved", "migrated"}
+            else row["review_reason"]
+        )
+
     execute(
         """
         UPDATE items
@@ -1611,8 +2114,8 @@ def update_item(item_id: int, payload: UpdateItemRequest) -> ClassifiedItem:
             new_status,
             new_final_tag,
             new_final_destination,
-            0 if new_status in {"reviewed", "approved", "rejected", "migrated"} else row["needs_review"],
-            None if new_status in {"reviewed", "approved", "rejected", "migrated"} else row["review_reason"],
+            new_needs_review,
+            new_review_reason,
             item_id,
         ),
     )
@@ -1695,6 +2198,8 @@ def get_item_preview(
 def batch_update(run_id: int, payload: BatchUpdateRequest) -> dict:
     if not payload.item_ids:
         return {"updated": 0, "skipped": 0}
+    run = fetch_one("SELECT categories_root FROM runs WHERE id = ?", (run_id,))
+    categories_root = Path(run["categories_root"]) if run and run.get("categories_root") else None
     updated = 0
     skipped = 0
     for item_id in payload.item_ids:
@@ -1703,12 +2208,35 @@ def batch_update(run_id: int, payload: BatchUpdateRequest) -> dict:
             skipped += 1
             continue
         new_status = payload.status if payload.status is not None else row["status"]
-        new_final_tag = payload.final_tag if payload.final_tag is not None else row["final_tag"]
-        new_final_destination = (
-            str(Path(row["suggested_destination"]).parent / sanitize_folder_name(new_final_tag))
-            if row["suggested_destination"] and new_final_tag
-            else row["final_destination"]
-        )
+        tag_override = payload.final_tag if payload.final_tag is not None else None
+        if new_status == "rejected":
+            new_final_tag = (
+                tag_override.strip()
+                if isinstance(tag_override, str) and tag_override.strip()
+                else None
+            )
+            new_final_destination = None
+            new_needs_review = 0
+            new_review_reason = "Rejected by user"
+        else:
+            new_final_tag, new_final_destination = _resolve_item_assignment(
+                row,
+                final_tag_override=tag_override,
+                categories_root=categories_root,
+            )
+            if new_status == "approved" and not new_final_destination:
+                skipped += 1
+                continue
+            new_needs_review = (
+                0
+                if new_status in {"reviewed", "approved", "migrated"}
+                else row["needs_review"]
+            )
+            new_review_reason = (
+                None
+                if new_status in {"reviewed", "approved", "migrated"}
+                else row["review_reason"]
+            )
         execute(
             """
             UPDATE items
@@ -1719,8 +2247,8 @@ def batch_update(run_id: int, payload: BatchUpdateRequest) -> dict:
                 new_status,
                 new_final_tag,
                 new_final_destination,
-                0 if new_status in {"reviewed", "approved", "rejected", "migrated"} else row["needs_review"],
-                None if new_status in {"reviewed", "approved", "rejected", "migrated"} else row["review_reason"],
+                new_needs_review,
+                new_review_reason,
                 item_id,
             ),
         )
@@ -1730,18 +2258,30 @@ def batch_update(run_id: int, payload: BatchUpdateRequest) -> dict:
 
 @router.post("/runs/{run_id}/migrate", response_model=MigrateResponse)
 def migrate_run(run_id: int, payload: MigrateRequest) -> MigrateResponse:
-    run = fetch_one("SELECT status FROM runs WHERE id = ?", (run_id,))
+    run = fetch_one("SELECT status, categories_root FROM runs WHERE id = ?", (run_id,))
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
     if run["status"] not in {"completed", "cancelled"}:
         raise HTTPException(status_code=409, detail="Run must be completed/cancelled before migration")
+    categories_root = Path(run["categories_root"]) if run.get("categories_root") else None
     rows = fetch_all("SELECT * FROM items WHERE run_id = ? AND status = 'approved'", (run_id,))
     results = []
     migrated_count = 0
     failed_count = 0
     for row in rows:
         source = Path(row["file_path"])
-        final_destination = row["final_destination"]
+        resolved_tag, resolved_dest = _resolve_item_assignment(
+            row, categories_root=categories_root
+        )
+        final_destination = resolved_dest or row["final_destination"]
+        # Persist repaired assignment so retries and UI stay consistent.
+        if resolved_tag and resolved_dest and (
+            row.get("final_tag") != resolved_tag or row.get("final_destination") != resolved_dest
+        ):
+            execute(
+                "UPDATE items SET final_tag = ?, final_destination = ? WHERE id = ?",
+                (resolved_tag, resolved_dest, row["id"]),
+            )
         if not final_destination:
             failed_count += 1
             results.append(
@@ -1754,20 +2294,55 @@ def migrate_run(run_id: int, payload: MigrateRequest) -> MigrateResponse:
                 }
             )
             continue
-        if not source.exists():
-            failed_count += 1
-            results.append(
-                {
-                    "item_id": row["id"],
-                    "source": str(source),
-                    "destination": final_destination,
-                    "success": False,
-                    "error": "Source file does not exist",
-                }
-            )
-            continue
 
         destination_folder = Path(final_destination)
+        destination = destination_folder / source.name
+
+        # Source already gone but file sits at destination (prior move / manual).
+        if not source.exists():
+            if destination.exists() and destination.is_file():
+                try:
+                    execute(
+                        "UPDATE items SET status = 'migrated', migrated_to = ? WHERE id = ?",
+                        (str(destination), row["id"]),
+                    )
+                    migrated_count += 1
+                    results.append(
+                        {
+                            "item_id": row["id"],
+                            "source": str(source),
+                            "destination": str(destination),
+                            "success": True,
+                            "error": None,
+                        }
+                    )
+                except Exception:
+                    logger.exception(
+                        "failed to persist already-migrated status item_id=%s", row["id"]
+                    )
+                    failed_count += 1
+                    results.append(
+                        {
+                            "item_id": row["id"],
+                            "source": str(source),
+                            "destination": str(destination),
+                            "success": False,
+                            "error": "Already at destination but DB update failed",
+                        }
+                    )
+            else:
+                failed_count += 1
+                results.append(
+                    {
+                        "item_id": row["id"],
+                        "source": str(source),
+                        "destination": str(destination),
+                        "success": False,
+                        "error": "Source file does not exist",
+                    }
+                )
+            continue
+
         try:
             if payload.create_missing_folders:
                 destination_folder.mkdir(parents=True, exist_ok=True)
@@ -1808,7 +2383,6 @@ def migrate_run(run_id: int, payload: MigrateRequest) -> MigrateResponse:
             )
             continue
 
-        destination = destination_folder / source.name
         migration_result = migrate_file(source, destination, payload.mode)
         migration_result.item_id = row["id"]
         if migration_result.success:

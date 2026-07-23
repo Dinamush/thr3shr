@@ -376,3 +376,83 @@ def test_approve_then_migrate_end_to_end(tmp_path: Path) -> None:
         mig.raise_for_status()
         assert mig.json()["migrated_count"] == 1
         assert (dest / "review_me.jpg").is_file()
+
+
+def test_approve_secondary_only_then_migrate(tmp_path: Path) -> None:
+    """Below-threshold items clear primary_tag but keep secondary — approve must still migrate."""
+    root = tmp_path / "root"
+    cats = tmp_path / "cats"
+    root.mkdir()
+    cats.mkdir()
+    src = root / "weak.jpg"
+    src.write_bytes(b"weak")
+    run_id = _seed_completed_run(
+        root,
+        cats,
+        [
+            {
+                "file_path": str(src),
+                "primary_tag": None,
+                "primary_score": None,
+                "secondary": [{"tag": "loli", "score": 0.45}],
+                "suggested_destination": None,
+                "final_tag": None,
+                "final_destination": None,
+                "status": "proposed",
+                "needs_review": True,
+                "review_reason": "Below threshold",
+            }
+        ],
+    )
+    item = fetch_one("SELECT id FROM items WHERE run_id = ?", (run_id,))
+    with TestClient(app) as client:
+        patch = client.patch(f"/api/items/{item['id']}", json={"status": "approved"})
+        patch.raise_for_status()
+        body = patch.json()
+        assert body["status"] == "approved"
+        assert body["final_tag"] == "loli"
+        assert body["final_destination"].endswith("loli")
+        mig = client.post(
+            f"/api/runs/{run_id}/migrate",
+            json={"mode": "move", "create_missing_folders": True},
+        )
+        mig.raise_for_status()
+        assert mig.json()["migrated_count"] == 1
+        assert mig.json()["failed_count"] == 0
+        assert not src.exists()
+        assert (cats / "loli" / "weak.jpg").is_file()
+
+def test_migrate_reconciles_already_at_destination(tmp_path: Path) -> None:
+    """Source gone but file already in destination → mark migrated."""
+    root = tmp_path / "root"
+    dest = tmp_path / "cats" / "real_life"
+    root.mkdir()
+    dest.mkdir(parents=True)
+    src = root / "photo.jpg"
+    # File already at destination; source path is stale.
+    (dest / "photo.jpg").write_bytes(b"already-there")
+    run_id = _seed_completed_run(
+        root,
+        dest.parent,
+        [
+            {
+                "file_path": str(src),
+                "primary_tag": "real_life",
+                "primary_score": 0.9,
+                "final_destination": str(dest),
+                "status": "approved",
+            }
+        ],
+    )
+    with TestClient(app) as client:
+        resp = client.post(
+            f"/api/runs/{run_id}/migrate",
+            json={"mode": "move", "create_missing_folders": True},
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+        assert payload["migrated_count"] == 1
+        assert payload["failed_count"] == 0
+        item = fetch_one("SELECT status, migrated_to FROM items WHERE run_id = ?", (run_id,))
+        assert item["status"] == "migrated"
+        assert item["migrated_to"].endswith("photo.jpg")

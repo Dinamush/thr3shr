@@ -674,13 +674,15 @@ def extract_scores_with_experimental_media(
     *,
     tagger_model: str = TAGGER_MODEL_WD_SWINV2,
     wd_general_threshold: float = 0.35,
+    sample_count: int | None = None,
 ) -> dict[str, float]:
     """
     Experimental path: GIF/video via multi-frame sampling + pooled tag scores.
 
-    Samples evenly spaced frames (default 8), runs the tagger on each, then
-    pools with mean/presence so brief but strong cues are not washed out.
+    Samples evenly spaced frames, runs the tagger on each, then pools with
+    mean/presence so brief but strong cues are not washed out.
     Videos use OpenCV (bundled FFmpeg); system ffmpeg CLI is optional fallback.
+    Pass ``sample_count`` to force/cap frames (real_life filter uses 8).
     """
     if not experimental_media_enabled or not is_experimental_media(image_path):
         return extract_scores(
@@ -692,13 +694,15 @@ def extract_scores_with_experimental_media(
     ext = image_path.suffix.lower()
     try:
         if ext == ".gif":
-            frames = sample_gif_frames(image_path)
+            frames = sample_gif_frames(image_path, sample_count=sample_count)
         else:
             try:
-                frames = sample_video_frames(image_path)
+                frames = sample_video_frames(image_path, sample_count=sample_count)
             except Exception as cv_err:
                 # Optional CLI ffmpeg fallback when OpenCV cannot decode.
-                frames = _sample_video_frames_ffmpeg(image_path)
+                frames = _sample_video_frames_ffmpeg(
+                    image_path, sample_count=sample_count
+                )
                 if not frames:
                     raise RuntimeError(
                         f"Video frame extraction failed (OpenCV: {cv_err})"

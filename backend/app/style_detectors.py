@@ -20,6 +20,19 @@ DEFAULT_PRODUCTION_STYLE_MODEL = "caformer_s36_v1.4"
 DEFAULT_UNCERTAIN_THRESHOLD = 0.85
 REAL_LIFE_FOLDER = "real_life"
 
+# Hybrid WD realism + style-detector blend (real_life filter mode).
+HYBRID_WD_WEIGHT = 0.45
+HYBRID_STYLE_WEIGHT = 0.55
+# Tuned for WD SwinV2 photo signal ≈0.2+ blended with CAFormer real score.
+HYBRID_ACCEPT_THRESHOLD = 0.32
+# Strong anime veto even if WD realism is moderately elevated.
+HYBRID_ANIME_VETO = 0.75
+# Style-first cascade: skip WD entirely when CAFormer is clearly anime.
+STYLE_EARLY_REJECT_ANIME = 0.85
+STYLE_EARLY_REJECT_REAL_MAX = 0.25
+# Cap multi-frame WD sampling in real_life filter mode (speed).
+FILTER_MEDIA_SAMPLE_MAX = 8
+
 ImageInput = Path | Image.Image | str
 
 
@@ -96,7 +109,7 @@ def detect_production_style(
     path: Path,
     *,
     model_name: str = DEFAULT_PRODUCTION_STYLE_MODEL,
-    uncertain_threshold: float = DEFAULT_UNCERTAIN_THRESHOLD,
+    uncertain_threshold: float | None = DEFAULT_UNCERTAIN_THRESHOLD,
 ) -> StylePrediction:
     """Experimental classify-path detector (CAFormer + uncertain band)."""
     probe = load_style_probe_image(path)
@@ -106,6 +119,79 @@ def detect_production_style(
         model_name=model_name,
         uncertain_threshold=uncertain_threshold,
     )
+
+
+def wd_realism_score(scores: dict[str, float] | None) -> float:
+    """Max of WD realism tags used for hybrid blending."""
+    if not scores:
+        return 0.0
+    best = 0.0
+    for key, value in scores.items():
+        name = str(key).lower().replace(" ", "_")
+        if name in {"realistic", "photorealistic"}:
+            best = max(best, float(value))
+    return best
+
+
+def is_style_anime_early_reject(
+    style: StylePrediction,
+    *,
+    anime_min: float = STYLE_EARLY_REJECT_ANIME,
+    real_max: float = STYLE_EARLY_REJECT_REAL_MAX,
+) -> bool:
+    """True when style detector alone is enough to reject (skip WD)."""
+    style_real = float(style.scores.get("real", 0.0))
+    style_anime = float(style.scores.get("anime", 0.0))
+    return style_anime >= float(anime_min) and style_real < float(real_max)
+
+
+def blend_real_life_scores(
+    wd_scores: dict[str, float] | None,
+    style: StylePrediction,
+    *,
+    wd_weight: float = HYBRID_WD_WEIGHT,
+    style_weight: float = HYBRID_STYLE_WEIGHT,
+    accept_threshold: float = HYBRID_ACCEPT_THRESHOLD,
+    anime_veto: float = HYBRID_ANIME_VETO,
+) -> tuple[bool, float, dict[str, float]]:
+    """Blend WD realism with style-detector real score.
+
+    Returns (is_real_life, hybrid_score, detail_scores).
+    """
+    wd = wd_realism_score(wd_scores)
+    style_real = float(style.scores.get("real", 0.0))
+    style_anime = float(style.scores.get("anime", 0.0))
+    total_w = max(1e-6, float(wd_weight) + float(style_weight))
+    hybrid = (float(wd_weight) * wd + float(style_weight) * style_real) / total_w
+    detail = {
+        "wd_realism": wd,
+        "style_real": style_real,
+        "style_anime": style_anime,
+        "hybrid": hybrid,
+    }
+    if style_anime >= float(anime_veto) and style_real < style_anime:
+        return False, hybrid, detail
+    # Require style not clearly anime-leaning unless WD is already strong.
+    if style_anime > style_real and wd < 0.35:
+        return False, hybrid, detail
+    # Mid hybrid needs WD corroboration so photoreal-anime edges without
+    # realistic/photorealistic tags do not sneak in on style alone.
+    accepted = (
+        hybrid >= float(accept_threshold)
+        and style_real >= (style_anime * 0.85)
+        and wd >= 0.15
+    )
+    # Strong style photo can carry a weak WD signal (still prefer some WD).
+    if style_real >= 0.85 and style_real > style_anime and wd >= 0.10:
+        accepted = True
+        hybrid = max(hybrid, style_real)
+        detail["hybrid"] = hybrid
+    # Very strong style with near-zero WD still counts (clear photo portraits).
+    elif style_real >= 0.92 and style_real > style_anime:
+        accepted = True
+        hybrid = max(hybrid, style_real)
+        detail["hybrid"] = hybrid
+    return accepted, hybrid, detail
 
 
 def predict_wd_taxonomy(

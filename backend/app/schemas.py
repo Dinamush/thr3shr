@@ -54,6 +54,8 @@ class StartRunRequest(BaseModel):
     categories_root: str | None = None
     confidence_threshold: float | None = None
     selected_folders: list[str] | None = None
+    # classify = normal multi-folder run; real_life_filter = only keep real_life hits.
+    run_mode: Literal["classify", "real_life_filter"] = "classify"
 
 
 class SecondarySuggestion(BaseModel):
