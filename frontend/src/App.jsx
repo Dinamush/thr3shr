@@ -296,6 +296,8 @@ function App() {
   useEffect(() => {
     if (!runId) return;
     localStorage.setItem(ACTIVE_RUN_STORAGE_KEY, String(runId));
+    // Drop sticky thumb failures from prior preview bugs / aborted video loads.
+    setPreviewErrors({});
     startStatusPolling(runId);
     return () => {
       if (pollTimerRef.current) {
@@ -1100,23 +1102,7 @@ function App() {
                   <td title={item.file_path}>
                     <div className="image-cell">
                       {!previewErrors[item.id] && api.getItemPreviewUrl(item.id) ? (
-                        isVideoPreviewPath(item.file_path || item.relative_path) ? (
-                          <video
-                            className="image-thumb"
-                            src={api.getItemPreviewUrl(item.id)}
-                            muted
-                            playsInline
-                            loop
-                            preload="metadata"
-                            controls
-                            onError={() =>
-                              setPreviewErrors((prev) => ({
-                                ...prev,
-                                [item.id]: true,
-                              }))
-                            }
-                          />
-                        ) : (
+                        <div className="image-thumb-wrap">
                           <img
                             className="image-thumb"
                             src={api.getItemPreviewUrl(item.id)}
@@ -1129,7 +1115,12 @@ function App() {
                               }))
                             }
                           />
-                        )
+                          {isVideoPreviewPath(item.file_path || item.relative_path) ? (
+                            <span className="media-badge" title="Video">
+                              ▶
+                            </span>
+                          ) : null}
+                        </div>
                       ) : null}
                       <div className="image-path">{item.relative_path || item.file_path || "-"}</div>
                       {item.review_reason && (

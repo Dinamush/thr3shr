@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import hashlib
+import io
 import logging
 import os
 import shutil
@@ -306,6 +308,53 @@ def sanitize_folder_name(value: str) -> str:
 def is_experimental_media(path: Path) -> bool:
     ext = path.suffix.lower()
     return ext == ".gif" or ext in VIDEO_EXTENSIONS
+
+
+def _preview_cache_dir() -> Path:
+    root = Path(__file__).resolve().parent.parent / ".preview_cache"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def media_preview_still_jpeg(path: Path, *, max_edge: int = 320) -> bytes:
+    """Extract a small JPEG still for GIF/video table thumbnails.
+
+    Serving full MP4s as ``<video>`` thumbs fails under load (hundreds of
+    parallel range requests). A cached JPEG works with a normal ``<img>``.
+    """
+    resolved = path.resolve()
+    try:
+        mtime_ns = resolved.stat().st_mtime_ns
+    except OSError:
+        mtime_ns = 0
+    cache_key = hashlib.sha1(
+        f"{resolved}|{mtime_ns}|{max_edge}".encode("utf-8", errors="replace")
+    ).hexdigest()
+    cache_path = _preview_cache_dir() / f"{cache_key}.jpg"
+    if cache_path.is_file():
+        return cache_path.read_bytes()
+
+    suffix = resolved.suffix.lower()
+    if suffix == ".gif":
+        frames = sample_gif_frames(resolved, sample_count=1)
+        image = frames[0]
+    elif suffix in VIDEO_EXTENSIONS:
+        frames = sample_video_frames(resolved, sample_count=1)
+        image = frames[0]
+    else:
+        with Image.open(resolved) as opened:
+            image = opened.convert("RGB")
+
+    image = image.convert("RGB")
+    image.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=72, optimize=True)
+    data = buffer.getvalue()
+    try:
+        cache_path.write_bytes(data)
+    except OSError:
+        logger.warning("preview_cache_write_failed path=%s", cache_path, exc_info=True)
+    return data
 
 
 def load_known_tags(tags_csv_path: Path) -> set[str]:

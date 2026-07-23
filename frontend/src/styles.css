@@ -482,6 +482,12 @@ th {
   min-width: 160px;
 }
 
+.image-thumb-wrap {
+  position: relative;
+  width: 140px;
+  height: 140px;
+}
+
 .image-thumb {
   width: 140px;
   height: 140px;
@@ -489,6 +495,22 @@ th {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #f8faff;
+  display: block;
+}
+
+.media-badge {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: rgba(20, 24, 33, 0.72);
+  color: #fff;
+  font-size: 11px;
+  line-height: 22px;
+  text-align: center;
+  pointer-events: none;
 }
 
 .image-path {

@@ -311,11 +311,22 @@ def test_item_preview_returns_image(monkeypatch, tmp_path: Path):
         assert preview_resp.content == b"fake-image-bytes"
 
 
-def test_item_preview_supports_gif_and_mp4(tmp_path: Path):
+def test_item_preview_supports_gif_and_mp4(tmp_path: Path, monkeypatch):
+    from PIL import Image
+
+    import app.api as api_module
+
     gif_path = tmp_path / "clip.gif"
     mp4_path = tmp_path / "clip.mp4"
-    gif_path.write_bytes(b"GIF89a-fake")
+    Image.new("RGB", (24, 24), color=(20, 120, 200)).save(gif_path, format="GIF")
     mp4_path.write_bytes(b"ftypisom-fake")
+
+    # Avoid depending on a real MP4 decode in CI; still exercise JPEG still path.
+    monkeypatch.setattr(
+        api_module,
+        "media_preview_still_jpeg",
+        lambda path, **_kwargs: b"\xff\xd8\xff\xd9fakejpeg",
+    )
 
     with TestClient(app) as client:
         run_id = execute(
@@ -346,15 +357,20 @@ def test_item_preview_supports_gif_and_mp4(tmp_path: Path):
 
         gif_resp = client.get(f"/api/items/{gif_id}/preview")
         gif_resp.raise_for_status()
-        assert gif_resp.headers["content-type"].startswith("image/gif")
+        assert gif_resp.headers["content-type"].startswith("image/jpeg")
         assert "inline" in (gif_resp.headers.get("content-disposition") or "").lower()
-        assert gif_resp.content == b"GIF89a-fake"
+        assert gif_resp.content.startswith(b"\xff\xd8")
 
         mp4_resp = client.get(f"/api/items/{mp4_id}/preview")
         mp4_resp.raise_for_status()
-        assert mp4_resp.headers["content-type"].startswith("video/mp4")
+        assert mp4_resp.headers["content-type"].startswith("image/jpeg")
         assert "inline" in (mp4_resp.headers.get("content-disposition") or "").lower()
-        assert mp4_resp.content == b"ftypisom-fake"
+        assert mp4_resp.content.startswith(b"\xff\xd8")
+
+        raw_resp = client.get(f"/api/items/{mp4_id}/preview?raw=1")
+        raw_resp.raise_for_status()
+        assert raw_resp.headers["content-type"].startswith("video/mp4")
+        assert raw_resp.content == b"ftypisom-fake"
 
 
 def test_selected_tag_wins_when_global_top_not_selected(monkeypatch, tmp_path: Path):

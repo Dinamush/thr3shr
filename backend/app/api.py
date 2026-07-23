@@ -11,7 +11,7 @@ from pathlib import Path
 import time
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from .schemas import (
     AppSettings,
@@ -30,6 +30,7 @@ from .schemas import (
     UpdateItemRequest,
 )
 from .services import (
+    VIDEO_EXTENSIONS,
     discover_tag_folders,
     extract_scores,
     extract_scores_batch,
@@ -37,6 +38,7 @@ from .services import (
     global_top_tags,
     is_experimental_media,
     load_known_tags,
+    media_preview_still_jpeg,
     migrate_file,
     normalize_tag_name,
     resolve_settings,
@@ -1482,22 +1484,56 @@ def get_item_scores(item_id: int) -> dict:
     }
 
 
-@router.get("/items/{item_id}/preview")
-def get_item_preview(item_id: int) -> FileResponse:
+@router.get("/items/{item_id}/preview", response_model=None)
+def get_item_preview(
+    item_id: int,
+    raw: bool = Query(
+        False,
+        description="Serve original bytes (video/gif). Default returns a JPEG still for media.",
+    ),
+):
     row = fetch_one("SELECT file_path, migrated_to FROM items WHERE id = ?", (item_id,))
     if not row:
         raise HTTPException(status_code=404, detail="Item not found")
     candidates = []
     for key in ("file_path", "migrated_to"):
-        raw = row.get(key)
-        if raw:
-            candidates.append(Path(str(raw)).expanduser())
+        raw_path = row.get(key)
+        if raw_path:
+            candidates.append(Path(str(raw_path)).expanduser())
     image_path = next((p for p in candidates if p.exists() and p.is_file()), None)
     if image_path is None:
         raise HTTPException(status_code=404, detail="Preview media not found")
-    media_type = SUPPORTED_PREVIEW_SUFFIXES.get(image_path.suffix.lower())
+    suffix = image_path.suffix.lower()
+    media_type = SUPPORTED_PREVIEW_SUFFIXES.get(suffix)
     if not media_type:
         raise HTTPException(status_code=415, detail="Unsupported media type for preview")
+
+    # Table thumbs must stay tiny: full MP4/GIF as media elements collapses under
+    # parallel loads. Default to a cached JPEG still; ?raw=1 keeps original bytes.
+    needs_still = (not raw) and (suffix == ".gif" or suffix in VIDEO_EXTENSIONS)
+    if needs_still:
+        try:
+            jpeg = media_preview_still_jpeg(image_path)
+        except Exception as err:
+            logger.warning(
+                "preview_still_failed item_id=%s path=%s err=%s",
+                item_id,
+                image_path,
+                err,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=500, detail=f"Unable to build media thumbnail: {err}"
+            ) from err
+        return Response(
+            content=jpeg,
+            media_type="image/jpeg",
+            headers={
+                "Content-Disposition": f'inline; filename="{image_path.stem}_thumb.jpg"',
+                "Cache-Control": "private, max-age=86400",
+            },
+        )
+
     # Must be inline so <img>/<video> can render; "attachment" + filename makes
     # browsers refuse to display the bytes in media elements.
     return FileResponse(

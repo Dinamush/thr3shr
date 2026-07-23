@@ -7,4 +7,6 @@ __pycache__/
 frontend/node_modules/
 frontend/dist/
 backend/app.db
+backend/.preview_cache/
+backend/scripts/out/
 sample_data/
