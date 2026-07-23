@@ -6,7 +6,7 @@ import random
 import threading
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import time
 
@@ -355,7 +355,7 @@ def _settings_from_db() -> AppSettings:
         experimental_media_enabled=bool(row.get("experimental_media_enabled", 0)),
         selected_tags=selected_tags,
         max_inference_workers=int(row.get("max_inference_workers") or 2),
-        inference_batch_size=int(row.get("inference_batch_size") or 1),
+        inference_batch_size=int(row.get("inference_batch_size") or 4),
         force_cpu_inference=bool(row.get("force_cpu_inference", 0)),
         tagger_model=tagger_model,  # type: ignore[arg-type]
         wd_general_threshold=float(row.get("wd_general_threshold") or 0.35),
@@ -366,11 +366,11 @@ def _apply_runtime_inference_env(settings: AppSettings) -> None:
     """Mirror persisted settings into env knobs used by the run executor."""
     os.environ["MAX_INFERENCE_WORKERS"] = str(settings.max_inference_workers)
     os.environ["INFERENCE_BATCH_SIZE"] = str(settings.inference_batch_size)
-    # Respect an explicit INFERENCE_MODE (tests set single); otherwise derive from batch size.
-    if "INFERENCE_MODE" not in os.environ:
-        os.environ["INFERENCE_MODE"] = (
-            "batch" if settings.inference_batch_size > 1 else "single"
-        )
+    # Settings batch size is authoritative. A stuck INFERENCE_MODE=single from an
+    # earlier batch=1 save must not keep future runs in single-image mode.
+    os.environ["INFERENCE_MODE"] = (
+        "batch" if settings.inference_batch_size > 1 else "single"
+    )
     prev_force = os.environ.get("FORCE_CPU_INFERENCE")
     if settings.force_cpu_inference:
         os.environ["FORCE_CPU_INFERENCE"] = "true"
@@ -410,6 +410,62 @@ def _item_from_row(row: dict, include_full_scores: bool = False) -> ClassifiedIt
     )
 
 
+def estimate_run_eta(
+    *,
+    status: str,
+    total_images: int,
+    processed_images: int,
+    started_at: str | None,
+    avg_infer_ms_per_image: float | None,
+    now: datetime | None = None,
+) -> tuple[float | None, str | None]:
+    """Estimate remaining seconds and UTC finish time for an active run.
+
+    Prefers wall-clock throughput once a few images have finished (accounts for
+    parallel workers). Falls back to avg_infer_ms_per_image when needed.
+    """
+    status_key = (status or "").strip().lower()
+    if status_key not in {"pending", "running"}:
+        return None, None
+    total = max(0, int(total_images))
+    processed = max(0, int(processed_images))
+    remaining = total - processed
+    if total <= 0 or remaining <= 0:
+        return None, None
+
+    now_utc = now or datetime.now(timezone.utc)
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
+
+    eta_seconds: float | None = None
+
+    if started_at and processed >= 2:
+        try:
+            started = datetime.fromisoformat(str(started_at))
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+            elapsed = max(0.0, (now_utc - started.astimezone(timezone.utc)).total_seconds())
+            if elapsed >= 1.0:
+                rate = processed / elapsed  # images / second (wall clock)
+                if rate > 0:
+                    eta_seconds = remaining / rate
+        except ValueError:
+            eta_seconds = None
+
+    if eta_seconds is None and avg_infer_ms_per_image is not None:
+        avg_ms = float(avg_infer_ms_per_image)
+        if avg_ms > 0:
+            eta_seconds = remaining * (avg_ms / 1000.0)
+
+    if eta_seconds is None:
+        return None, None
+
+    # Clamp absurd spikes early in a run while still allowing long jobs.
+    eta_seconds = max(0.0, min(float(eta_seconds), 7 * 24 * 3600))
+    finish_at = (now_utc + timedelta(seconds=eta_seconds)).isoformat()
+    return eta_seconds, finish_at
+
+
 def _run_status_from_row(row: dict) -> RunStatusResponse:
     total = int(row.get("total_images") or 0)
     processed = int(row.get("processed_images") or 0)
@@ -417,6 +473,14 @@ def _run_status_from_row(row: dict) -> RunStatusResponse:
     item_count_row = fetch_one("SELECT COUNT(*) AS cnt FROM items WHERE run_id = ?", (row["id"],))
     has_items = bool(item_count_row and int(item_count_row["cnt"]) > 0)
     telemetry = _get_run_telemetry(row["id"])
+    avg_ms = telemetry.get("avg_infer_ms_per_image")
+    eta_seconds, eta_finish_at = estimate_run_eta(
+        status=row.get("status") or "pending",
+        total_images=total,
+        processed_images=processed,
+        started_at=row.get("started_at"),
+        avg_infer_ms_per_image=float(avg_ms) if avg_ms is not None else None,
+    )
     return RunStatusResponse(
         run_id=row["id"],
         status=row.get("status") or "pending",
@@ -431,7 +495,9 @@ def _run_status_from_row(row: dict) -> RunStatusResponse:
         has_items=has_items,
         inference_mode=telemetry.get("inference_mode"),
         batch_size=telemetry.get("batch_size"),
-        avg_infer_ms_per_image=telemetry.get("avg_infer_ms_per_image"),
+        avg_infer_ms_per_image=avg_ms,
+        eta_seconds_remaining=eta_seconds,
+        eta_finish_at=eta_finish_at,
         queue_seed=telemetry.get("queue_seed"),
         tagger_model=row.get("tagger_model"),
     )
@@ -524,20 +590,13 @@ def _execute_run(
             rng = random.Random(queue_seed)
             rng.shuffle(ordered_paths)
         configured_batch_size = _get_inference_batch_size(inference_batch_size)
-        # Settings batch size is authoritative for WD; env INFERENCE_MODE can still force single.
-        inference_mode = _get_inference_mode()
-        if (
-            inference_mode != "single"
-            and tagger_model != "ml_danbooru"
-            and configured_batch_size > 1
-        ):
-            inference_mode = "batch"
-            batch_size = configured_batch_size
-        elif tagger_model == "ml_danbooru":
+        # Settings/arg batch size is authoritative for WD (env INFERENCE_MODE is mirrored from it).
+        if tagger_model == "ml_danbooru" or configured_batch_size <= 1:
             inference_mode = "single"
             batch_size = 1
         else:
-            batch_size = 1 if inference_mode == "single" else configured_batch_size
+            inference_mode = "batch"
+            batch_size = configured_batch_size
         _set_run_telemetry(
             run_id,
             queue_seed=queue_seed,
@@ -734,6 +793,42 @@ def _reclassify_review_reason(tagger_model: str, result: _ImageInferenceResult) 
     return prefix
 
 
+def _finish_reclassify_run(run_id: int, *, cancelled: bool, eligible: int, failed: int) -> None:
+    """Reclassify is a pass over an already-classified run.
+
+    Cancelling the pass must not poison the run into a terminal `cancelled` state
+    that blocks migrate / another reclassify — restore `completed` instead.
+    """
+    execute(
+        """
+        UPDATE runs
+        SET status = 'completed',
+            finished_at = ?,
+            cancel_requested = 0,
+            last_error = CASE
+                WHEN ? THEN 'Reclassify cancelled; partial updates kept.'
+                ELSE NULL
+            END
+        WHERE id = ?
+        """,
+        (_now_iso(), 1 if cancelled else 0, run_id),
+    )
+    if cancelled:
+        logger.info(
+            "reclassify_cancelled run_id=%d eligible=%d failed=%d (restored completed)",
+            run_id,
+            eligible,
+            failed,
+        )
+    else:
+        logger.info(
+            "reclassify_completed run_id=%d eligible=%d failed=%d",
+            run_id,
+            eligible,
+            failed,
+        )
+
+
 def _execute_reclassify(
     run_id: int,
     root_repo: Path,
@@ -748,30 +843,45 @@ def _execute_reclassify(
     wd_general_threshold: float = 0.35,
 ) -> None:
     try:
+        # Claim already set status=running; only refresh bookkeeping here.
+        # Do NOT clear cancel_requested — a cancel clicked between claim and
+        # worker start must still win.
         execute(
             """
             UPDATE runs
             SET status = 'running',
                 last_error = NULL,
-                cancel_requested = 0,
-                finished_at = NULL
+                finished_at = NULL,
+                tagger_model = ?
             WHERE id = ?
             """,
-            (run_id,),
+            (tagger_model, run_id),
         )
         if _is_cancel_requested(run_id):
-            execute(
-                "UPDATE runs SET status = 'cancelled', finished_at = ? WHERE id = ?",
-                (_now_iso(), run_id),
-            )
+            _finish_reclassify_run(run_id, cancelled=True, eligible=0, failed=0)
             return
 
         rows = _eligible_reclassify_rows(run_id, item_ids)
         if not rows:
-            execute(
-                "UPDATE runs SET status = 'completed', finished_at = ? WHERE id = ?",
-                (_now_iso(), run_id),
-            )
+            _finish_reclassify_run(run_id, cancelled=False, eligible=0, failed=0)
+            return
+
+        # Drop rows whose source file is already gone (e.g. migrated/moved).
+        existing_rows: list[dict] = []
+        for row in rows:
+            path = Path(row["file_path"])
+            if path.exists():
+                existing_rows.append(row)
+            else:
+                logger.warning(
+                    "reclassify_skip_missing run_id=%d item_id=%s path=%s",
+                    run_id,
+                    row.get("id"),
+                    path,
+                )
+        rows = existing_rows
+        if not rows:
+            _finish_reclassify_run(run_id, cancelled=False, eligible=0, failed=0)
             return
 
         probe_execution_providers()
@@ -779,19 +889,12 @@ def _execute_reclassify(
         path_to_row = {Path(row["file_path"]): row for row in rows}
 
         configured_batch_size = _get_inference_batch_size(inference_batch_size)
-        inference_mode = _get_inference_mode()
-        if (
-            inference_mode != "single"
-            and tagger_model != "ml_danbooru"
-            and configured_batch_size > 1
-        ):
-            inference_mode = "batch"
-            batch_size = configured_batch_size
-        elif tagger_model == "ml_danbooru":
+        if tagger_model == "ml_danbooru" or configured_batch_size <= 1:
             inference_mode = "single"
             batch_size = 1
         else:
-            batch_size = 1 if inference_mode == "single" else configured_batch_size
+            inference_mode = "batch"
+            batch_size = configured_batch_size
 
         _set_run_telemetry(
             run_id,
@@ -799,21 +902,25 @@ def _execute_reclassify(
             batch_size=batch_size,
             avg_infer_ms_per_image=0.0,
         )
+        # Progress reflects this reclassify pass (not the original classify totals).
+        execute(
+            """
+            UPDATE runs
+            SET total_images = ?, processed_images = 0, failed_images = 0, started_at = ?
+            WHERE id = ?
+            """,
+            (len(rows), _now_iso(), run_id),
+        )
 
         max_workers = _get_max_inference_workers(max_inference_workers)
         cancelled = False
         infer_elapsed_ms_total = 0.0
         infer_sample_count = 0
-        # Keep original processed/total; only refresh failed_images as we go.
-        original_processed = int(
-            (fetch_one("SELECT processed_images FROM runs WHERE id = ?", (run_id,)) or {}).get(
-                "processed_images"
-            )
-            or 0
-        )
+        processed = 0
 
-        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="reclass") as executor:
-            pending: dict[Future[tuple[list[_ImageInferenceResult], float, str]], list[Path]] = {}
+        executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="reclass")
+        pending: dict[Future[tuple[list[_ImageInferenceResult], float, str]], list[Path]] = {}
+        try:
             batches = [
                 ordered_paths[idx : idx + batch_size]
                 for idx in range(0, len(ordered_paths), batch_size)
@@ -822,6 +929,8 @@ def _execute_reclassify(
 
             def _submit_until_capacity() -> None:
                 while len(pending) < max_workers:
+                    if _is_cancel_requested(run_id):
+                        return
                     try:
                         next_batch = next(iterator)
                     except StopIteration:
@@ -846,12 +955,26 @@ def _execute_reclassify(
                         future.cancel()
                     break
 
-                done, _ = wait(set(pending.keys()), return_when=FIRST_COMPLETED)
+                # Timeout so cancel_requested is polled even while a batch is in flight.
+                done, _ = wait(
+                    set(pending.keys()),
+                    timeout=0.5,
+                    return_when=FIRST_COMPLETED,
+                )
+                if not done:
+                    continue
                 for future in done:
-                    pending.pop(future)
+                    pending.pop(future, None)
                     if future.cancelled():
                         continue
-                    batch_results, elapsed_ms, used_mode = future.result()
+                    try:
+                        batch_results, elapsed_ms, used_mode = future.result()
+                    except Exception:
+                        logger.exception("reclassify_future_failed run_id=%d", run_id)
+                        continue
+                    if cancelled or _is_cancel_requested(run_id):
+                        cancelled = True
+                        continue
                     infer_elapsed_ms_total += elapsed_ms
                     infer_sample_count += len(batch_results)
                     avg_ms = (
@@ -912,30 +1035,35 @@ def _execute_reclassify(
                                 run_id,
                             ),
                         )
+                        processed += 1
+                        if result.inference_failed:
+                            # Count refreshed below for accuracy across workers.
+                            pass
                         failed = _count_inference_failed_items(run_id)
-                        _update_run_progress(run_id, original_processed, failed)
-                _submit_until_capacity()
+                        _update_run_progress(run_id, processed, failed)
+                        if processed % 10 == 0:
+                            logger.info(
+                                "reclassify_progress run_id=%d processed=%d total=%d "
+                                "avg_infer_ms=%.2f model=%s",
+                                run_id,
+                                processed,
+                                len(rows),
+                                avg_ms,
+                                tagger_model,
+                            )
+                if not cancelled:
+                    _submit_until_capacity()
+        finally:
+            # On cancel, do not block the API worker on in-flight GPU batches.
+            executor.shutdown(wait=not cancelled, cancel_futures=True)
 
         failed = _count_inference_failed_items(run_id)
-        _update_run_progress(run_id, original_processed, failed)
-        if cancelled:
-            execute(
-                "UPDATE runs SET status = 'cancelled', finished_at = ? WHERE id = ?",
-                (_now_iso(), run_id),
-            )
-            logger.info("reclassify_cancelled run_id=%d", run_id)
-            return
-
-        execute(
-            "UPDATE runs SET status = 'completed', finished_at = ? WHERE id = ?",
-            (_now_iso(), run_id),
-        )
-        logger.info(
-            "reclassify_completed run_id=%d model=%s eligible=%d failed=%d",
+        _update_run_progress(run_id, processed, failed)
+        _finish_reclassify_run(
             run_id,
-            tagger_model,
-            len(rows),
-            failed,
+            cancelled=cancelled,
+            eligible=len(rows),
+            failed=failed,
         )
     except Exception as err:
         logger.exception("reclassify_failed run_id=%d", run_id)
@@ -1192,12 +1320,9 @@ def reclassify_run(run_id: int, payload: ReclassifyRequest) -> ReclassifyRespons
             status_code=400,
             detail="Cannot reclassify while a run is still pending or running.",
         )
-    if status == "cancelled":
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot reclassify a cancelled run.",
-        )
-    if status not in {"completed", "failed"}:
+    # cancelled is allowed: a prior reclassify cancel restores completed, but older
+    # runs may still be cancelled with proposed items left to retry.
+    if status not in {"completed", "failed", "cancelled"}:
         raise HTTPException(status_code=400, detail=f"Run status '{status}' cannot be reclassified.")
 
     eligible = _eligible_reclassify_rows(run_id, payload.item_ids)
@@ -1244,10 +1369,11 @@ def reclassify_run(run_id: int, payload: ReclassifyRequest) -> ReclassifyRespons
         SET status = 'running',
             last_error = NULL,
             cancel_requested = 0,
-            finished_at = NULL
-        WHERE id = ? AND status IN ('completed', 'failed')
+            finished_at = NULL,
+            tagger_model = ?
+        WHERE id = ? AND status IN ('completed', 'failed', 'cancelled')
         """,
-        (run_id,),
+        (payload.tagger_model, run_id),
     )
     claimed = fetch_one("SELECT status FROM runs WHERE id = ?", (run_id,))
     if not claimed or claimed.get("status") != "running":

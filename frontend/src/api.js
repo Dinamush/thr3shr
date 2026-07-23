@@ -10,7 +10,7 @@ const defaultSettings = {
   experimental_media_enabled: false,
   selected_tags: [],
   max_inference_workers: 2,
-  inference_batch_size: 1,
+  inference_batch_size: 8,
   force_cpu_inference: false,
   tagger_model: "wd_swinv2_v3",
   wd_general_threshold: 0.35,
@@ -182,7 +182,15 @@ function computeMockStatus(run) {
     has_items: (run.items || []).length > 0,
     inference_mode: "single",
     batch_size: 1,
-    avg_infer_ms_per_image: null,
+    avg_infer_ms_per_image: run.status === "running" ? 120 : null,
+    eta_seconds_remaining:
+      run.status === "running" && total > processed
+        ? Math.max(1, (total - processed) * 0.12)
+        : null,
+    eta_finish_at:
+      run.status === "running" && total > processed
+        ? new Date(Date.now() + Math.max(1, (total - processed) * 120)).toISOString()
+        : null,
     queue_seed: null,
     tagger_model: run.tagger_model || mockState.settings.tagger_model || "wd_swinv2_v3",
   };

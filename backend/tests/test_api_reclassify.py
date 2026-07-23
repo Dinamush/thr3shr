@@ -245,6 +245,134 @@ def test_reclassify_empty_eligible_returns_400(monkeypatch, tmp_path: Path):
         assert "eligible" in re_resp.json()["detail"].lower()
 
 
+def test_reclassify_cancel_restores_completed(monkeypatch, tmp_path: Path):
+    root = tmp_path / "root_cancel"
+    cats = tmp_path / "cats_cancel"
+    root.mkdir()
+    cats.mkdir()
+    (cats / "1girl").mkdir()
+    paths = []
+    for idx in range(4):
+        p = root / f"{idx}.jpg"
+        p.write_text("fake", encoding="utf-8")
+        paths.append(p)
+
+    gate = {"block": False, "release": False}
+
+    def score_fn(*_a, **_k):
+        if gate["block"]:
+            for _ in range(400):
+                if gate["release"]:
+                    break
+                time.sleep(0.01)
+        return {"1girl": 0.2}
+
+    _patch_inference(monkeypatch, paths, score_fn)
+
+    with TestClient(app) as client:
+        _seed_settings(client, root, cats, ["1girl"])
+        start_resp = client.post(
+            "/api/runs/start",
+            json={
+                "root_repo": str(root),
+                "categories_root": str(cats),
+                "confidence_threshold": 0.6,
+                "selected_folders": ["1girl"],
+            },
+        )
+        start_resp.raise_for_status()
+        run_id = start_resp.json()["run_id"]
+        final = _wait_for_status(client, run_id, {"completed", "failed", "cancelled"}, timeout_s=8.0)
+        assert final is not None
+        assert final["status"] == "completed"
+
+        gate["block"] = True
+        gate["release"] = False
+        re_resp = client.post(
+            f"/api/runs/{run_id}/reclassify",
+            json={"tagger_model": "wd_eva02_large"},
+        )
+        re_resp.raise_for_status()
+        assert re_resp.json()["status"] == "running"
+
+        # Wait until worker has claimed running, then cancel.
+        for _ in range(40):
+            st = client.get(f"/api/runs/{run_id}/status").json()
+            if st["status"] == "running":
+                break
+            time.sleep(0.05)
+        cancel_resp = client.post(f"/api/runs/{run_id}/cancel")
+        cancel_resp.raise_for_status()
+        gate["release"] = True
+
+        after = _wait_for_status(client, run_id, {"completed", "failed"}, timeout_s=8.0)
+        assert after is not None
+        assert after["status"] == "completed"
+        assert after.get("cancel_requested") is False
+
+        # Must be able to start another reclassify after cancel.
+        gate["block"] = False
+        re2 = client.post(
+            f"/api/runs/{run_id}/reclassify",
+            json={"tagger_model": "wd_eva02_large"},
+        )
+        assert re2.status_code == 200
+        done = _wait_for_status(client, run_id, {"completed", "failed"}, timeout_s=8.0)
+        assert done is not None
+        assert done["status"] == "completed"
+
+
+def test_reclassify_allows_cancelled_run(monkeypatch, tmp_path: Path):
+    root = tmp_path / "root_cancelled"
+    cats = tmp_path / "cats_cancelled"
+    root.mkdir()
+    cats.mkdir()
+    (cats / "1girl").mkdir()
+    weak = root / "weak.jpg"
+    weak.write_text("fake", encoding="utf-8")
+
+    scores = {"1girl": 0.3}
+
+    def score_fn(*_a, **_k):
+        return dict(scores)
+
+    _patch_inference(monkeypatch, [weak], score_fn)
+
+    with TestClient(app) as client:
+        _seed_settings(client, root, cats, ["1girl"])
+        start_resp = client.post(
+            "/api/runs/start",
+            json={
+                "root_repo": str(root),
+                "categories_root": str(cats),
+                "confidence_threshold": 0.6,
+                "selected_folders": ["1girl"],
+            },
+        )
+        start_resp.raise_for_status()
+        run_id = start_resp.json()["run_id"]
+        final = _wait_for_status(client, run_id, {"completed", "failed", "cancelled"})
+        assert final is not None
+        assert final["status"] == "completed"
+
+        execute(
+            "UPDATE runs SET status = 'cancelled', cancel_requested = 0 WHERE id = ?",
+            (run_id,),
+        )
+        scores["1girl"] = 0.95
+        re_resp = client.post(
+            f"/api/runs/{run_id}/reclassify",
+            json={"tagger_model": "wd_eva02_large"},
+        )
+        assert re_resp.status_code == 200
+        after = _wait_for_status(client, run_id, {"completed", "failed"}, timeout_s=8.0)
+        assert after is not None
+        assert after["status"] == "completed"
+        item = client.get(f"/api/runs/{run_id}/items").json()[0]
+        assert item["status"] == "approved"
+        assert item["needs_review"] is False
+
+
 def test_reclassify_rejects_when_running(monkeypatch, tmp_path: Path):
     root = tmp_path / "root4"
     cats = tmp_path / "cats4"

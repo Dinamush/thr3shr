@@ -83,7 +83,7 @@ def _ensure_settings_columns(conn: sqlite3.Connection) -> None:
         "experimental_media_enabled": "INTEGER NOT NULL DEFAULT 0",
         "selected_tags_json": "TEXT NOT NULL DEFAULT '[]'",
         "max_inference_workers": "INTEGER NOT NULL DEFAULT 2",
-        "inference_batch_size": "INTEGER NOT NULL DEFAULT 1",
+        "inference_batch_size": "INTEGER NOT NULL DEFAULT 4",
         "force_cpu_inference": "INTEGER NOT NULL DEFAULT 0",
         "tagger_model": "TEXT NOT NULL DEFAULT 'wd_swinv2_v3'",
         "wd_general_threshold": "REAL NOT NULL DEFAULT 0.35",

@@ -11,7 +11,7 @@ const DEFAULT_SETTINGS = {
   experimental_media_enabled: false,
   selected_tags: [],
   max_inference_workers: 2,
-  inference_batch_size: 1,
+  inference_batch_size: 8,
   force_cpu_inference: false,
   tagger_model: "wd_swinv2_v3",
   wd_general_threshold: 0.35,
@@ -47,6 +47,27 @@ function settingsSnapshot(settings, selectedTags) {
 function formatTagScore(entry) {
   if (!entry) return "";
   return `${entry.tag} (${Number(entry.score).toFixed(3)})`;
+}
+
+function formatDurationSeconds(totalSeconds) {
+  const secs = Math.max(0, Math.round(Number(totalSeconds) || 0));
+  const hours = Math.floor(secs / 3600);
+  const minutes = Math.floor((secs % 3600) / 60);
+  const seconds = secs % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+function formatEtaFinishAt(iso) {
+  if (!iso) return null;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }
 
 function readRoute() {
@@ -724,17 +745,20 @@ function App() {
                   type="number"
                   min="1"
                   max="64"
-                  value={settings.inference_batch_size ?? 1}
+                  value={settings.inference_batch_size ?? 8}
                   onChange={(e) =>
                     setSettings({
                       ...settings,
                       inference_batch_size: Math.max(
                         1,
-                        Math.min(64, Number(e.target.value) || 1)
+                        Math.min(64, Number(e.target.value) || 8)
                       ),
                     })
                   }
                 />
+                <span className="help">
+                  WD models: 4–8 is a good GPU default. 1 forces single-image mode.
+                </span>
               </label>
               <label className="inline-check">
                 <input
@@ -869,6 +893,17 @@ function App() {
             Run #{runId}
             {runStatus.tagger_model ? ` · ${runStatus.tagger_model}` : ""}
           </span>
+          {(() => {
+            const etaLabel =
+              runActive && runStatus.eta_seconds_remaining != null
+                ? formatDurationSeconds(runStatus.eta_seconds_remaining)
+                : null;
+            const finishLabel =
+              runActive && runStatus.eta_finish_at
+                ? formatEtaFinishAt(runStatus.eta_finish_at)
+                : null;
+            return (
+              <>
           <div className="stats">
             <div className="metric">
               <span className="label">Status</span>
@@ -894,6 +929,14 @@ function App() {
               <span className="label">Progress</span>
               <span className="value">{Number(runStatus.progress_pct || 0).toFixed(1)}%</span>
             </div>
+            <div className="metric">
+              <span className="label">ETA</span>
+              <span className="value">{etaLabel || (runActive ? "…" : "—")}</span>
+            </div>
+            <div className="metric">
+              <span className="label">Finish by</span>
+              <span className="value">{finishLabel || (runActive ? "…" : "—")}</span>
+            </div>
           </div>
           <div className="progress-track">
             <div
@@ -907,9 +950,18 @@ function App() {
                 Avg infer: {Number(runStatus.avg_infer_ms_per_image).toFixed(1)} ms/image
               </span>
             )}
+            {etaLabel && (
+              <span>
+                Expected finish in {etaLabel}
+                {finishLabel ? ` (~${finishLabel})` : ""}
+              </span>
+            )}
             {runStatus.inference_mode && <span>Mode: {runStatus.inference_mode}</span>}
             {runStatus.cancel_requested && <span>Cancel requested</span>}
           </div>
+              </>
+            );
+          })()}
           {runActive && (
             <div className="actions">
               <button type="button" className="danger" onClick={cancelActiveRun}>
@@ -919,11 +971,11 @@ function App() {
           )}
           {!runActive &&
             stats.reviewNeeded > 0 &&
-            ["completed", "failed"].includes(runStatus.status) && (
+            ["completed", "failed", "cancelled"].includes(runStatus.status) && (
               <div className="actions reclassify-banner" role="region" aria-label="Reclassify needs review">
                 <span>
                   {stats.reviewNeeded} item{stats.reviewNeeded === 1 ? "" : "s"} need review — retry with a
-                  stronger model (approved/rejected stay untouched).
+                  stronger model (approved/rejected/migrated stay untouched).
                 </span>
                 <label className="reclassify-model">
                   <span className="sr-only">Reclassify model</span>

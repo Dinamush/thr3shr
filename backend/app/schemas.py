@@ -161,6 +161,8 @@ class RunStatusResponse(BaseModel):
     inference_mode: str | None = None
     batch_size: int | None = None
     avg_infer_ms_per_image: float | None = None
+    eta_seconds_remaining: float | None = None
+    eta_finish_at: str | None = None
     queue_seed: int | None = None
     tagger_model: str | None = None
 

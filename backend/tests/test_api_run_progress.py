@@ -646,6 +646,10 @@ def test_batch_mode_falls_back_to_single(monkeypatch, tmp_path: Path):
     os.environ["INFERENCE_BATCH_SIZE"] = "4"
     try:
         with TestClient(app) as client:
+            settings = client.get("/api/settings").json()
+            settings["inference_batch_size"] = 4
+            settings["max_inference_workers"] = 2
+            client.put("/api/settings", json=settings).raise_for_status()
             start_resp = client.post(
                 "/api/runs/start",
                 json={

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from app.storage import init_db
+from app.storage import execute, init_db
 
 
 @pytest.fixture(autouse=True)
@@ -22,3 +22,11 @@ def _isolated_app_db(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pyte
     monkeypatch.setenv("INFERENCE_BATCH_SIZE", "1")
     monkeypatch.setenv("MAX_INFERENCE_WORKERS", "1")
     init_db()
+    # Settings batch size is authoritative over env; keep tests on single-image mode.
+    execute(
+        """
+        UPDATE settings
+        SET inference_batch_size = 1, max_inference_workers = 1
+        WHERE id = 1
+        """
+    )

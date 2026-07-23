@@ -8,6 +8,8 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 _DLL_DIRS_CONFIGURED = False
+_DLL_DIRS_CACHE: list[str] = []
+_ORT_DLLS_PRELOADED = False
 
 
 def _nvidia_bin_dirs() -> list[Path]:
@@ -30,9 +32,14 @@ def ensure_nvidia_dll_search_path() -> list[str]:
     ort.preload_dlls() alone is not always enough for cudnn_engines_* libs;
     without PATH / add_dll_directory, Conv ops fall back to CPU at runtime.
     """
-    global _DLL_DIRS_CONFIGURED
+    global _DLL_DIRS_CONFIGURED, _DLL_DIRS_CACHE
+    if _DLL_DIRS_CONFIGURED:
+        return list(_DLL_DIRS_CACHE)
+
     bin_dirs = [str(p.resolve()) for p in _nvidia_bin_dirs()]
     if not bin_dirs:
+        _DLL_DIRS_CONFIGURED = True
+        _DLL_DIRS_CACHE = []
         return []
 
     path_parts = os.environ.get("PATH", "").split(os.pathsep) if os.environ.get("PATH") else []
@@ -46,24 +53,28 @@ def ensure_nvidia_dll_search_path() -> list[str]:
         for d in bin_dirs:
             try:
                 os.add_dll_directory(d)
-            except (FileNotFoundError, OSError):
-                logger.warning("add_dll_directory failed for %s", d)
+            except (FileNotFoundError, OSError) as err:
+                logger.warning("add_dll_directory failed for %s: %s", d, err)
 
-    if not _DLL_DIRS_CONFIGURED:
-        logger.info("nvidia_dll_dirs configured count=%d dirs=%s", len(bin_dirs), bin_dirs)
-        _DLL_DIRS_CONFIGURED = True
-    return bin_dirs
+    logger.info("nvidia_dll_dirs configured count=%d dirs=%s", len(bin_dirs), bin_dirs)
+    _DLL_DIRS_CACHE = bin_dirs
+    _DLL_DIRS_CONFIGURED = True
+    return list(_DLL_DIRS_CACHE)
 
 
 def preload_onnx_runtime_dlls() -> None:
     """Load pip-bundled CUDA/cuDNN DLLs before creating ORT sessions."""
+    global _ORT_DLLS_PRELOADED
     ensure_nvidia_dll_search_path()
+    if _ORT_DLLS_PRELOADED:
+        return
     try:
         import onnxruntime as ort
 
         if hasattr(ort, "preload_dlls"):
             ort.preload_dlls()
             logger.info("onnxruntime preload_dlls completed")
+        _ORT_DLLS_PRELOADED = True
     except Exception:
         logger.exception("onnxruntime preload_dlls failed")
 
