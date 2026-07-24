@@ -2,9 +2,9 @@
 
 Utility / probe scripts for tagging accuracy, throughput, and model audits.
 
-## Classifier debug: real-life vs anime eval
+## Thresh3r debug: real-life vs anime eval
 
-UI: **Classifier debug → Real-life vs anime**.
+UI: **Debug → Real-life vs anime**.
 
 API: `POST /api/debug/realism-eval` with
 `{"count_per_class": 20, "compare_models": true}`.

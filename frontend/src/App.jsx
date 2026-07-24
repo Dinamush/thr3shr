@@ -601,16 +601,16 @@ function App() {
       <header className="app-header">
         <div className="app-nav">
           <a href="#/" className="nav-link active" aria-current="page">
-            Classifier
+            Thresh3r
           </a>
           <a href="#/debug" className="nav-link">
-            Classifier debug
+            Debug
           </a>
         </div>
-        <h1>Image Classifier</h1>
+        <h1>Thresh3r</h1>
         <p className="lede">
-          Configure paths and tagger model, select destination tags, run inference, then review
-          and migrate.
+          Thresh a media dump into destination bins — configure paths and tagger, pick tags, run
+          inference, then review and migrate.
         </p>
         {providerInfo && !offlineMode && (
           <div className="provider-strip">

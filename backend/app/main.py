@@ -11,8 +11,8 @@ from .api import router
 from .providers import clear_provider_probe_cache, preload_onnx_runtime_dlls, probe_execution_providers
 from .storage import init_db
 
-app = FastAPI(title="Image Classifier Workflow API", version="0.1.0")
-logger = logging.getLogger("image_classifier_api")
+app = FastAPI(title="Thresh3r API", version="0.1.0")
+logger = logging.getLogger("thresh3r_api")
 
 app.add_middleware(
     CORSMiddleware,

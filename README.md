@@ -1,7 +1,7 @@
 ---
-title: ML-Danbooru ONNX Webapp
-emoji: "🖼️"
-colorFrom: blue
+title: Thresh3r
+emoji: "🌾"
+colorFrom: yellow
 colorTo: green
 sdk: gradio
 sdk_version: "4.44.1"
@@ -19,9 +19,9 @@ tags:
 - computer-vision
 ---
 
-# Image Classifier (ML-Danbooru / WD Tagger)
+# Thresh3r
 
-Local FastAPI + React workflow for anime image tagging, review, and folder migration.
+Local FastAPI + React workflow that threshes a media dump into destination bins — anime/GIF/video tagging, review, and folder migration (ML-Danbooru / WD taggers).
 
 This repo includes:
 
