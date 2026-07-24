@@ -14,23 +14,15 @@
     "after_vaginal",
     "nakadashi",
     "internal_cumshot",
-    "cum",
     "cum_in_pussy",
     "cum_in_ass",
     "cum_in_mouth",
-    "cumdrip",
     "ejaculation",
     "excessive_cum",
     "bukkake",
-    "cum_on_body",
-    "cum_on_breasts",
-    "cum_on_ass",
-    "cum_on_clothes",
     "cunnilingus",
     "fingering",
     "object_insertion",
-    "masturbation",
-    "female_masturbation",
     "anal_fingering",
     "sex_from_behind",
     "clothed_sex",
@@ -1189,6 +1181,14 @@
           "weight": 0.45
         },
         {
+          "tag": "sexually_suggestive",
+          "weight": 0.55
+        },
+        {
+          "tag": "fellatio_gesture",
+          "weight": 0.95
+        },
+        {
           "tag": "highleg_leotard",
           "weight": 0.95
         },
@@ -1355,6 +1355,38 @@
         {
           "tag": "thighs",
           "weight": 0.45
+        },
+        {
+          "tag": "condom_in_mouth",
+          "weight": 0.95
+        },
+        {
+          "tag": "used_condom",
+          "weight": 0.85
+        },
+        {
+          "tag": "condom",
+          "weight": 0.55
+        },
+        {
+          "tag": "condom_wrapper",
+          "weight": 0.5
+        },
+        {
+          "tag": "public_indecency",
+          "weight": 0.9
+        },
+        {
+          "tag": "clothed_masturbation",
+          "weight": 0.85
+        },
+        {
+          "tag": "masturbation",
+          "weight": 0.7
+        },
+        {
+          "tag": "female_masturbation",
+          "weight": 0.75
         }
       ]
     },

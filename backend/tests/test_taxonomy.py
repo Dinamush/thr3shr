@@ -444,6 +444,56 @@ def test_voyeur_catch_all_when_no_subfolder() -> None:
     assert abs(score - 0.9 * 0.5) < 1e-9
 
 
+def test_voyeur_fellatio_gesture_is_soft_not_act() -> None:
+    folder, score, _ = choose_best_destination(
+        {
+            "fellatio_gesture": 0.97,
+            "sexually_suggestive": 0.55,
+            "tongue_out": 0.89,
+            "pov": 0.79,
+        },
+        {"Voyeur", "fellatio"},
+    )
+    assert folder == "Voyeur"
+    assert abs(score - 0.97 * 0.95) < 1e-9
+
+    # Real oral still prefers the act folder.
+    folder, score, _ = choose_best_destination(
+        {"fellatio_gesture": 0.9, "fellatio": 0.8},
+        {"Voyeur", "fellatio"},
+    )
+    assert folder == "fellatio"
+
+
+def test_voyeur_condom_pose_without_penetration() -> None:
+    folder, score, _ = choose_best_destination(
+        {
+            "condom": 0.99,
+            "used_condom": 0.9,
+            "condom_in_mouth": 0.92,
+            "mouth_hold": 0.94,
+        },
+        {"Voyeur", "fellatio"},
+    )
+    assert folder == "Voyeur"
+    assert abs(score - 0.92 * 0.95) < 1e-9
+
+    # Penetration / insertion still vetoes soft.
+    folder, score, _ = choose_best_destination(
+        {"condom_in_mouth": 0.95, "anal": 0.8, "object_insertion": 0.7},
+        {"Voyeur"},
+    )
+    assert folder is None
+    assert score is None
+
+    # Oral aftermath still prefers act over soft condom pose.
+    folder, score, _ = choose_best_destination(
+        {"condom_in_mouth": 0.9, "after_fellatio": 0.7},
+        {"Voyeur", "fellatio"},
+    )
+    assert folder == "fellatio"
+
+
 def test_voyeur_sexual_presentation_needs_corroboration() -> None:
     # Low-weight midriff/crop cues must not win alone (soft_alone_weight).
     folder, score, _ = choose_best_destination({"crop_top": 0.9}, {"Voyeur"})
@@ -534,13 +584,49 @@ def test_voyeur_pussy_routes_and_cum_vetoes() -> None:
     assert folder == "Voyeur/pussy"
     assert abs(score - 0.88 * 0.85) < 1e-9
 
-    # Bare cum (and specific creampie tags) must not land in Voyeur.
+    # Surface cum is allowed for soft tease; internal/oral cum still vetoes.
     folder, score, _ = choose_best_destination(
-        {"pussy": 0.88, "cum": 0.61},
+        {"pussy": 0.88, "cum": 0.61, "cum_on_body": 0.55},
+        {"Voyeur"},
+    )
+    assert folder == "Voyeur/pussy"
+    assert abs(score - 0.88 * 0.85) < 1e-9
+
+    folder, score, _ = choose_best_destination(
+        {
+            "pasties": 0.93,
+            "bandaids_on_nipples": 0.92,
+            "cum": 0.77,
+            "cum_on_body": 0.61,
+        },
+        {"Voyeur"},
+    )
+    # pasties is cleavage evidence (higher weight than catch-all).
+    assert folder == "Voyeur/cleavage"
+    assert abs(score - 0.93 * 0.85) < 1e-9
+
+    folder, score, _ = choose_best_destination(
+        {"pussy": 0.88, "cum_in_mouth": 0.7},
         {"Voyeur"},
     )
     assert folder is None
     assert score is None
+
+    # Outdoor clothed masturbation / public presenting → Voyeur (not vetoed).
+    folder, score, _ = choose_best_destination(
+        {
+            "spread_pussy": 0.9,
+            "pussy": 0.96,
+            "masturbation": 0.87,
+            "female_masturbation": 0.86,
+            "clothed_masturbation": 0.76,
+            "public_indecency": 0.77,
+            "presenting": 0.69,
+        },
+        {"Voyeur"},
+    )
+    assert folder == "Voyeur/pussy"
+    assert score == 0.9
 
     # Active fingering / anal play is hard, not soft Voyeur.
     folder, score, _ = choose_best_destination(
