@@ -203,12 +203,14 @@ class InferenceEngine:
         *,
         tagger_model: str,
         wd_general_threshold: float = 0.35,
+        raw_general: bool = False,
     ) -> dict[str, float]:
         return self.score_many(
             [image],
             tagger_model=tagger_model,
             wd_general_threshold=wd_general_threshold,
             batch_size=1,
+            raw_general=raw_general,
         )[0]
 
     def score_many(
@@ -218,6 +220,7 @@ class InferenceEngine:
         tagger_model: str,
         wd_general_threshold: float = 0.35,
         batch_size: int = 1,
+        raw_general: bool = False,
     ) -> list[dict[str, float]]:
         if not images:
             return []
@@ -231,6 +234,7 @@ class InferenceEngine:
             tagger_model=tagger_model,
             general_threshold=wd_general_threshold,
             batch_size=max(1, int(batch_size)),
+            raw_general=raw_general,
         )
 
     def _score_ml_one(self, image: Path | Image.Image | str) -> dict[str, float]:
@@ -253,6 +257,7 @@ class InferenceEngine:
         tagger_model: str,
         general_threshold: float,
         batch_size: int,
+        raw_general: bool = False,
     ) -> list[dict[str, float]]:
         wd_name = WD_MODEL_NAMES.get(tagger_model)
         if wd_name is None:
@@ -301,7 +306,10 @@ class InferenceEngine:
             for i in general_idx:
                 name, score = labels[i]
                 value = float(score)
-                if value > general_threshold:
+                if raw_general:
+                    # Media presence pooling needs dense probs; threshold after pool.
+                    general[name] = value
+                elif value > general_threshold:
                     general[name] = value
                 elif name in WD_REALISM_ALWAYS_TAGS and value >= WD_REALISM_FLOOR:
                     # Keep weak-but-discriminative realism for accidental photos

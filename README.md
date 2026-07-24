@@ -119,7 +119,7 @@ The frontend falls back to local mock mode when the backend is unreachable. Prev
 - Supported image extensions: `.jpg`, `.jpeg`, `.jfif`, `.png`, `.bmp`, `.webp`, `.tiff`
 - Extensionless / odd extensions are included when PIL can decode them
 - By default ignored: `.gif` and common video formats
-- Optional **experimental media**: sample a frame from GIF/video when enabled in settings
+- Optional **experimental media**: quality-filtered multi-frame sampling with presence pooling (require ≥2 corroborating frames; tagged budget up to 48; black/blank frames rejected) when enabled in settings
 
 ## GPU Acceleration
 

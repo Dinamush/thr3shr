@@ -31,7 +31,7 @@ HYBRID_ANIME_VETO = 0.75
 STYLE_EARLY_REJECT_ANIME = 0.85
 STYLE_EARLY_REJECT_REAL_MAX = 0.25
 # Cap multi-frame WD sampling in real_life filter mode (speed).
-FILTER_MEDIA_SAMPLE_MAX = 8
+from .media_sampling import FILTER_MEDIA_SAMPLE_MAX  # noqa: F401
 
 ImageInput = Path | Image.Image | str
 
@@ -51,19 +51,25 @@ DetectorFn = Callable[[Path], StylePrediction]
 
 
 def load_style_probe_image(path: Path) -> ImageInput:
-    """Return a still suitable for style classification (GIF/video → first frame)."""
-    from .services import VIDEO_EXTENSIONS, sample_gif_frames, sample_video_frames
+    """Return a still suitable for style classification (GIF/video → best frame)."""
+    from .media_quality import pick_best_quality_frame
+    from .media_sampling import (
+        VIDEO_EXTENSIONS,
+        decode_frames,
+        plan_candidate_timestamps,
+        probe_media,
+    )
+    from .media_types import SamplingBudget
 
     suffix = path.suffix.lower()
     try:
-        if suffix == ".gif":
-            frames = sample_gif_frames(path, sample_count=1)
+        if suffix == ".gif" or suffix in VIDEO_EXTENSIONS:
+            probe = probe_media(path)
+            budget = SamplingBudget(tagged_max=8, candidate_max=8)
+            stamps = plan_candidate_timestamps(probe, budget)
+            frames = decode_frames(path, stamps, probe, neighbor_retry=True)
             if frames:
-                return frames[0]
-        if suffix in VIDEO_EXTENSIONS:
-            frames = sample_video_frames(path, sample_count=1)
-            if frames:
-                return frames[0]
+                return pick_best_quality_frame(frames).image
     except Exception:
         logger.exception("style_probe_frame_failed path=%s", path)
     return path

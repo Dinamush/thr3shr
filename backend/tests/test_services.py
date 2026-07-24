@@ -303,25 +303,23 @@ def test_even_frame_indices_covers_span() -> None:
 def test_scaled_media_sample_count_grows_with_length(monkeypatch) -> None:
     monkeypatch.delenv("MEDIA_SAMPLE_FRAMES", raising=False)
     monkeypatch.setenv("MEDIA_SAMPLE_FRAMES_MIN", "4")
-    monkeypatch.setenv("MEDIA_SAMPLE_FRAMES_MAX", "24")
-    monkeypatch.setenv("MEDIA_SAMPLE_SECONDS", "0.75")
-    monkeypatch.setenv("MEDIA_GIF_FRAME_STRIDE", "3")
+    monkeypatch.setenv("MEDIA_SAMPLE_FRAMES_MAX", "48")
 
     short = scaled_media_sample_count(duration_seconds=2.0)
-    medium = scaled_media_sample_count(duration_seconds=12.0)
-    long = scaled_media_sample_count(duration_seconds=60.0)
-    assert short == 4  # clamped to min
-    assert medium >= short
-    assert long == 24  # clamped to max
-    assert long >= medium
+    medium = scaled_media_sample_count(duration_seconds=30.0)
+    long = scaled_media_sample_count(duration_seconds=4000.0)
+    assert short == 8
+    assert medium == 12
+    assert long == 48
+    assert long >= medium >= short
 
     gif_short = scaled_media_sample_count(total_frames=6)
-    gif_long = scaled_media_sample_count(total_frames=90)
+    gif_long = scaled_media_sample_count(total_frames=200)
     assert gif_short == 4
-    assert gif_long == 24
+    assert gif_long == 48
 
 
-def test_pool_frame_scores_mean_and_presence_boost() -> None:
+def test_pool_frame_scores_uses_presence_corroboration() -> None:
     pooled = pool_frame_scores(
         [
             {"loli": 0.9, "1girl": 0.8},
@@ -330,10 +328,10 @@ def test_pool_frame_scores_mean_and_presence_boost() -> None:
             {},
         ]
     )
-    # loli present in 1/4 strongly -> mean=0.225, presence=0.9*(1/4)=0.225
-    assert abs(pooled["loli"] - 0.225) < 1e-6
-    # 1girl mean=0.525, presence=0.8*(3/4)=0.6 -> max = 0.6
-    assert abs(pooled["1girl"] - 0.6) < 1e-6
+    # Single-frame loli spike suppressed (omitted from pooled map).
+    assert "loli" not in pooled
+    # 1girl hits on 3 frames → top-3 mean.
+    assert abs(pooled["1girl"] - ((0.8 + 0.7 + 0.6) / 3)) < 1e-6
 
 
 def test_sample_gif_frames_evenly(tmp_path: Path) -> None:
@@ -354,7 +352,11 @@ def test_sample_gif_frames_evenly(tmp_path: Path) -> None:
 
 def test_experimental_media_gif_pools_frame_scores(monkeypatch, tmp_path: Path) -> None:
     path = tmp_path / "multi.gif"
-    frames = [Image.new("RGB", (8, 8), color=c) for c in ("red", "green", "blue", "yellow")]
+    frames = [Image.new("RGB", (16, 16), color=(50, 20, 20)) for _ in range(4)]
+    for img in frames:
+        px = img.load()
+        for x in range(16):
+            px[x, 2] = (255, 255, 255)
     frames[0].save(
         path,
         format="GIF",
@@ -364,14 +366,11 @@ def test_experimental_media_gif_pools_frame_scores(monkeypatch, tmp_path: Path) 
         loop=0,
     )
 
-    calls: list[int] = []
-
     def fake_score_many(images, **kwargs):
-        calls.append(len(images))
-        # Distinct scores per frame index so pooling is exercised.
+        assert kwargs.get("raw_general") is True
         out = []
         for idx, _img in enumerate(images):
-            out.append({"loli": 0.2 * (idx + 1), "1girl": 0.5})
+            out.append({"loli": 0.85 if idx % 2 == 0 else 0.05, "1girl": 0.5})
         return out
 
     class _Engine:
@@ -379,17 +378,14 @@ def test_experimental_media_gif_pools_frame_scores(monkeypatch, tmp_path: Path) 
             return fake_score_many(images, **kwargs)
 
     monkeypatch.setattr("app.inference_engine.get_engine", lambda: _Engine())
-    monkeypatch.setattr("app.services.get_engine", lambda: _Engine(), raising=False)
-    # Patch where used inside _score_pil_frames
-    monkeypatch.setattr("app.services._score_pil_frames", lambda frames, **kw: pool_frame_scores(
-        [{"loli": 0.2 * (i + 1), "1girl": 0.5} for i in range(len(frames))]
-    ))
 
     scores = extract_scores_with_experimental_media(
         path,
         experimental_media_enabled=True,
         tagger_model=TAGGER_MODEL_WD_SWINV2,
+        sample_count=4,
     )
     assert "loli" in scores
     assert "1girl" in scores
-    assert scores["1girl"] == 0.5
+    assert scores["loli"] > 0.5
+    assert scores["1girl"] >= 0.5

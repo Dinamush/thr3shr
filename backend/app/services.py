@@ -6,37 +6,33 @@ import io
 import logging
 import os
 import shutil
-import subprocess
 import tempfile
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from PIL import Image, ImageFile, ImageSequence
+from PIL import Image, ImageFile
 
+from .media_pooling import pool_presence
+from .media_sampling import (
+    DEFAULT_MEDIA_GIF_FRAME_STRIDE,
+    DEFAULT_MEDIA_SAMPLE_MAX,
+    DEFAULT_MEDIA_SAMPLE_MIN,
+    DEFAULT_MEDIA_SAMPLE_SECONDS,
+    FILTER_MEDIA_SAMPLE_MAX,
+    VIDEO_EXTENSIONS,
+    even_frame_indices as _even_frame_indices,
+    sample_gif_frames,
+    sample_video_frames,
+    scaled_media_sample_count,
+)
 from .schemas import AppSettings, FolderMapping, MigrationResult, ScanStats
 
 # Animated/corrupt downloads often truncate; allow decode of usable prefix frames.
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".jfif", ".png", ".bmp", ".webp", ".tiff"}
-VIDEO_EXTENSIONS = {
-    ".mp4",
-    ".mov",
-    ".avi",
-    ".mkv",
-    ".webm",
-    ".flv",
-    ".wmv",
-    ".m4v",
-}
-# Length-scaled sampling for GIF/video. Fixed MEDIA_SAMPLE_FRAMES overrides scaling.
-DEFAULT_MEDIA_SAMPLE_MIN = 4
-DEFAULT_MEDIA_SAMPLE_MAX = 24
-# Videos: aim for about one sample every N seconds.
-DEFAULT_MEDIA_SAMPLE_SECONDS = 0.75
-# GIFs: aim for about one sample every N source frames (before min/max clamp).
-DEFAULT_MEDIA_GIF_FRAME_STRIDE = 3
+
 logger = logging.getLogger(__name__)
 _BATCH_INFERENCE_SUPPORTED: bool | None = None
 _WINDOWS_FORBIDDEN_CHARS = set('<>:"/\\|?*')
@@ -45,238 +41,16 @@ _WINDOWS_FORBIDDEN_CHARS = set('<>:"/\\|?*')
 _INFERENCE_LOCK = threading.Lock()
 
 
-def _env_int(name: str, default: int, *, lo: int, hi: int) -> int:
-    raw = os.getenv(name, str(default)).strip()
-    try:
-        value = int(raw)
-    except ValueError:
-        value = default
-    return max(lo, min(value, hi))
-
-
-def _env_float(name: str, default: float, *, lo: float, hi: float) -> float:
-    raw = os.getenv(name, str(default)).strip()
-    try:
-        value = float(raw)
-    except ValueError:
-        value = default
-    return max(lo, min(value, hi))
-
-
-def _media_sample_bounds() -> tuple[int, int]:
-    minimum = _env_int("MEDIA_SAMPLE_FRAMES_MIN", DEFAULT_MEDIA_SAMPLE_MIN, lo=1, hi=32)
-    maximum = _env_int("MEDIA_SAMPLE_FRAMES_MAX", DEFAULT_MEDIA_SAMPLE_MAX, lo=1, hi=48)
-    if maximum < minimum:
-        maximum = minimum
-    return minimum, maximum
-
-
-def scaled_media_sample_count(
-    *,
-    total_frames: int | None = None,
-    duration_seconds: float | None = None,
-) -> int:
-    """Choose how many frames to sample from media length.
-
-    Longer clips get more samples so late-starting action is less likely to be
-    missed. Caps keep inference cost bounded.
-    """
-    minimum, maximum = _media_sample_bounds()
-    # Optional hard override (old knob): exact count, ignoring duration scaling.
-    override = os.getenv("MEDIA_SAMPLE_FRAMES", "").strip()
-    if override:
-        try:
-            return max(1, min(int(override), maximum))
-        except ValueError:
-            pass
-
-    target = minimum
-    if duration_seconds is not None and duration_seconds > 0:
-        seconds_per = _env_float(
-            "MEDIA_SAMPLE_SECONDS",
-            DEFAULT_MEDIA_SAMPLE_SECONDS,
-            lo=0.25,
-            hi=5.0,
-        )
-        target = int(round(float(duration_seconds) / seconds_per))
-    elif total_frames is not None and total_frames > 0:
-        stride = _env_int(
-            "MEDIA_GIF_FRAME_STRIDE",
-            DEFAULT_MEDIA_GIF_FRAME_STRIDE,
-            lo=1,
-            hi=30,
-        )
-        target = int((int(total_frames) + stride - 1) // stride)
-
-    target = max(minimum, min(target, maximum))
-    if total_frames is not None and total_frames > 0:
-        target = min(target, int(total_frames))
-    return max(1, target)
-
-
-def _even_frame_indices(total_frames: int, sample_count: int) -> list[int]:
-    """Pick up to sample_count indices evenly across [0, total_frames)."""
-    if total_frames <= 0:
-        return []
-    n = min(max(1, sample_count), total_frames)
-    if n == 1:
-        return [0]
-    if n == total_frames:
-        return list(range(total_frames))
-    # Midpoints of n equal bins — covers start/middle/end without double-counting.
-    return sorted({min(total_frames - 1, int((i + 0.5) * total_frames / n)) for i in range(n)})
-
-
 def pool_frame_scores(score_maps: list[dict[str, float]]) -> dict[str, float]:
-    """Aggregate per-frame tag scores into one map.
-
-    Uses mean across frames (missing tag => 0.0) and keeps a presence-aware
-    boost so tags strong on a minority of frames are not washed out:
-    final = max(mean, max_score * (hits / n_frames)).
-    """
-    if not score_maps:
-        return {}
-    n = len(score_maps)
-    keys: set[str] = set()
-    for scores in score_maps:
-        keys.update(scores)
-    pooled: dict[str, float] = {}
-    for key in keys:
-        values = [float(scores.get(key, 0.0)) for scores in score_maps]
-        mean = sum(values) / n
-        peak = max(values)
-        hits = sum(1 for value in values if value > 0.0)
-        presence = peak * (hits / n)
-        pooled[key] = max(mean, presence)
-    return pooled
-
-
-def sample_gif_frames(image_path: Path, sample_count: int | None = None) -> list[Image.Image]:
-    """Load evenly spaced RGB frames from a GIF (handles truncated files)."""
-    frames: list[Image.Image] = []
-    with Image.open(image_path) as gif:
-        total = int(getattr(gif, "n_frames", 0) or 0)
-        if total < 1:
-            # Some GIFs omit n_frames; fall back to sequence length.
-            total = sum(1 for _ in ImageSequence.Iterator(gif))
-            gif.seek(0)
-        # Approximate duration from per-frame delays when available.
-        duration_s = None
-        try:
-            # Pillow duration is milliseconds per frame (often constant).
-            delay_ms = gif.info.get("duration")
-            if delay_ms and total > 0:
-                duration_s = (float(delay_ms) * float(total)) / 1000.0
-        except Exception:
-            duration_s = None
-        count = (
-            max(1, sample_count)
-            if sample_count is not None
-            else scaled_media_sample_count(total_frames=total, duration_seconds=duration_s)
-        )
-        indices = _even_frame_indices(total, count)
-        if not indices:
-            gif.seek(0)
-            frames.append(gif.convert("RGB"))
-            return frames
-        for index in indices:
-            try:
-                gif.seek(index)
-                frames.append(gif.convert("RGB"))
-            except Exception:
-                logger.warning(
-                    "gif_frame_skip path=%s index=%s", image_path, index, exc_info=True
-                )
-    if not frames:
-        raise RuntimeError(f"Unable to decode any frames from GIF: {image_path}")
-    return frames
-
-
-def sample_video_frames(image_path: Path, sample_count: int | None = None) -> list[Image.Image]:
-    """Load evenly spaced RGB frames from a video via OpenCV (bundled FFmpeg)."""
-    import cv2
-    import numpy as np
-
-    cap = cv2.VideoCapture(str(image_path))
-    if not cap.isOpened():
-        raise RuntimeError(f"Unable to open video for frame sampling: {image_path}")
-
-    try:
-        reported = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
-        duration_s = None
-        if reported > 0 and fps > 1e-3:
-            duration_s = float(reported) / fps
-        count = (
-            max(1, sample_count)
-            if sample_count is not None
-            else scaled_media_sample_count(
-                total_frames=reported if reported > 0 else None,
-                duration_seconds=duration_s,
-            )
-        )
-        indices = _even_frame_indices(reported, count) if reported > 0 else []
-        frames: list[Image.Image] = []
-
-        if indices:
-            for index in indices:
-                cap.set(cv2.CAP_PROP_POS_FRAMES, float(index))
-                ok, bgr = cap.read()
-                if not ok or bgr is None:
-                    continue
-                rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-                frames.append(Image.fromarray(np.asarray(rgb)))
-        else:
-            # Unknown length: grab up to `count` frames spaced by skipping.
-            grabbed: list[Image.Image] = []
-            step = 1
-            pos = 0
-            while len(grabbed) < count:
-                ok, bgr = cap.read()
-                if not ok or bgr is None:
-                    break
-                if pos % step == 0:
-                    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-                    grabbed.append(Image.fromarray(np.asarray(rgb)))
-                pos += 1
-                if pos > 0 and pos % (count * 4) == 0:
-                    step = min(step + 1, 30)
-            frames = grabbed
-
-        if not frames:
-            raise RuntimeError(f"Unable to decode any frames from video: {image_path}")
-        logger.info(
-            "video_frames_sampled path=%s frames=%d reported=%d duration_s=%s",
-            image_path,
-            len(frames),
-            reported,
-            f"{duration_s:.2f}" if duration_s is not None else "unknown",
-        )
-        return frames
-    finally:
-        cap.release()
-
-
-def _score_pil_frames(
-    frames: list[Image.Image],
-    *,
-    tagger_model: str,
-    wd_general_threshold: float,
-) -> dict[str, float]:
-    from .inference_engine import get_engine
-    from .providers import ensure_nvidia_dll_search_path, preload_onnx_runtime_dlls
-
-    ensure_nvidia_dll_search_path()
-    preload_onnx_runtime_dlls()
-    if not frames:
-        return {}
-    maps = get_engine().score_many(
-        list(frames),
-        tagger_model=tagger_model,
-        wd_general_threshold=wd_general_threshold,
-        batch_size=min(8, len(frames)),
+    """Deprecated alias: presence pool without timestamps (each frame = scene)."""
+    paired = [(float(i), scores) for i, scores in enumerate(score_maps)]
+    return pool_presence(
+        paired,
+        support_thr=0.35,
+        min_hits=2,
+        top_k=3,
+        scene_gap_s=None,
     )
-    return pool_frame_scores(maps)
 
 
 def normalize_tag_name(value: str) -> str:
@@ -338,6 +112,14 @@ def media_preview_still_jpeg(path: Path, *, max_edge: int = 320) -> bytes:
     Serving full MP4s as ``<video>`` thumbs fails under load (hundreds of
     parallel range requests). A cached JPEG works with a normal ``<img>``.
     """
+    from .media_quality import pick_best_quality_frame
+    from .media_sampling import (
+        decode_frames,
+        plan_candidate_timestamps,
+        probe_media,
+    )
+    from .media_types import SamplingBudget
+
     resolved = path.resolve()
     try:
         mtime_ns = resolved.stat().st_mtime_ns
@@ -351,12 +133,15 @@ def media_preview_still_jpeg(path: Path, *, max_edge: int = 320) -> bytes:
         return cache_path.read_bytes()
 
     suffix = resolved.suffix.lower()
-    if suffix == ".gif":
-        frames = sample_gif_frames(resolved, sample_count=1)
-        image = frames[0]
-    elif suffix in VIDEO_EXTENSIONS:
-        frames = sample_video_frames(resolved, sample_count=1)
-        image = frames[0]
+    if suffix == ".gif" or suffix in VIDEO_EXTENSIONS:
+        probe = probe_media(resolved)
+        # Small candidate set → quality-pick (avoid black/title opens).
+        budget = SamplingBudget(tagged_max=6, candidate_max=6)
+        stamps = plan_candidate_timestamps(probe, budget)
+        frames = decode_frames(resolved, stamps, probe, neighbor_retry=True)
+        if not frames:
+            raise RuntimeError(f"Unable to decode preview frames: {resolved}")
+        image = pick_best_quality_frame(frames).image
     else:
         with Image.open(resolved) as opened:
             image = opened.convert("RGB")
@@ -693,12 +478,11 @@ def extract_scores_with_experimental_media(
     sample_count: int | None = None,
 ) -> dict[str, float]:
     """
-    Experimental path: GIF/video via multi-frame sampling + pooled tag scores.
+    Experimental path: GIF/video via quality-filtered multi-frame presence pooling.
 
-    Samples evenly spaced frames, runs the tagger on each, then pools with
-    mean/presence so brief but strong cues are not washed out.
-    Videos use OpenCV (bundled FFmpeg); system ffmpeg CLI is optional fallback.
-    Pass ``sample_count`` to force/cap frames (real_life filter uses 8).
+    Probe → candidate oversample → quality filter → tagged-frame select → raw WD
+    probs → ≥2-hit presence pool. Pass ``sample_count`` to cap tagged frames
+    (real_life filter uses 8).
     """
     if not experimental_media_enabled or not is_experimental_media(image_path):
         return extract_scores(
@@ -707,86 +491,18 @@ def extract_scores_with_experimental_media(
             wd_general_threshold=wd_general_threshold,
         )
 
-    ext = image_path.suffix.lower()
+    from .media_classify import extract_media_scores
+
     try:
-        if ext == ".gif":
-            frames = sample_gif_frames(image_path, sample_count=sample_count)
-        else:
-            try:
-                frames = sample_video_frames(image_path, sample_count=sample_count)
-            except Exception as cv_err:
-                # Optional CLI ffmpeg fallback when OpenCV cannot decode.
-                frames = _sample_video_frames_ffmpeg(
-                    image_path, sample_count=sample_count
-                )
-                if not frames:
-                    raise RuntimeError(
-                        f"Video frame extraction failed (OpenCV: {cv_err})"
-                    ) from cv_err
-        logger.info(
-            "experimental_media_sampled path=%s frames=%d model=%s",
+        return extract_media_scores(
             image_path,
-            len(frames),
-            tagger_model,
-        )
-        return _score_pil_frames(
-            frames,
             tagger_model=tagger_model,
             wd_general_threshold=wd_general_threshold,
+            budget_override=sample_count,
         )
     except Exception:
         logger.exception("experimental_media_failed path=%s", image_path)
         raise
-
-
-def _sample_video_frames_ffmpeg(
-    image_path: Path, sample_count: int | None = None
-) -> list[Image.Image]:
-    """Fallback: extract evenly spaced frames with system ffmpeg if available."""
-    if shutil.which("ffmpeg") is None:
-        return []
-    # Without a reliable probe here, assume a mid-length clip for scaling.
-    count = (
-        max(1, sample_count)
-        if sample_count is not None
-        else scaled_media_sample_count(duration_seconds=30.0)
-    )
-    frames: list[Image.Image] = []
-    with tempfile.TemporaryDirectory(prefix="media_frames_") as temp_dir:
-        pattern = str(Path(temp_dir) / "frame_%03d.png")
-        # fps filter approximates even coverage across ~duration.
-        seconds_per = _env_float(
-            "MEDIA_SAMPLE_SECONDS",
-            DEFAULT_MEDIA_SAMPLE_SECONDS,
-            lo=0.25,
-            hi=5.0,
-        )
-        fps = max(1.0 / seconds_per, 0.1)
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            "error",
-            "-i",
-            str(image_path),
-            "-vf",
-            f"fps={fps:.4f}",
-            "-frames:v",
-            str(count),
-            pattern,
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            logger.warning(
-                "ffmpeg_frame_extract_failed path=%s err=%s",
-                image_path,
-                (result.stderr or result.stdout or "").strip(),
-            )
-            return []
-        for path in sorted(Path(temp_dir).glob("frame_*.png")):
-            with Image.open(path) as img:
-                frames.append(img.convert("RGB"))
-    return frames
 
 
 def extract_scores_batch(
