@@ -89,8 +89,8 @@ def _find_probe_model() -> Path | None:
     return matches[0] if matches else None
 
 
-@lru_cache(maxsize=1)
-def probe_execution_providers() -> dict[str, object]:
+@lru_cache(maxsize=4)
+def _probe_execution_providers(force_cpu: bool, probe_model: str | None) -> dict[str, object]:
     """
     Probe *active* providers by creating a real ORT session and running it.
 
@@ -100,7 +100,6 @@ def probe_execution_providers() -> dict[str, object]:
     Note: CUDA usability is independent of which tagger model is selected in settings
     (ML-Danbooru vs WD14 variants); both share the same ORT runtime path.
     """
-    force_cpu = _force_cpu()
     result: dict[str, object] = {
         "available_providers": [],
         "active_providers": [],
@@ -130,7 +129,7 @@ def probe_execution_providers() -> dict[str, object]:
             result["active_providers"] = ["CPUExecutionProvider"]
             return result
 
-        model_path = _find_probe_model()
+        model_path = Path(probe_model) if probe_model else None
         if model_path is None:
             result["likely_device"] = "gpu" if result["cuda_available"] else "cpu"
             result["provider_error"] = (
@@ -191,5 +190,18 @@ def probe_execution_providers() -> dict[str, object]:
         return result
 
 
+def probe_execution_providers() -> dict[str, object]:
+    """
+    Probe execution providers, reusing the result across identical inputs.
+
+    A cold probe builds a real ORT session and runs a forward pass, which costs
+    seconds. Only two things change its outcome: the force-CPU switch, and whether
+    a probe model has been downloaded yet — so the cache is keyed on those and
+    self-heals once the model appears.
+    """
+    model_path = _find_probe_model()
+    return _probe_execution_providers(_force_cpu(), str(model_path) if model_path else None)
+
+
 def clear_provider_probe_cache() -> None:
-    probe_execution_providers.cache_clear()
+    _probe_execution_providers.cache_clear()

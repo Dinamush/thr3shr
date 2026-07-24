@@ -8,7 +8,7 @@ from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from .api import router
-from .providers import clear_provider_probe_cache, preload_onnx_runtime_dlls, probe_execution_providers
+from .providers import preload_onnx_runtime_dlls, probe_execution_providers
 from .storage import init_db
 
 app = FastAPI(title="Thresh3r API", version="0.1.0")
@@ -63,7 +63,6 @@ async def log_requests(request: Request, call_next):
 def startup() -> None:
     _configure_logging()
     preload_onnx_runtime_dlls()
-    clear_provider_probe_cache()
     provider_state = _get_provider_snapshot()
     logger.info("onnx_provider_state state=%s", provider_state)
     logger.info("initializing database at startup")

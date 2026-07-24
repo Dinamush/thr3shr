@@ -55,7 +55,7 @@ from .taxonomy import (
     resolve_taxonomy_folder,
     taxonomy_folder_names,
 )
-from .providers import clear_provider_probe_cache, probe_execution_providers
+from .providers import probe_execution_providers
 from .storage import execute, fetch_all, fetch_one, from_json, to_json
 
 router = APIRouter(prefix="/api")
@@ -878,7 +878,6 @@ def _apply_runtime_inference_env(settings: AppSettings) -> None:
         from .inference_engine import reset_engine
 
         reset_engine()
-    clear_provider_probe_cache()
 
 
 def _item_from_row(row: dict, include_full_scores: bool = False) -> ClassifiedItem:
