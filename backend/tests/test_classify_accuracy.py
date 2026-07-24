@@ -17,6 +17,9 @@ SELECTED_ALL = {
     "incest",
     "nakadashi",
     "fellatio",
+    "paizuri",
+    "footjob",
+    "sex",
     "loli",
     "shota",
     "monster_girl",
@@ -25,6 +28,9 @@ SELECTED_ALL = {
     "bestiality",
     "Voyeur",
 }
+
+# Fallback homes are opt-in; they yield to every folder in SELECTED_ALL.
+SELECTED_FALLBACKS = {"SFW", "comic", "scenery"}
 
 
 @pytest.fixture(autouse=True)
@@ -60,16 +66,54 @@ def _reload_default_taxonomy() -> None:
         ({"oral": 0.99}, None),
         ({"pantyshot": 0.9}, "Voyeur/panties"),
         ({"spread_pussy": 0.9}, "Voyeur/pussy"),
-        ({"pussy": 0.88, "cum": 0.61}, None),
-        ({"highleg_leotard": 0.9, "covered_nipples": 0.7}, "Voyeur"),
-        ({"bikini": 0.95}, "Voyeur"),
+        # Surface cum is tease, not a hard act, so the pussy tease folder keeps it.
+        ({"pussy": 0.88, "cum": 0.61}, "Voyeur/pussy"),
         ({"soles": 0.9, "feet": 0.85}, "Voyeur/feet"),
-        ({"pussy": 0.9, "fingering": 0.9}, None),
         ({"upskirt": 0.9, "loli": 0.6}, "loli"),
+        # Voyeur sub-folder funnel
+        ({"highleg_leotard": 0.9, "covered_nipples": 0.7}, "Voyeur/leotard"),
+        ({"bikini": 0.95}, "Voyeur/swimsuit"),
+        ({"nude": 0.9, "nipples": 0.88}, "Voyeur/nude"),
+        ({"lingerie": 0.9}, "Voyeur/lingerie"),
+        ({"pantyhose": 0.95, "zettai_ryouiki": 0.8}, "Voyeur/legwear"),
+        ({"undressing": 0.9, "open_clothes": 0.7}, "Voyeur/undressing"),
+        ({"see-through": 0.9, "nipples": 0.6}, "Voyeur/see_through"),
+        ({"exhibitionism": 0.9}, "Voyeur/public"),
+        ({"cameltoe": 0.9}, "Voyeur"),
+        # see-through needs body exposure; crystalline characters must not match
+        ({"see-through": 0.85, "androgynous": 0.9, "other_focus": 0.93}, None),
+        # New act folders
+        ({"sex": 0.95, "vaginal": 0.9, "hetero": 0.99}, "sex"),
+        ({"paizuri": 0.9, "breasts": 0.99}, "paizuri"),
+        ({"footjob": 0.9, "feet": 0.99}, "footjob"),
+        ({"pussy": 0.9, "fingering": 0.9}, "sex"),
+        ({"sex": 0.95, "fellatio": 0.7}, "fellatio"),
+        ({"sex": 0.95, "cum_in_pussy": 0.6}, "nakadashi"),
     ],
 )
 def test_taxonomy_routing_matrix(scores: dict[str, float], expected: str | None) -> None:
     folder, _score, _secondary = choose_best_destination(scores, SELECTED_ALL)
+    assert folder == expected
+
+
+@pytest.mark.parametrize(
+    "scores,expected",
+    [
+        ({"1girl": 0.99, "solo": 0.98, "smile": 0.9}, "SFW"),
+        ({"comic": 0.9, "speech_bubble": 0.8, "1girl": 0.85}, "comic"),
+        ({"scenery": 0.8, "no_humans": 0.95}, "scenery"),
+        # Fallbacks yield to any real destination.
+        ({"1girl": 0.99, "pantyshot": 0.4}, "Voyeur/panties"),
+        ({"1girl": 0.99, "loli": 0.3}, "loli"),
+        ({"1girl": 0.99, "nipples": 0.9}, "Voyeur/nude"),
+        # Explicit content with no destination goes to review, never to SFW.
+        ({"1girl": 0.99, "censored": 0.6, "penis": 0.2}, None),
+    ],
+)
+def test_fallback_routing_matrix(scores: dict[str, float], expected: str | None) -> None:
+    folder, _score, _secondary = choose_best_destination(
+        scores, SELECTED_ALL | SELECTED_FALLBACKS
+    )
     assert folder == expected
 
 

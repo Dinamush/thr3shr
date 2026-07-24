@@ -2,8 +2,9 @@
 
 Bucket definitions live in ``data/taxonomy.json``. This module loads them and
 scores destinations. Ignore tags are never evidence and never win a folder
-alone; they are not vetoes. Veto tags, when present above the corroboration
-threshold, zero the whole bucket (used so soft Voyeur never wins on sex/cum).
+alone; they are not vetoes. Veto tags, when present above the bucket's veto
+threshold, zero the whole bucket — used so soft Voyeur never wins on sex/cum,
+and so the catch-all ``sex`` folder yields to more specific act folders.
 """
 
 from __future__ import annotations
@@ -35,9 +36,22 @@ class EvidenceTag:
 
 
 # character: age/body-type destinations that should beat act folders when both fire.
-# act: sexual-act destinations. soft: pose/tease (e.g. Voyeur/*) loses to
-# character, act, and theme (Pokemon/furry/monster_girl). other: score-only.
-_BUCKET_ROLES = frozenset({"character", "act", "theme", "soft", "other"})
+# act: sexual-act destinations. soft: pose/tease (e.g. Voyeur/*). fallback:
+# last-resort homes (SFW/comic/scenery) that yield to every scoring role.
+# other: score-only, no precedence handling.
+_BUCKET_ROLES = frozenset({"character", "act", "theme", "soft", "fallback", "other"})
+
+# Roles a winning bucket must yield to, in the order they are offered the slot.
+_ROLE_YIELDS_TO: dict[str, tuple[frozenset[str], ...]] = {
+    "act": (frozenset({"character"}),),
+    "soft": (frozenset({"character"}), frozenset({"act"}), frozenset({"theme"})),
+    "fallback": (
+        frozenset({"character"}),
+        frozenset({"act"}),
+        frozenset({"theme"}),
+        frozenset({"soft"}),
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -49,8 +63,11 @@ class DestinationBucket:
     priority: int  # lower wins on score ties
     evidence: tuple[EvidenceTag, ...]
     ignore: frozenset[str] = field(default_factory=frozenset)
-    # Present above soft_corroboration_raw → bucket scores None (hard sex vs soft).
+    # Present above veto_threshold → bucket scores None (hard sex vs soft).
     veto: frozenset[str] = field(default_factory=frozenset)
+    # Raw score a veto tag must reach. Defaults to soft_corroboration_raw; raise it
+    # on buckets that veto against common tags so tagger noise cannot silence them.
+    veto_threshold: float | None = None
     aliases: tuple[str, ...] = ()
     role: str = "other"
     # Selecting any bucket in a group activates all folders in that group.
@@ -65,7 +82,7 @@ class TaxonomyConfig:
     buckets: tuple[DestinationBucket, ...]
     soft_alone_weight: float = 0.6
     soft_corroboration_raw: float = 0.15
-    # Prefer character over act; character/act/theme over soft (Voyeur).
+    # Enables the role ladder: character > act > theme > soft > fallback.
     prefer_character_over_act: bool = True
     by_alias: dict[str, DestinationBucket] = field(default_factory=dict)
 
@@ -119,6 +136,8 @@ def _parse_bucket(
         raise ValueError(f"taxonomy bucket {bucket_id!r} requires at least one evidence tag")
     if role == "soft":
         veto = frozenset(veto | soft_veto)
+    veto_threshold_raw = raw.get("veto_threshold")
+    veto_threshold = None if veto_threshold_raw is None else float(veto_threshold_raw)
     return DestinationBucket(
         id=bucket_id,
         folder=folder,
@@ -126,6 +145,7 @@ def _parse_bucket(
         evidence=evidence,
         ignore=ignore,
         veto=veto,
+        veto_threshold=veto_threshold,
         aliases=aliases,
         role=role,
         group=group or None,
@@ -249,9 +269,14 @@ def score_bucket(
 ) -> float | None:
     """Evidence-weighted score for one bucket. Ignore tags never contribute."""
     cfg = taxonomy or get_taxonomy()
+    veto_at = (
+        cfg.soft_corroboration_raw
+        if bucket.veto_threshold is None
+        else bucket.veto_threshold
+    )
     for veto_tag in bucket.veto:
         raw = _lookup_score(scores, veto_tag)
-        if raw is not None and float(raw) >= cfg.soft_corroboration_raw:
+        if raw is not None and float(raw) >= veto_at:
             return None
     ignore = {_normalize_tag_name(t) for t in bucket.ignore}
     contribs: list[tuple[str, float, float, float]] = []
@@ -335,8 +360,8 @@ def choose_best_destination(
 
     Taxonomy folders use evidence weights. Non-taxonomy selections keep exact
     tag matching (legacy). Winner is highest score; ties break by bucket
-    priority (and name for non-taxonomy). When enabled, character beats act,
-    and character/act/theme beat soft (Voyeur) destinations.
+    priority (and name for non-taxonomy). When enabled, roles form a ladder:
+    character > act > theme > soft (Voyeur) > fallback (SFW/comic/scenery).
     """
     cfg = taxonomy or get_taxonomy()
     selected = expand_selected_folders(selected, taxonomy=cfg)
@@ -378,14 +403,10 @@ def choose_best_destination(
 
     if cfg.prefer_character_over_act:
         preferred: tuple[str, float, int, str] | None = None
-        if primary_role == "soft":
-            # Soft tease loses to character, act, or theme (Pokemon/furry/…).
-            for roles in ({"character"}, {"act"}, {"theme"}):
-                preferred = _pick_preferred_candidate(candidates, roles)
-                if preferred is not None:
-                    break
-        elif primary_role == "act":
-            preferred = _pick_preferred_candidate(candidates, {"character"})
+        for roles in _ROLE_YIELDS_TO.get(primary_role, ()):
+            preferred = _pick_preferred_candidate(candidates, set(roles))
+            if preferred is not None:
+                break
 
         if preferred is not None:
             primary_folder, primary_score, _priority, primary_role = preferred

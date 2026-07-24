@@ -1,14 +1,20 @@
+import csv
 import json
 from pathlib import Path
+
+import pytest
 
 from app.services import discover_tag_folders
 from app.taxonomy import (
     DEFAULT_TAXONOMY_PATH,
+    _normalize_tag_name,
     choose_best_destination,
     load_taxonomy,
     resolve_taxonomy_folder,
     score_bucket,
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_default_taxonomy_json_loads() -> None:
@@ -18,6 +24,53 @@ def test_default_taxonomy_json_loads() -> None:
     assert resolve_taxonomy_folder("Pokemon", taxonomy=cfg).folder == "Pokemon"
     assert resolve_taxonomy_folder("NTR", taxonomy=cfg).folder == "NTR"
     assert resolve_taxonomy_folder("nakadashi", taxonomy=cfg).folder == "nakadashi"
+
+
+def _tagger_vocabulary() -> set[str]:
+    """Normalized tag names any installed tagger can emit."""
+    names: set[str] = set()
+    tags_csv = REPO_ROOT / "tags.csv"
+    if tags_csv.is_file():
+        with tags_csv.open("r", encoding="utf-8", newline="") as handle:
+            for row in csv.DictReader(handle):
+                tag = (row.get("tag") or "").strip()
+                if tag:
+                    names.add(_normalize_tag_name(tag))
+    hub = Path.home() / ".cache" / "huggingface" / "hub"
+    if hub.is_dir():
+        for path in hub.rglob("selected_tags.csv"):
+            with path.open("r", encoding="utf-8", newline="") as handle:
+                for row in csv.DictReader(handle):
+                    name = (row.get("name") or "").strip()
+                    if name:
+                        names.add(_normalize_tag_name(name))
+    return names
+
+
+def test_every_evidence_tag_exists_in_a_tagger_vocabulary() -> None:
+    """A typo'd evidence tag silently never fires, so fail loudly on one."""
+    vocabulary = _tagger_vocabulary()
+    if len(vocabulary) < 1000:
+        pytest.skip("no tagger vocabulary available to validate against")
+
+    cfg = load_taxonomy(DEFAULT_TAXONOMY_PATH)
+    unknown = [
+        f"{bucket.folder}:{ev.tag}"
+        for bucket in cfg.buckets
+        for ev in list(bucket.evidence) + list(bucket.gated_evidence)
+        if _normalize_tag_name(ev.tag) not in vocabulary
+    ]
+    assert not unknown, f"evidence tags no tagger can emit: {unknown}"
+
+
+def test_no_duplicate_evidence_within_a_bucket() -> None:
+    cfg = load_taxonomy(DEFAULT_TAXONOMY_PATH)
+    for bucket in cfg.buckets:
+        seen: set[str] = set()
+        for ev in list(bucket.evidence) + list(bucket.gated_evidence):
+            norm = _normalize_tag_name(ev.tag)
+            assert norm not in seen, f"{bucket.folder} lists {ev.tag} twice"
+            seen.add(norm)
 
 
 def test_custom_taxonomy_json_is_used(tmp_path: Path) -> None:
@@ -389,8 +442,8 @@ def test_voyeur_subfolder_routes_and_group_expands() -> None:
     assert folder == "Voyeur/caught"
 
     folder, score, _ = choose_best_destination({"flashing": 0.77}, {"Voyeur"})
-    assert folder == "Voyeur"
-    assert score == 0.77 * 0.9
+    assert folder == "Voyeur/public"
+    assert abs(score - 0.77 * 0.95) < 1e-9
 
 
 def test_character_and_act_beat_voyeur_soft() -> None:
@@ -418,7 +471,7 @@ def test_theme_beats_voyeur_soft() -> None:
     )
     assert folder == "Pokemon"
     assert abs(score - 0.7 * 0.85) < 1e-9
-    assert "Voyeur" in {row["tag"] for row in secondary}
+    assert "Voyeur/leotard" in {row["tag"] for row in secondary}
 
     folder, score, _ = choose_best_destination(
         {"ass_focus": 0.99, "furry": 0.5},
@@ -436,12 +489,18 @@ def test_theme_beats_voyeur_soft() -> None:
 
 
 def test_voyeur_catch_all_when_no_subfolder() -> None:
+    # Generic tease cues with no sub-folder home land in the catch-all.
     folder, score, _ = choose_best_destination(
-        {"lingerie": 0.9, "suggestive": 0.5},
+        {"cameltoe": 0.9, "sexually_suggestive": 0.5},
         {"Voyeur", "loli"},
     )
     assert folder == "Voyeur"
-    assert abs(score - 0.9 * 0.5) < 1e-9
+    assert abs(score - 0.9 * 0.75) < 1e-9
+
+    # Lingerie now has its own sub-folder rather than falling through.
+    folder, score, _ = choose_best_destination({"lingerie": 0.9}, {"Voyeur"})
+    assert folder == "Voyeur/lingerie"
+    assert score == 0.9
 
 
 def test_voyeur_fellatio_gesture_is_soft_not_act() -> None:
@@ -533,14 +592,15 @@ def test_voyeur_bikini_pantyhose_and_feet_route() -> None:
         {"bikini": 0.95, "swimsuit": 0.9, "navel": 0.85},
         {"Voyeur"},
     )
-    assert folder == "Voyeur"
-    assert abs(score - 0.95 * 0.8) < 1e-9
+    assert folder == "Voyeur/swimsuit"
+    assert abs(score - 0.95 * 0.95) < 1e-9
 
     folder, score, _ = choose_best_destination(
         {"pantyhose": 0.92, "fishnet_pantyhose": 0.88},
         {"Voyeur"},
     )
-    assert folder == "Voyeur"
+    assert folder == "Voyeur/legwear"
+    assert abs(score - 0.88 * 0.95) < 1e-9
 
     folder, score, _ = choose_best_destination(
         {"soles": 0.92, "feet": 0.9, "toes": 0.8},
@@ -565,8 +625,44 @@ def test_voyeur_costume_tease_routes_leotard() -> None:
         },
         {"Voyeur"},
     )
-    assert folder == "Voyeur"
-    assert abs(score - 0.89 * 0.95) < 1e-9
+    assert folder == "Voyeur/leotard"
+    assert score == 0.89
+
+
+def test_voyeur_funnel_splits_catch_all_clusters() -> None:
+    """Each big cluster that used to pile into Voyeur now has its own folder."""
+    cases = {
+        "Voyeur/nude": {"nude": 0.93, "nipples": 0.9},
+        "Voyeur/lingerie": {"lingerie": 0.88, "garter_belt": 0.7},
+        "Voyeur/swimsuit": {"school_swimsuit": 0.94},
+        "Voyeur/legwear": {"zettai_ryouiki": 0.9, "thighhighs": 0.99},
+        "Voyeur/undressing": {"clothes_lift": 0.91, "open_clothes": 0.8},
+        "Voyeur/see_through": {"see-through": 0.87, "no_bra": 0.5},
+        "Voyeur/public": {"exhibitionism": 0.82},
+        "Voyeur/leotard": {"bodysuit": 0.9},
+    }
+    for expected, scores in cases.items():
+        folder, _score, _ = choose_best_destination(scores, {"Voyeur"})
+        assert folder == expected, f"{scores} routed to {folder}, expected {expected}"
+
+    # Thighhighs alone are too common to justify a legwear destination.
+    assert choose_best_destination({"thighhighs": 0.99}, {"Voyeur"})[0] is None
+
+
+def test_see_through_requires_visible_skin() -> None:
+    """The tagger calls crystalline characters see-through; that is not a tease."""
+    gems = {
+        "see-through": 0.85,
+        "androgynous": 0.93,
+        "other_focus": 0.95,
+        "crystal_hair": 0.68,
+        "necktie": 0.86,
+    }
+    assert choose_best_destination(gems, {"Voyeur"})[0] is None
+
+    folder, score, _ = choose_best_destination({**gems, "nipples": 0.4}, {"Voyeur"})
+    assert folder == "Voyeur/see_through"
+    assert abs(score - 0.85 * 0.95) < 1e-9
 
 
 def test_voyeur_pussy_routes_and_cum_vetoes() -> None:
@@ -659,8 +755,121 @@ def test_voyeur_vetoed_by_cum_or_penetration() -> None:
     assert folder is None
 
     folder, score, _ = choose_best_destination(
-        {"ass_focus": 0.92, "penetration": 0.4},
+        {"ass_focus": 0.92, "deep_penetration": 0.4},
         {"Voyeur", "nakadashi"},
     )
     assert folder is None or folder == "nakadashi"
     assert folder != "Voyeur/ass"
+
+
+ALL_ACTS = {"sex", "nakadashi", "fellatio", "paizuri", "footjob", "fertilization", "NTR"}
+
+
+def test_sex_catches_vanilla_penetration() -> None:
+    folder, score, _ = choose_best_destination(
+        {"sex": 0.97, "vaginal": 0.94, "hetero": 0.99, "penis": 0.98, "1girl": 1.0},
+        ALL_ACTS,
+    )
+    assert folder == "sex"
+    assert abs(score - 0.97 * 0.9) < 1e-9
+
+    # A bare penis is not enough on its own; it needs corroboration.
+    assert choose_best_destination({"penis": 0.98}, ALL_ACTS)[0] is None
+
+    folder, _score, _ = choose_best_destination(
+        {"penis": 0.98, "hetero": 0.9}, ALL_ACTS
+    )
+    assert folder == "sex"
+
+
+def test_sex_defers_to_more_specific_acts() -> None:
+    """The catch-all act folder is vetoed whenever a specific act fires."""
+    specific = {
+        "nakadashi": {"sex": 0.97, "cum_in_pussy": 0.42},
+        "fellatio": {"sex": 0.97, "fellatio": 0.55},
+        "paizuri": {"sex": 0.9, "paizuri": 0.61},
+        "footjob": {"sex": 0.9, "footjob": 0.58},
+        "fertilization": {"sex": 0.95, "impregnation": 0.4},
+        "NTR": {"sex": 0.95, "netorare": 0.45},
+    }
+    for expected, scores in specific.items():
+        folder, _score, _ = choose_best_destination(scores, ALL_ACTS)
+        assert folder == expected, f"{scores} routed to {folder}, expected {expected}"
+
+    # Below the veto threshold the specific tag is treated as tagger noise.
+    folder, _score, _ = choose_best_destination(
+        {"sex": 0.97, "fellatio": 0.12}, ALL_ACTS
+    )
+    assert folder == "sex"
+
+
+def test_sex_still_loses_to_character() -> None:
+    folder, score, _ = choose_best_destination(
+        {"sex": 0.98, "vaginal": 0.95, "loli": 0.44},
+        ALL_ACTS | {"loli", "shota"},
+    )
+    assert folder == "loli"
+    assert score == 0.44
+
+
+def test_paizuri_and_footjob_ignore_bare_body_parts() -> None:
+    assert choose_best_destination(
+        {"breasts": 0.99, "large_breasts": 0.98, "breast_press": 0.9}, ALL_ACTS
+    )[0] is None
+    assert choose_best_destination(
+        {"feet": 0.99, "soles": 0.98, "barefoot": 0.97}, ALL_ACTS
+    )[0] is None
+
+    folder, score, _ = choose_best_destination({"paizuri": 0.86}, ALL_ACTS)
+    assert folder == "paizuri"
+    assert score == 0.86
+
+    folder, score, _ = choose_best_destination(
+        {"footjob": 0.9, "two_footed_footjob": 0.85, "feet": 0.99},
+        ALL_ACTS | {"Voyeur"},
+    )
+    assert folder == "footjob"
+    assert score == 0.9
+
+
+FALLBACKS = {"SFW", "comic", "scenery"}
+
+
+def test_fallback_folders_yield_to_every_other_role() -> None:
+    folder, score, _ = choose_best_destination({"1girl": 0.99, "solo": 0.98}, FALLBACKS)
+    assert folder == "SFW"
+    assert score == 0.99
+
+    # Character, act, theme and soft all outrank a fallback home.
+    for other, scores in (
+        ("loli", {"1girl": 0.99, "loli": 0.3}),
+        ("sex", {"1girl": 0.99, "sex": 0.4}),
+        ("Pokemon", {"1girl": 0.99, "pokemon_(creature)": 0.35}),
+        ("Voyeur/panties", {"1girl": 0.99, "pantyshot": 0.3}),
+    ):
+        folder, _score, _ = choose_best_destination(
+            scores, FALLBACKS | {"loli", "sex", "Pokemon", "Voyeur"}
+        )
+        assert folder == other, f"{scores} routed to {folder}, expected {other}"
+
+
+def test_comic_and_scenery_beat_generic_sfw() -> None:
+    folder, _score, _ = choose_best_destination(
+        {"1girl": 0.79, "comic": 0.9, "speech_bubble": 0.7}, FALLBACKS
+    )
+    assert folder == "comic"
+
+    folder, _score, _ = choose_best_destination(
+        {"scenery": 0.72, "no_humans": 0.9, "sky": 0.77}, FALLBACKS
+    )
+    assert folder == "scenery"
+
+
+def test_sfw_refuses_explicit_content() -> None:
+    """Unrouted explicit art must go to review rather than be filed as safe."""
+    for scores in (
+        {"1girl": 0.99, "nipples": 0.8},
+        {"1girl": 0.99, "censored": 0.6, "penis": 0.7},
+        {"1girl": 0.99, "cameltoe": 0.4},
+    ):
+        assert choose_best_destination(scores, FALLBACKS)[0] is None
