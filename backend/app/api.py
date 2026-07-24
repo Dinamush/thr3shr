@@ -48,7 +48,11 @@ from .services import (
     sanitize_folder_name,
     scan_images,
 )
-from .taxonomy import choose_best_destination, resolve_taxonomy_folder
+from .taxonomy import (
+    bucket_role_for_folder,
+    choose_best_destination,
+    resolve_taxonomy_folder,
+)
 from .providers import clear_provider_probe_cache, probe_execution_providers
 from .storage import execute, fetch_all, fetch_one, from_json, to_json
 
@@ -195,10 +199,15 @@ def _classify_from_scores(
         elif primary_score < confidence_threshold:
             needs_review = True
             reason = f"Below threshold ({primary_score:.3f} < {confidence_threshold:.3f})."
-            # Weak selected-tag winners are suggestions only — do not present as the label.
-            secondary = [{"tag": primary_tag, "score": float(primary_score)}, *secondary][:4]
-            primary_tag = None
-            primary_score = None
+            # Character folders keep a mid-confidence primary for faster review approve.
+            # Act/theme/other weak winners stay suggestion-only (cleared from primary).
+            if bucket_role_for_folder(primary_tag) != "character":
+                secondary = [
+                    {"tag": primary_tag, "score": float(primary_score)},
+                    *secondary,
+                ][:4]
+                primary_tag = None
+                primary_score = None
     result = _ImageInferenceResult(
         image_path=image_path,
         scores=scores,
@@ -632,14 +641,13 @@ def _infer_one_image(
         )
     try:
         if experimental_media_enabled and is_experimental_media(image_path):
-            from .style_detectors import FILTER_MEDIA_SAMPLE_MAX
-
+            # Normal classify/reclassify: duration-scaled frames (up to ~24).
+            # real_life filter mode caps via _extract_scores_for_hybrid instead.
             scores = extract_scores_with_experimental_media(
                 image_path,
                 experimental_media_enabled,
                 tagger_model=tagger_model,
                 wd_general_threshold=wd_general_threshold,
-                sample_count=FILTER_MEDIA_SAMPLE_MAX,
             )
         else:
             scores = extract_scores(

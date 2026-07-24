@@ -33,6 +33,11 @@ class EvidenceTag:
     weight: float
 
 
+# character: age/body-type destinations that should beat act folders when both fire.
+# act: sexual-act destinations. theme/other: score-only competition.
+_BUCKET_ROLES = frozenset({"character", "act", "theme", "other"})
+
+
 @dataclass(frozen=True)
 class DestinationBucket:
     """One destination folder and its scoring rules."""
@@ -43,6 +48,10 @@ class DestinationBucket:
     evidence: tuple[EvidenceTag, ...]
     ignore: frozenset[str] = field(default_factory=frozenset)
     aliases: tuple[str, ...] = ()
+    role: str = "other"
+    # Animal-style tags that only score when a gate tag (sex/penis/…) is also present.
+    gated_evidence: tuple[EvidenceTag, ...] = ()
+    gate_tags: frozenset[str] = field(default_factory=frozenset)
 
 
 @dataclass(frozen=True)
@@ -50,6 +59,8 @@ class TaxonomyConfig:
     buckets: tuple[DestinationBucket, ...]
     soft_alone_weight: float = 0.6
     soft_corroboration_raw: float = 0.15
+    # When an act wins on raw score but a character bucket also scored, prefer character.
+    prefer_character_over_act: bool = True
     by_alias: dict[str, DestinationBucket] = field(default_factory=dict)
 
 
@@ -67,12 +78,31 @@ def _parse_bucket(raw: dict[str, Any]) -> DestinationBucket:
     )
     ignore = frozenset(str(t).strip() for t in (raw.get("ignore") or []) if str(t).strip())
     aliases = tuple(str(a).strip() for a in (raw.get("aliases") or []) if str(a).strip())
+    gated_raw = raw.get("gated_evidence") or []
+    gated_evidence = tuple(
+        EvidenceTag(tag=str(item["tag"]).strip(), weight=float(item["weight"]))
+        for item in gated_raw
+        if str(item.get("tag", "")).strip()
+    )
+    gate_tags = frozenset(
+        str(t).strip() for t in (raw.get("gate_tags") or []) if str(t).strip()
+    )
+    if gated_evidence and not gate_tags:
+        raise ValueError(
+            f"taxonomy bucket {raw.get('id')!r} gated_evidence requires gate_tags"
+        )
     bucket_id = str(raw["id"]).strip()
     folder = str(raw.get("folder") or bucket_id).strip()
     priority = int(raw["priority"])
+    role = str(raw.get("role") or "other").strip().lower()
+    if role not in _BUCKET_ROLES:
+        raise ValueError(
+            f"taxonomy bucket {bucket_id!r} has invalid role {role!r}; "
+            f"expected one of {sorted(_BUCKET_ROLES)}"
+        )
     if not bucket_id or not folder:
         raise ValueError("taxonomy bucket requires non-empty id and folder")
-    if not evidence:
+    if not evidence and not gated_evidence:
         raise ValueError(f"taxonomy bucket {bucket_id!r} requires at least one evidence tag")
     return DestinationBucket(
         id=bucket_id,
@@ -81,6 +111,9 @@ def _parse_bucket(raw: dict[str, Any]) -> DestinationBucket:
         evidence=evidence,
         ignore=ignore,
         aliases=aliases,
+        role=role,
+        gated_evidence=gated_evidence,
+        gate_tags=gate_tags,
     )
 
 
@@ -123,6 +156,7 @@ def load_taxonomy(path: Path | None = None) -> TaxonomyConfig:
         buckets=buckets,
         soft_alone_weight=float(payload.get("soft_alone_weight", 0.6)),
         soft_corroboration_raw=float(payload.get("soft_corroboration_raw", 0.15)),
+        prefer_character_over_act=bool(payload.get("prefer_character_over_act", True)),
         by_alias=by_alias,
     )
 
@@ -205,11 +239,33 @@ def score_bucket(
         if raw is None:
             continue
         contribs.append((ev.tag, float(raw) * float(ev.weight), float(ev.weight), float(raw)))
+
+    if bucket.gated_evidence and bucket.gate_tags:
+        gate_ok = any(
+            (_lookup_score(scores, gate) or 0.0) >= cfg.soft_corroboration_raw
+            for gate in bucket.gate_tags
+            if _normalize_tag_name(gate) not in ignore
+        )
+        if gate_ok:
+            for ev in bucket.gated_evidence:
+                if _normalize_tag_name(ev.tag) in ignore:
+                    continue
+                raw = _lookup_score(scores, ev.tag)
+                if raw is None:
+                    continue
+                contribs.append(
+                    (ev.tag, float(raw) * float(ev.weight), float(ev.weight), float(raw))
+                )
+
     if not contribs:
         return None
     contribs.sort(key=lambda item: item[1], reverse=True)
-    _tag, best_score, best_weight, _raw = contribs[0]
+    best_tag, best_score, best_weight, _raw = contribs[0]
     if best_weight < cfg.soft_alone_weight:
+        gated_names = {_normalize_tag_name(ev.tag) for ev in bucket.gated_evidence}
+        if _normalize_tag_name(best_tag) in gated_names:
+            # Animal/gated hits already required a sex-cue gate tag above.
+            return best_score
         corroborated = any(
             raw >= cfg.soft_corroboration_raw for _t, _s, _w, raw in contribs[1:]
         )
@@ -228,10 +284,12 @@ def choose_best_destination(
 
     Taxonomy folders use evidence weights. Non-taxonomy selections keep exact
     tag matching (legacy). Winner is highest score; ties break by bucket
-    priority (and name for non-taxonomy).
+    priority (and name for non-taxonomy). When enabled, a scoring character
+    bucket beats a higher-scoring act bucket (loli/shota over NTR/fellatio).
     """
     cfg = taxonomy or get_taxonomy()
-    candidates: list[tuple[str, float, int]] = []
+    # folder, score, priority, role
+    candidates: list[tuple[str, float, int, str]] = []
     seen_folders: set[str] = set()
 
     for sel in selected:
@@ -247,7 +305,7 @@ def choose_best_destination(
             bucket_score = score_bucket(scores, bucket, taxonomy=cfg)
             if bucket_score is None:
                 continue
-            candidates.append((bucket.folder, bucket_score, bucket.priority))
+            candidates.append((bucket.folder, bucket_score, bucket.priority, bucket.role))
             continue
 
         # Legacy exact selected-tag match.
@@ -258,15 +316,46 @@ def choose_best_destination(
         if folder_key in seen_folders:
             continue
         seen_folders.add(folder_key)
-        candidates.append((name, float(raw), 10_000))
+        candidates.append((name, float(raw), 10_000, "other"))
 
     if not candidates:
         return None, None, []
 
     candidates.sort(key=lambda item: (-item[1], item[2], _normalize_tag_name(item[0])))
-    primary_folder, primary_score, _priority = candidates[0]
+    primary_folder, primary_score, _priority, primary_role = candidates[0]
+
+    if (
+        cfg.prefer_character_over_act
+        and primary_role == "act"
+    ):
+        character_hits = [c for c in candidates if c[3] == "character"]
+        if character_hits:
+            character_hits.sort(
+                key=lambda item: (-item[1], item[2], _normalize_tag_name(item[0]))
+            )
+            primary_folder, primary_score, _priority, primary_role = character_hits[0]
+            # Rebuild ordering: preferred primary first, then remaining by score.
+            rest = [c for c in candidates if c[0] != primary_folder]
+            rest.sort(key=lambda item: (-item[1], item[2], _normalize_tag_name(item[0])))
+            candidates = [
+                (primary_folder, primary_score, _priority, primary_role),
+                *rest,
+            ]
+
     secondary = [
         {"tag": folder, "score": float(score)}
-        for folder, score, _p in candidates[1 : 1 + max_secondary]
+        for folder, score, _p, _role in candidates[1 : 1 + max_secondary]
     ]
     return primary_folder, float(primary_score), secondary
+
+
+def bucket_role_for_folder(
+    folder: str | None, taxonomy: TaxonomyConfig | None = None
+) -> str:
+    """Return taxonomy role for a destination folder name, or ``other``."""
+    if not folder:
+        return "other"
+    bucket = resolve_taxonomy_folder(folder, taxonomy=taxonomy)
+    if bucket is None:
+        return "other"
+    return bucket.role

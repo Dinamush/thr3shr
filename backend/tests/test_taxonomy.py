@@ -294,3 +294,73 @@ def test_score_bucket_skips_ignore_even_if_listed() -> None:
     # Only ignore-like body tags present → no score.
     assert score_bucket({"flat_chest": 0.99, "petite": 0.98}, bucket) is None
     assert score_bucket({"loli": 0.7, "flat_chest": 0.99}, bucket) == 0.7
+
+
+def test_character_beats_higher_scoring_act() -> None:
+    selected = {"loli", "NTR", "fellatio", "shota"}
+    folder, score, secondary = choose_best_destination(
+        {"netorare": 0.79, "loli": 0.41, "fellatio": 0.55},
+        selected,
+    )
+    assert folder == "loli"
+    assert score == 0.41
+    assert "NTR" in {row["tag"] for row in secondary}
+
+
+def test_higher_theme_score_still_beats_act() -> None:
+    """Theme vs act stays score-based (no theme-over-act override)."""
+    selected = {"Pokemon", "bestiality", "furry"}
+    folder, score, _ = choose_best_destination(
+        {"bestiality": 0.95, "pokemon_(creature)": 0.97, "dog": 0.9},
+        selected,
+    )
+    assert folder == "Pokemon"
+    assert score == 0.97
+
+
+def test_act_still_wins_without_character() -> None:
+    selected = {"NTR", "fellatio", "fertilization"}
+    folder, score, _ = choose_best_destination(
+        {"netorare": 0.8, "fellatio": 0.5},
+        selected,
+    )
+    assert folder == "NTR"
+    assert score == 0.8
+
+
+def test_bestiality_bucket_from_animal_sex_cues() -> None:
+    selected = {"bestiality", "furry", "fellatio"}
+    # Bare animal must not route.
+    assert choose_best_destination({"dog": 0.95, "animal": 0.8}, selected)[0] is None
+
+    folder, score, _ = choose_best_destination(
+        {"dog": 0.92, "sex": 0.9, "penis": 0.85, "1girl": 0.9},
+        selected,
+    )
+    assert folder == "bestiality"
+    assert score is not None and score >= 0.4
+
+    folder, score, _ = choose_best_destination({"bestiality": 0.88, "dog": 0.5}, selected)
+    assert folder == "bestiality"
+    assert score == 0.88
+
+
+def test_pokemon_pokephilia_and_creature_alias() -> None:
+    selected = {"Pokemon", "furry"}
+    folder, score, _ = choose_best_destination({"pokephilia": 0.9}, selected)
+    assert folder == "Pokemon"
+    assert abs(score - 0.9 * 0.9) < 1e-9
+
+    folder, score, _ = choose_best_destination({"pokemon_creature": 0.7}, selected)
+    assert folder == "Pokemon"
+    assert score == 0.7
+
+
+def test_fertilization_accepts_cross_section_underscore() -> None:
+    selected = {"fertilization", "nakadashi"}
+    folder, score, _ = choose_best_destination(
+        {"cross_section": 0.9, "ovum": 0.4},
+        selected,
+    )
+    assert folder == "fertilization"
+    assert abs(score - 0.9 * 0.45) < 1e-9

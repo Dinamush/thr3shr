@@ -22,6 +22,7 @@ SELECTED_ALL = {
     "monster_girl",
     "furry",
     "Pokemon",
+    "bestiality",
 }
 
 
@@ -71,6 +72,32 @@ def test_classify_gate_clears_weak_taxonomy_winner(tmp_path: Path) -> None:
     assert result.primary_tag is None
     assert result.needs_review is True
     assert result.secondary[0]["tag"] == "loli"
+
+
+def test_classify_keeps_mid_character_primary_for_review(tmp_path: Path) -> None:
+    """Character hits below confidence stay as primary (needs_review), not cleared."""
+    result = _classify_from_scores(
+        tmp_path / "x.jpg",
+        {"loli": 0.42, "1girl": 0.99},
+        {"loli", "shota", "NTR", "fellatio"},
+        confidence_threshold=0.6,
+    )
+    assert result.primary_tag == "loli"
+    assert result.primary_score == 0.42
+    assert result.needs_review is True
+    assert "threshold" in (result.reason or "").lower()
+
+
+def test_classify_still_clears_mid_act_primary(tmp_path: Path) -> None:
+    result = _classify_from_scores(
+        tmp_path / "x.jpg",
+        {"fellatio": 0.42, "1girl": 0.99},
+        {"loli", "fellatio"},
+        confidence_threshold=0.6,
+    )
+    assert result.primary_tag is None
+    assert result.needs_review is True
+    assert result.secondary[0]["tag"] == "fellatio"
 
 
 def test_classify_assigns_strong_taxonomy_winner(tmp_path: Path) -> None:

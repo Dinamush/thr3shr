@@ -1,11 +1,13 @@
 {
   "soft_alone_weight": 0.6,
   "soft_corroboration_raw": 0.15,
+  "prefer_character_over_act": true,
   "buckets": [
     {
       "id": "real_life",
       "folder": "real_life",
       "priority": 0,
+      "role": "theme",
       "aliases": ["photo", "Real Life", "real life", "real-life"],
       "ignore": [
         "depth_of_field",
@@ -53,6 +55,7 @@
       "id": "incest",
       "folder": "incest",
       "priority": 1,
+      "role": "theme",
       "ignore": [
         "siblings",
         "sisters",
@@ -78,6 +81,7 @@
       "id": "loli",
       "folder": "loli",
       "priority": 2,
+      "role": "character",
       "ignore": [
         "lolita_fashion",
         "gothic_lolita",
@@ -123,6 +127,7 @@
       "id": "shota",
       "folder": "shota",
       "priority": 3,
+      "role": "character",
       "ignore": [
         "child",
         "paper_child",
@@ -182,6 +187,7 @@
       "id": "fertilization",
       "folder": "fertilization",
       "priority": 4,
+      "role": "act",
       "aliases": ["impregnation", "Impregnation", "Fertilization"],
       "ignore": [
         "pregnant",
@@ -207,13 +213,15 @@
         { "tag": "uterus", "weight": 0.5 },
         { "tag": "cervix", "weight": 0.45 },
         { "tag": "x-ray", "weight": 0.45 },
-        { "tag": "cross-section", "weight": 0.45 }
+        { "tag": "cross-section", "weight": 0.45 },
+        { "tag": "cross_section", "weight": 0.45 }
       ]
     },
     {
       "id": "ntr",
       "folder": "NTR",
       "priority": 5,
+      "role": "act",
       "aliases": ["ntr", "netorare", "Netorare"],
       "ignore": [
         "voyeurism",
@@ -236,6 +244,7 @@
       "id": "nakadashi",
       "folder": "nakadashi",
       "priority": 6,
+      "role": "act",
       "aliases": ["creampie", "Nakadashi"],
       "ignore": [
         "cum_in_ass",
@@ -263,6 +272,7 @@
       "id": "fellatio",
       "folder": "fellatio",
       "priority": 7,
+      "role": "act",
       "ignore": [
         "oral",
         "cunnilingus",
@@ -285,9 +295,51 @@
       ]
     },
     {
+      "id": "bestiality",
+      "folder": "bestiality",
+      "priority": 8,
+      "role": "act",
+      "aliases": ["zoophilia", "Bestiality"],
+      "ignore": [
+        "dog_girl",
+        "cat_girl",
+        "wolf_girl",
+        "fox_girl",
+        "animal_ears",
+        "fake_animal_ears",
+        "kemonomimi_mode",
+        "pokemon_(creature)",
+        "pokemon_creature",
+        "furry",
+        "furry_female",
+        "furry_male",
+        "animal_focus",
+        "pet_play",
+        "collar"
+      ],
+      "evidence": [
+        { "tag": "bestiality", "weight": 1.0 },
+        { "tag": "zoophilia", "weight": 0.95 },
+        { "tag": "animal_penis", "weight": 0.9 },
+        { "tag": "knot", "weight": 0.85 },
+        { "tag": "interspecies", "weight": 0.75 }
+      ],
+      "gate_tags": ["sex", "penis", "vaginal", "rape", "ejaculation"],
+      "gated_evidence": [
+        { "tag": "dog", "weight": 0.55 },
+        { "tag": "cat", "weight": 0.55 },
+        { "tag": "horse", "weight": 0.55 },
+        { "tag": "pig", "weight": 0.55 },
+        { "tag": "cow", "weight": 0.55 },
+        { "tag": "wolf", "weight": 0.5 },
+        { "tag": "animal", "weight": 0.45 }
+      ]
+    },
+    {
       "id": "monster_girl",
       "folder": "monster_girl",
-      "priority": 8,
+      "priority": 9,
+      "role": "theme",
       "aliases": ["monster girl", "Monster_Girl"],
       "ignore": [
         "monster",
@@ -330,7 +382,8 @@
     {
       "id": "furry",
       "folder": "furry",
-      "priority": 9,
+      "priority": 10,
+      "role": "theme",
       "ignore": [
         "animal_ears",
         "fake_animal_ears",
@@ -357,8 +410,9 @@
     {
       "id": "pokemon",
       "folder": "Pokemon",
-      "priority": 10,
-      "aliases": ["pokemon", "pokemon_(creature)"],
+      "priority": 11,
+      "role": "theme",
+      "aliases": ["pokemon", "pokemon_(creature)", "pokemon_creature"],
       "ignore": [
         "pokemon_ears",
         "pokemon_tail",
@@ -376,6 +430,8 @@
       ],
       "evidence": [
         { "tag": "pokemon_(creature)", "weight": 1.0 },
+        { "tag": "pokemon_creature", "weight": 1.0 },
+        { "tag": "pokephilia", "weight": 0.9 },
         { "tag": "holding_pokemon", "weight": 0.9 },
         { "tag": "shiny_pokemon", "weight": 0.9 },
         { "tag": "mega_pokemon", "weight": 0.9 },
