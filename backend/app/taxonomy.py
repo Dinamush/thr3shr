@@ -2,7 +2,8 @@
 
 Bucket definitions live in ``data/taxonomy.json``. This module loads them and
 scores destinations. Ignore tags are never evidence and never win a folder
-alone; they are not vetoes.
+alone; they are not vetoes. Veto tags, when present above the corroboration
+threshold, zero the whole bucket (used so soft Voyeur never wins on sex/cum).
 """
 
 from __future__ import annotations
@@ -34,8 +35,9 @@ class EvidenceTag:
 
 
 # character: age/body-type destinations that should beat act folders when both fire.
-# act: sexual-act destinations. theme/other: score-only competition.
-_BUCKET_ROLES = frozenset({"character", "act", "theme", "other"})
+# act: sexual-act destinations. soft: pose/tease (e.g. Voyeur/*) loses to
+# character, act, and theme (Pokemon/furry/monster_girl). other: score-only.
+_BUCKET_ROLES = frozenset({"character", "act", "theme", "soft", "other"})
 
 
 @dataclass(frozen=True)
@@ -47,8 +49,12 @@ class DestinationBucket:
     priority: int  # lower wins on score ties
     evidence: tuple[EvidenceTag, ...]
     ignore: frozenset[str] = field(default_factory=frozenset)
+    # Present above soft_corroboration_raw → bucket scores None (hard sex vs soft).
+    veto: frozenset[str] = field(default_factory=frozenset)
     aliases: tuple[str, ...] = ()
     role: str = "other"
+    # Selecting any bucket in a group activates all folders in that group.
+    group: str | None = None
     # Animal-style tags that only score when a gate tag (sex/penis/…) is also present.
     gated_evidence: tuple[EvidenceTag, ...] = ()
     gate_tags: frozenset[str] = field(default_factory=frozenset)
@@ -59,7 +65,7 @@ class TaxonomyConfig:
     buckets: tuple[DestinationBucket, ...]
     soft_alone_weight: float = 0.6
     soft_corroboration_raw: float = 0.15
-    # When an act wins on raw score but a character bucket also scored, prefer character.
+    # Prefer character over act; character/act/theme over soft (Voyeur).
     prefer_character_over_act: bool = True
     by_alias: dict[str, DestinationBucket] = field(default_factory=dict)
 
@@ -69,7 +75,11 @@ _LOADED: TaxonomyConfig | None = None
 _LOADED_PATH: Path | None = None
 
 
-def _parse_bucket(raw: dict[str, Any]) -> DestinationBucket:
+def _parse_bucket(
+    raw: dict[str, Any],
+    *,
+    soft_veto: frozenset[str] = frozenset(),
+) -> DestinationBucket:
     evidence_raw = raw.get("evidence") or []
     evidence = tuple(
         EvidenceTag(tag=str(item["tag"]).strip(), weight=float(item["weight"]))
@@ -77,6 +87,7 @@ def _parse_bucket(raw: dict[str, Any]) -> DestinationBucket:
         if str(item.get("tag", "")).strip()
     )
     ignore = frozenset(str(t).strip() for t in (raw.get("ignore") or []) if str(t).strip())
+    veto = frozenset(str(t).strip() for t in (raw.get("veto") or []) if str(t).strip())
     aliases = tuple(str(a).strip() for a in (raw.get("aliases") or []) if str(a).strip())
     gated_raw = raw.get("gated_evidence") or []
     gated_evidence = tuple(
@@ -92,9 +103,11 @@ def _parse_bucket(raw: dict[str, Any]) -> DestinationBucket:
             f"taxonomy bucket {raw.get('id')!r} gated_evidence requires gate_tags"
         )
     bucket_id = str(raw["id"]).strip()
-    folder = str(raw.get("folder") or bucket_id).strip()
+    folder = str(raw.get("folder") or bucket_id).strip().replace("\\", "/")
     priority = int(raw["priority"])
     role = str(raw.get("role") or "other").strip().lower()
+    group_raw = raw.get("group")
+    group = str(group_raw).strip() if group_raw else None
     if role not in _BUCKET_ROLES:
         raise ValueError(
             f"taxonomy bucket {bucket_id!r} has invalid role {role!r}; "
@@ -104,27 +117,30 @@ def _parse_bucket(raw: dict[str, Any]) -> DestinationBucket:
         raise ValueError("taxonomy bucket requires non-empty id and folder")
     if not evidence and not gated_evidence:
         raise ValueError(f"taxonomy bucket {bucket_id!r} requires at least one evidence tag")
+    if role == "soft":
+        veto = frozenset(veto | soft_veto)
     return DestinationBucket(
         id=bucket_id,
         folder=folder,
         priority=priority,
         evidence=evidence,
         ignore=ignore,
+        veto=veto,
         aliases=aliases,
         role=role,
+        group=group or None,
         gated_evidence=gated_evidence,
         gate_tags=gate_tags,
     )
 
 
 def _bucket_aliases(bucket: DestinationBucket) -> set[str]:
+    # Only id/folder/explicit aliases — do not bind raw evidence tags (e.g. voyeurism)
+    # as selectable destinations; those are for scoring, not folder pickers.
     aliases = {
         _normalize_tag_name(bucket.id),
         _normalize_tag_name(bucket.folder),
     }
-    for ev in bucket.evidence:
-        if ev.weight >= 1.0:
-            aliases.add(_normalize_tag_name(ev.tag))
     for alias in bucket.aliases:
         aliases.add(_normalize_tag_name(alias))
     return aliases
@@ -141,7 +157,10 @@ def load_taxonomy(path: Path | None = None) -> TaxonomyConfig:
     if not isinstance(buckets_raw, list) or not buckets_raw:
         raise ValueError("taxonomy.buckets must be a non-empty list")
 
-    buckets = tuple(_parse_bucket(item) for item in buckets_raw)
+    soft_veto = frozenset(
+        str(t).strip() for t in (payload.get("soft_veto") or []) if str(t).strip()
+    )
+    buckets = tuple(_parse_bucket(item, soft_veto=soft_veto) for item in buckets_raw)
     by_alias: dict[str, DestinationBucket] = {}
     for bucket in buckets:
         for alias in _bucket_aliases(bucket):
@@ -230,6 +249,10 @@ def score_bucket(
 ) -> float | None:
     """Evidence-weighted score for one bucket. Ignore tags never contribute."""
     cfg = taxonomy or get_taxonomy()
+    for veto_tag in bucket.veto:
+        raw = _lookup_score(scores, veto_tag)
+        if raw is not None and float(raw) >= cfg.soft_corroboration_raw:
+            return None
     ignore = {_normalize_tag_name(t) for t in bucket.ignore}
     contribs: list[tuple[str, float, float, float]] = []
     for ev in bucket.evidence:
@@ -274,6 +297,34 @@ def score_bucket(
     return best_score
 
 
+def expand_selected_folders(
+    selected: set[str], taxonomy: TaxonomyConfig | None = None
+) -> set[str]:
+    """Expand group selections (e.g. any Voyeur* folder → all Voyeur destinations)."""
+    cfg = taxonomy or get_taxonomy()
+    expanded = {(sel or "").strip() for sel in selected if (sel or "").strip()}
+    groups: set[str] = set()
+    for name in list(expanded):
+        bucket = resolve_taxonomy_folder(name, taxonomy=cfg)
+        if bucket is not None and bucket.group:
+            groups.add(bucket.group)
+    for bucket in cfg.buckets:
+        if bucket.group and bucket.group in groups:
+            expanded.add(bucket.folder)
+    return expanded
+
+
+def _pick_preferred_candidate(
+    candidates: list[tuple[str, float, int, str]],
+    roles: set[str],
+) -> tuple[str, float, int, str] | None:
+    hits = [c for c in candidates if c[3] in roles]
+    if not hits:
+        return None
+    hits.sort(key=lambda item: (-item[1], item[2], _normalize_tag_name(item[0])))
+    return hits[0]
+
+
 def choose_best_destination(
     scores: dict[str, float],
     selected: set[str],
@@ -284,10 +335,11 @@ def choose_best_destination(
 
     Taxonomy folders use evidence weights. Non-taxonomy selections keep exact
     tag matching (legacy). Winner is highest score; ties break by bucket
-    priority (and name for non-taxonomy). When enabled, a scoring character
-    bucket beats a higher-scoring act bucket (loli/shota over NTR/fellatio).
+    priority (and name for non-taxonomy). When enabled, character beats act,
+    and character/act/theme beat soft (Voyeur) destinations.
     """
     cfg = taxonomy or get_taxonomy()
+    selected = expand_selected_folders(selected, taxonomy=cfg)
     # folder, score, priority, role
     candidates: list[tuple[str, float, int, str]] = []
     seen_folders: set[str] = set()
@@ -324,17 +376,19 @@ def choose_best_destination(
     candidates.sort(key=lambda item: (-item[1], item[2], _normalize_tag_name(item[0])))
     primary_folder, primary_score, _priority, primary_role = candidates[0]
 
-    if (
-        cfg.prefer_character_over_act
-        and primary_role == "act"
-    ):
-        character_hits = [c for c in candidates if c[3] == "character"]
-        if character_hits:
-            character_hits.sort(
-                key=lambda item: (-item[1], item[2], _normalize_tag_name(item[0]))
-            )
-            primary_folder, primary_score, _priority, primary_role = character_hits[0]
-            # Rebuild ordering: preferred primary first, then remaining by score.
+    if cfg.prefer_character_over_act:
+        preferred: tuple[str, float, int, str] | None = None
+        if primary_role == "soft":
+            # Soft tease loses to character, act, or theme (Pokemon/furry/…).
+            for roles in ({"character"}, {"act"}, {"theme"}):
+                preferred = _pick_preferred_candidate(candidates, roles)
+                if preferred is not None:
+                    break
+        elif primary_role == "act":
+            preferred = _pick_preferred_candidate(candidates, {"character"})
+
+        if preferred is not None:
+            primary_folder, primary_score, _priority, primary_role = preferred
             rest = [c for c in candidates if c[0] != primary_folder]
             rest.sort(key=lambda item: (-item[1], item[2], _normalize_tag_name(item[0])))
             candidates = [

@@ -552,19 +552,27 @@ function App() {
   async function addValidatedTag(rawValue) {
     const value = rawValue.trim();
     if (!value) return;
-    if (selectedTags.includes(value)) return;
+    const already = selectedTags.some((t) => t.toLowerCase() === value.toLowerCase());
+    if (already) return;
 
-    if (tagOptions.includes(value)) {
-      addSelectedTag(value);
+    const fromOptions = tagOptions.find((t) => t.toLowerCase() === value.toLowerCase());
+    if (fromOptions) {
+      addSelectedTag(fromOptions);
       return;
     }
 
     const result = await api.getTags(value, 200);
-    if ((result.items || []).includes(value)) {
-      addSelectedTag(value);
+    const items = result.items || [];
+    const match =
+      items.find((t) => t === value) ||
+      items.find((t) => t.toLowerCase() === value.toLowerCase());
+    if (match) {
+      addSelectedTag(match);
       return;
     }
-    throw new Error(`Tag not found in tags.csv: ${value}`);
+    throw new Error(
+      `Unknown destination: ${value}. Try a taxonomy folder (e.g. Voyeur) or a tags.csv tag.`
+    );
   }
 
   async function addTagsFromInput(raw) {
@@ -859,7 +867,7 @@ function App() {
           Only these tags compete for folder assignment. Changes auto-save.
         </span>
         <label>
-          Tag match search (from tags.csv)
+          Tag match search (destinations + tags.csv)
           <input
             value={tagQuery}
             onChange={(e) => setTagQuery(e.target.value)}
@@ -871,12 +879,13 @@ function App() {
                 setError("");
                 try {
                   await addTagsFromInput(tagQuery);
+                  setTagQuery("");
                 } catch (err) {
                   setError(err.message);
                 }
               }
             }}
-            placeholder="Type to search tags (e.g. monster_girl)..."
+            placeholder="Type Voyeur, loli, Pokemon…"
           />
           <datalist id="tag-match-suggestions">
             {tagOptions.map((tag) => (

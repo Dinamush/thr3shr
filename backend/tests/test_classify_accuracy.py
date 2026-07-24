@@ -23,6 +23,7 @@ SELECTED_ALL = {
     "furry",
     "Pokemon",
     "bestiality",
+    "Voyeur",
 }
 
 
@@ -52,9 +53,19 @@ def _reload_default_taxonomy() -> None:
         ({"animal_ears": 0.99, "fake_animal_ears": 0.9}, None),
         ({"siblings": 0.99}, None),
         ({"pregnant": 0.99}, None),
-        ({"voyeurism": 0.99, "caught": 0.9}, None),
+        # voyeurism is Voyeur/caught evidence (not NTR); caught/watching alone must not route
+        ({"voyeurism": 0.99, "caught": 0.9}, "Voyeur/caught"),
+        ({"watching": 0.99, "caught": 0.9}, None),
         ({"horns": 0.99, "wings": 0.98, "tail": 0.97}, None),
         ({"oral": 0.99}, None),
+        ({"pantyshot": 0.9}, "Voyeur/panties"),
+        ({"spread_pussy": 0.9}, "Voyeur/pussy"),
+        ({"pussy": 0.88, "cum": 0.61}, None),
+        ({"highleg_leotard": 0.9, "covered_nipples": 0.7}, "Voyeur"),
+        ({"bikini": 0.95}, "Voyeur"),
+        ({"soles": 0.9, "feet": 0.85}, "Voyeur/feet"),
+        ({"pussy": 0.9, "fingering": 0.9}, None),
+        ({"upskirt": 0.9, "loli": 0.6}, "loli"),
     ],
 )
 def test_taxonomy_routing_matrix(scores: dict[str, float], expected: str | None) -> None:

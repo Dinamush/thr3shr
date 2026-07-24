@@ -364,3 +364,217 @@ def test_fertilization_accepts_cross_section_underscore() -> None:
     )
     assert folder == "fertilization"
     assert abs(score - 0.9 * 0.45) < 1e-9
+
+
+def test_voyeur_subfolder_routes_and_group_expands() -> None:
+    # Selecting only parent Voyeur still scores nested buckets.
+    folder, score, _ = choose_best_destination(
+        {"pantyshot": 0.91, "1girl": 0.99},
+        {"Voyeur"},
+    )
+    assert folder == "Voyeur/panties"
+    assert score == 0.91
+
+    folder, score, _ = choose_best_destination({"upskirt": 0.88}, {"Voyeur"})
+    assert folder == "Voyeur/upskirt"
+    assert score == 0.88
+
+    folder, score, _ = choose_best_destination({"ass_focus": 0.9}, {"Voyeur"})
+    assert folder == "Voyeur/ass"
+
+    folder, score, _ = choose_best_destination({"cleavage": 0.86}, {"Voyeur"})
+    assert folder == "Voyeur/cleavage"
+
+    folder, score, _ = choose_best_destination({"voyeurism": 0.8}, {"Voyeur"})
+    assert folder == "Voyeur/caught"
+
+    folder, score, _ = choose_best_destination({"flashing": 0.77}, {"Voyeur"})
+    assert folder == "Voyeur"
+    assert score == 0.77 * 0.9
+
+
+def test_character_and_act_beat_voyeur_soft() -> None:
+    selected = {"Voyeur", "loli", "fellatio"}
+    folder, score, secondary = choose_best_destination(
+        {"pantyshot": 0.95, "loli": 0.55},
+        selected,
+    )
+    assert folder == "loli"
+    assert score == 0.55
+    assert "Voyeur/panties" in {row["tag"] for row in secondary}
+
+    folder, score, _ = choose_best_destination(
+        {"ass_focus": 0.99, "fellatio": 0.7},
+        selected,
+    )
+    assert folder == "fellatio"
+    assert score == 0.7
+
+
+def test_theme_beats_voyeur_soft() -> None:
+    folder, score, secondary = choose_best_destination(
+        {"highleg_leotard": 0.95, "poke_ball_basic": 0.7},
+        {"Voyeur", "Pokemon"},
+    )
+    assert folder == "Pokemon"
+    assert abs(score - 0.7 * 0.85) < 1e-9
+    assert "Voyeur" in {row["tag"] for row in secondary}
+
+    folder, score, _ = choose_best_destination(
+        {"ass_focus": 0.99, "furry": 0.5},
+        {"Voyeur", "furry"},
+    )
+    assert folder == "furry"
+    assert score == 0.5
+
+    folder, score, _ = choose_best_destination(
+        {"cleavage": 0.9, "monster_girl": 0.55},
+        {"Voyeur", "monster_girl"},
+    )
+    assert folder == "monster_girl"
+    assert score == 0.55
+
+
+def test_voyeur_catch_all_when_no_subfolder() -> None:
+    folder, score, _ = choose_best_destination(
+        {"lingerie": 0.9, "suggestive": 0.5},
+        {"Voyeur", "loli"},
+    )
+    assert folder == "Voyeur"
+    assert abs(score - 0.9 * 0.5) < 1e-9
+
+
+def test_voyeur_sexual_presentation_needs_corroboration() -> None:
+    # Low-weight midriff/crop cues must not win alone (soft_alone_weight).
+    folder, score, _ = choose_best_destination({"crop_top": 0.9}, {"Voyeur"})
+    assert folder is None
+    assert score is None
+
+    folder, score, _ = choose_best_destination(
+        {"crop_top": 0.68, "midriff": 0.68},
+        {"Voyeur"},
+    )
+    assert folder == "Voyeur"
+    assert abs(score - 0.68 * 0.55) < 1e-9
+
+    folder, score, _ = choose_best_destination(
+        {"navel": 0.8, "bare_shoulders": 0.7, "thighs": 0.6},
+        {"Voyeur"},
+    )
+    assert folder == "Voyeur"
+
+    # Fashion portrait without sexual-presentation cues stays unmatched.
+    folder, score, _ = choose_best_destination(
+        {
+            "jirai_kei": 0.88,
+            "mouth_mask": 0.92,
+            "lipstick_tube": 0.78,
+            "shirt": 0.89,
+            "skirt": 0.9,
+            "looking_at_viewer": 0.87,
+        },
+        {"Voyeur"},
+    )
+    assert folder is None
+
+
+def test_voyeur_bikini_pantyhose_and_feet_route() -> None:
+    folder, score, _ = choose_best_destination(
+        {"bikini": 0.95, "swimsuit": 0.9, "navel": 0.85},
+        {"Voyeur"},
+    )
+    assert folder == "Voyeur"
+    assert abs(score - 0.95 * 0.8) < 1e-9
+
+    folder, score, _ = choose_best_destination(
+        {"pantyhose": 0.92, "fishnet_pantyhose": 0.88},
+        {"Voyeur"},
+    )
+    assert folder == "Voyeur"
+
+    folder, score, _ = choose_best_destination(
+        {"soles": 0.92, "feet": 0.9, "toes": 0.8},
+        {"Voyeur"},
+    )
+    assert folder == "Voyeur/feet"
+    assert score == 0.92
+
+    folder, score, _ = choose_best_destination(
+        {"one_breast_out": 0.9, "bra": 0.8},
+        {"Voyeur"},
+    )
+    assert folder == "Voyeur/cleavage"
+
+
+def test_voyeur_costume_tease_routes_leotard() -> None:
+    folder, score, _ = choose_best_destination(
+        {
+            "highleg_leotard": 0.89,
+            "leotard": 0.87,
+            "covered_nipples": 0.74,
+        },
+        {"Voyeur"},
+    )
+    assert folder == "Voyeur"
+    assert abs(score - 0.89 * 0.95) < 1e-9
+
+
+def test_voyeur_pussy_routes_and_cum_vetoes() -> None:
+    folder, score, _ = choose_best_destination(
+        {"spread_pussy": 0.9},
+        {"Voyeur"},
+    )
+    assert folder == "Voyeur/pussy"
+    assert score == 0.9
+
+    folder, score, _ = choose_best_destination(
+        {"pussy": 0.88, "close_up": 0.7},
+        {"Voyeur"},
+    )
+    assert folder == "Voyeur/pussy"
+    assert abs(score - 0.88 * 0.85) < 1e-9
+
+    # Bare cum (and specific creampie tags) must not land in Voyeur.
+    folder, score, _ = choose_best_destination(
+        {"pussy": 0.88, "cum": 0.61},
+        {"Voyeur"},
+    )
+    assert folder is None
+    assert score is None
+
+    # Active fingering / anal play is hard, not soft Voyeur.
+    folder, score, _ = choose_best_destination(
+        {
+            "pussy": 0.96,
+            "spread_pussy": 0.5,
+            "ass": 0.93,
+            "fingering": 0.97,
+            "anal_fingering": 0.94,
+            "masturbation": 0.84,
+        },
+        {"Voyeur"},
+    )
+    assert folder is None
+
+
+def test_voyeur_vetoed_by_cum_or_penetration() -> None:
+    # Soft tease must not claim hard sex / creampie even if pantyshot fires.
+    folder, score, _ = choose_best_destination(
+        {"pantyshot": 0.95, "cum_in_pussy": 0.8},
+        {"Voyeur"},
+    )
+    assert folder is None
+    assert score is None
+
+    folder, score, _ = choose_best_destination(
+        {"upskirt": 0.9, "sex": 0.55},
+        {"Voyeur"},
+    )
+    assert folder is None
+
+    folder, score, _ = choose_best_destination(
+        {"ass_focus": 0.92, "penetration": 0.4},
+        {"Voyeur", "nakadashi"},
+    )
+    assert folder is None or folder == "nakadashi"
+    assert folder != "Voyeur/ass"

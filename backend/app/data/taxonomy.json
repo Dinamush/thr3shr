@@ -2,13 +2,59 @@
   "soft_alone_weight": 0.6,
   "soft_corroboration_raw": 0.15,
   "prefer_character_over_act": true,
+  "soft_veto": [
+    "sex",
+    "vaginal",
+    "anal",
+    "penetration",
+    "penis_in_pussy",
+    "penis_in_ass",
+    "rape",
+    "after_sex",
+    "after_vaginal",
+    "nakadashi",
+    "internal_cumshot",
+    "cum",
+    "cum_in_pussy",
+    "cum_in_ass",
+    "cum_in_mouth",
+    "cumdrip",
+    "ejaculation",
+    "excessive_cum",
+    "bukkake",
+    "cum_on_body",
+    "cum_on_breasts",
+    "cum_on_ass",
+    "cum_on_clothes",
+    "cunnilingus",
+    "fingering",
+    "object_insertion",
+    "masturbation",
+    "female_masturbation",
+    "anal_fingering",
+    "sex_from_behind",
+    "clothed_sex",
+    "penis",
+    "erection",
+    "paizuri",
+    "group_sex",
+    "threesome",
+    "ffm_threesome",
+    "imminent_penetration",
+    "condom_on_penis"
+  ],
   "buckets": [
     {
       "id": "real_life",
       "folder": "real_life",
       "priority": 0,
       "role": "theme",
-      "aliases": ["photo", "Real Life", "real life", "real-life"],
+      "aliases": [
+        "photo",
+        "Real Life",
+        "real life",
+        "real-life"
+      ],
       "ignore": [
         "depth_of_field",
         "blurry",
@@ -45,10 +91,22 @@
         "semi_realistic"
       ],
       "evidence": [
-        { "tag": "photorealistic", "weight": 1.0 },
-        { "tag": "realistic", "weight": 1.0 },
-        { "tag": "photo_(medium)", "weight": 1.0 },
-        { "tag": "3d", "weight": 0.45 }
+        {
+          "tag": "photorealistic",
+          "weight": 1.0
+        },
+        {
+          "tag": "realistic",
+          "weight": 1.0
+        },
+        {
+          "tag": "photo_(medium)",
+          "weight": 1.0
+        },
+        {
+          "tag": "3d",
+          "weight": 0.45
+        }
       ]
     },
     {
@@ -66,15 +124,42 @@
         "fatherly"
       ],
       "evidence": [
-        { "tag": "incest", "weight": 1.0 },
-        { "tag": "twincest", "weight": 0.95 },
-        { "tag": "mother_and_son", "weight": 0.85 },
-        { "tag": "father_and_daughter", "weight": 0.85 },
-        { "tag": "brother_and_sister", "weight": 0.8 },
-        { "tag": "mother_and_daughter", "weight": 0.75 },
-        { "tag": "father_and_son", "weight": 0.75 },
-        { "tag": "selfcest", "weight": 0.85 },
-        { "tag": "cousins", "weight": 0.65 }
+        {
+          "tag": "incest",
+          "weight": 1.0
+        },
+        {
+          "tag": "twincest",
+          "weight": 0.95
+        },
+        {
+          "tag": "mother_and_son",
+          "weight": 0.85
+        },
+        {
+          "tag": "father_and_daughter",
+          "weight": 0.85
+        },
+        {
+          "tag": "brother_and_sister",
+          "weight": 0.8
+        },
+        {
+          "tag": "mother_and_daughter",
+          "weight": 0.75
+        },
+        {
+          "tag": "father_and_son",
+          "weight": 0.75
+        },
+        {
+          "tag": "selfcest",
+          "weight": 0.85
+        },
+        {
+          "tag": "cousins",
+          "weight": 0.65
+        }
       ]
     },
     {
@@ -115,12 +200,30 @@
         "miniboy"
       ],
       "evidence": [
-        { "tag": "loli", "weight": 1.0 },
-        { "tag": "oppai_loli", "weight": 0.9 },
-        { "tag": "onee-loli", "weight": 0.85 },
-        { "tag": "mesugaki", "weight": 0.8 },
-        { "tag": "lolidom", "weight": 0.75 },
-        { "tag": "child_on_child", "weight": 0.55 }
+        {
+          "tag": "loli",
+          "weight": 1.0
+        },
+        {
+          "tag": "oppai_loli",
+          "weight": 0.9
+        },
+        {
+          "tag": "onee-loli",
+          "weight": 0.85
+        },
+        {
+          "tag": "mesugaki",
+          "weight": 0.8
+        },
+        {
+          "tag": "lolidom",
+          "weight": 0.75
+        },
+        {
+          "tag": "child_on_child",
+          "weight": 0.55
+        }
       ]
     },
     {
@@ -176,11 +279,26 @@
         "child_carry"
       ],
       "evidence": [
-        { "tag": "shota", "weight": 1.0 },
-        { "tag": "onee-shota", "weight": 0.9 },
-        { "tag": "onii-shota", "weight": 0.85 },
-        { "tag": "miniboy", "weight": 0.8 },
-        { "tag": "child_on_child", "weight": 0.55 }
+        {
+          "tag": "shota",
+          "weight": 1.0
+        },
+        {
+          "tag": "onee-shota",
+          "weight": 0.9
+        },
+        {
+          "tag": "onii-shota",
+          "weight": 0.85
+        },
+        {
+          "tag": "miniboy",
+          "weight": 0.8
+        },
+        {
+          "tag": "child_on_child",
+          "weight": 0.55
+        }
       ]
     },
     {
@@ -188,7 +306,11 @@
       "folder": "fertilization",
       "priority": 4,
       "role": "act",
-      "aliases": ["impregnation", "Impregnation", "Fertilization"],
+      "aliases": [
+        "impregnation",
+        "Impregnation",
+        "Fertilization"
+      ],
       "ignore": [
         "pregnant",
         "birth",
@@ -206,15 +328,42 @@
         "egg"
       ],
       "evidence": [
-        { "tag": "fertilization", "weight": 1.0 },
-        { "tag": "impregnation", "weight": 1.0 },
-        { "tag": "ovum", "weight": 0.9 },
-        { "tag": "sperm_cell", "weight": 0.85 },
-        { "tag": "uterus", "weight": 0.5 },
-        { "tag": "cervix", "weight": 0.45 },
-        { "tag": "x-ray", "weight": 0.45 },
-        { "tag": "cross-section", "weight": 0.45 },
-        { "tag": "cross_section", "weight": 0.45 }
+        {
+          "tag": "fertilization",
+          "weight": 1.0
+        },
+        {
+          "tag": "impregnation",
+          "weight": 1.0
+        },
+        {
+          "tag": "ovum",
+          "weight": 0.9
+        },
+        {
+          "tag": "sperm_cell",
+          "weight": 0.85
+        },
+        {
+          "tag": "uterus",
+          "weight": 0.5
+        },
+        {
+          "tag": "cervix",
+          "weight": 0.45
+        },
+        {
+          "tag": "x-ray",
+          "weight": 0.45
+        },
+        {
+          "tag": "cross-section",
+          "weight": 0.45
+        },
+        {
+          "tag": "cross_section",
+          "weight": 0.45
+        }
       ]
     },
     {
@@ -222,7 +371,11 @@
       "folder": "NTR",
       "priority": 5,
       "role": "act",
-      "aliases": ["ntr", "netorare", "Netorare"],
+      "aliases": [
+        "ntr",
+        "netorare",
+        "Netorare"
+      ],
       "ignore": [
         "voyeurism",
         "watching",
@@ -236,8 +389,14 @@
         "mind_control"
       ],
       "evidence": [
-        { "tag": "netorare", "weight": 1.0 },
-        { "tag": "cheating_(relationship)", "weight": 0.85 }
+        {
+          "tag": "netorare",
+          "weight": 1.0
+        },
+        {
+          "tag": "cheating_(relationship)",
+          "weight": 0.85
+        }
       ]
     },
     {
@@ -245,7 +404,10 @@
       "folder": "nakadashi",
       "priority": 6,
       "role": "act",
-      "aliases": ["creampie", "Nakadashi"],
+      "aliases": [
+        "creampie",
+        "Nakadashi"
+      ],
       "ignore": [
         "cum_in_ass",
         "cum_in_mouth",
@@ -263,9 +425,18 @@
         "overflow"
       ],
       "evidence": [
-        { "tag": "internal_cumshot", "weight": 1.0 },
-        { "tag": "cum_in_pussy", "weight": 0.72 },
-        { "tag": "after_vaginal", "weight": 0.55 }
+        {
+          "tag": "internal_cumshot",
+          "weight": 1.0
+        },
+        {
+          "tag": "cum_in_pussy",
+          "weight": 0.72
+        },
+        {
+          "tag": "after_vaginal",
+          "weight": 0.55
+        }
       ]
     },
     {
@@ -282,16 +453,46 @@
         "paizuri"
       ],
       "evidence": [
-        { "tag": "fellatio", "weight": 1.0 },
-        { "tag": "irrumatio", "weight": 0.95 },
-        { "tag": "deepthroat", "weight": 0.95 },
-        { "tag": "cooperative_fellatio", "weight": 0.9 },
-        { "tag": "after_fellatio", "weight": 0.85 },
-        { "tag": "licking_penis", "weight": 0.8 },
-        { "tag": "imminent_fellatio", "weight": 0.5 },
-        { "tag": "implied_fellatio", "weight": 0.5 },
-        { "tag": "oral_invitation", "weight": 0.5 },
-        { "tag": "simulated_fellatio", "weight": 0.45 }
+        {
+          "tag": "fellatio",
+          "weight": 1.0
+        },
+        {
+          "tag": "irrumatio",
+          "weight": 0.95
+        },
+        {
+          "tag": "deepthroat",
+          "weight": 0.95
+        },
+        {
+          "tag": "cooperative_fellatio",
+          "weight": 0.9
+        },
+        {
+          "tag": "after_fellatio",
+          "weight": 0.85
+        },
+        {
+          "tag": "licking_penis",
+          "weight": 0.8
+        },
+        {
+          "tag": "imminent_fellatio",
+          "weight": 0.5
+        },
+        {
+          "tag": "implied_fellatio",
+          "weight": 0.5
+        },
+        {
+          "tag": "oral_invitation",
+          "weight": 0.5
+        },
+        {
+          "tag": "simulated_fellatio",
+          "weight": 0.45
+        }
       ]
     },
     {
@@ -299,7 +500,10 @@
       "folder": "bestiality",
       "priority": 8,
       "role": "act",
-      "aliases": ["zoophilia", "Bestiality"],
+      "aliases": [
+        "zoophilia",
+        "Bestiality"
+      ],
       "ignore": [
         "dog_girl",
         "cat_girl",
@@ -318,21 +522,63 @@
         "collar"
       ],
       "evidence": [
-        { "tag": "bestiality", "weight": 1.0 },
-        { "tag": "zoophilia", "weight": 0.95 },
-        { "tag": "animal_penis", "weight": 0.9 },
-        { "tag": "knot", "weight": 0.85 },
-        { "tag": "interspecies", "weight": 0.75 }
+        {
+          "tag": "bestiality",
+          "weight": 1.0
+        },
+        {
+          "tag": "zoophilia",
+          "weight": 0.95
+        },
+        {
+          "tag": "animal_penis",
+          "weight": 0.9
+        },
+        {
+          "tag": "knot",
+          "weight": 0.85
+        },
+        {
+          "tag": "interspecies",
+          "weight": 0.75
+        }
       ],
-      "gate_tags": ["sex", "penis", "vaginal", "rape", "ejaculation"],
+      "gate_tags": [
+        "sex",
+        "penis",
+        "vaginal",
+        "rape",
+        "ejaculation"
+      ],
       "gated_evidence": [
-        { "tag": "dog", "weight": 0.55 },
-        { "tag": "cat", "weight": 0.55 },
-        { "tag": "horse", "weight": 0.55 },
-        { "tag": "pig", "weight": 0.55 },
-        { "tag": "cow", "weight": 0.55 },
-        { "tag": "wolf", "weight": 0.5 },
-        { "tag": "animal", "weight": 0.45 }
+        {
+          "tag": "dog",
+          "weight": 0.55
+        },
+        {
+          "tag": "cat",
+          "weight": 0.55
+        },
+        {
+          "tag": "horse",
+          "weight": 0.55
+        },
+        {
+          "tag": "pig",
+          "weight": 0.55
+        },
+        {
+          "tag": "cow",
+          "weight": 0.55
+        },
+        {
+          "tag": "wolf",
+          "weight": 0.5
+        },
+        {
+          "tag": "animal",
+          "weight": 0.45
+        }
       ]
     },
     {
@@ -340,7 +586,10 @@
       "folder": "monster_girl",
       "priority": 9,
       "role": "theme",
-      "aliases": ["monster girl", "Monster_Girl"],
+      "aliases": [
+        "monster girl",
+        "Monster_Girl"
+      ],
       "ignore": [
         "monster",
         "mermaid_costume",
@@ -364,19 +613,58 @@
         "monsterification"
       ],
       "evidence": [
-        { "tag": "monster_girl", "weight": 1.0 },
-        { "tag": "slime_girl", "weight": 0.9 },
-        { "tag": "lamia", "weight": 0.85 },
-        { "tag": "harpy", "weight": 0.85 },
-        { "tag": "spider_girl", "weight": 0.85 },
-        { "tag": "dragon_girl", "weight": 0.8 },
-        { "tag": "plant_girl", "weight": 0.8 },
-        { "tag": "centaur", "weight": 0.75 },
-        { "tag": "centauroid", "weight": 0.75 },
-        { "tag": "mermaid", "weight": 0.7 },
-        { "tag": "female_goblin", "weight": 0.75 },
-        { "tag": "goblin", "weight": 0.55 },
-        { "tag": "demon_girl", "weight": 0.65 }
+        {
+          "tag": "monster_girl",
+          "weight": 1.0
+        },
+        {
+          "tag": "slime_girl",
+          "weight": 0.9
+        },
+        {
+          "tag": "lamia",
+          "weight": 0.85
+        },
+        {
+          "tag": "harpy",
+          "weight": 0.85
+        },
+        {
+          "tag": "spider_girl",
+          "weight": 0.85
+        },
+        {
+          "tag": "dragon_girl",
+          "weight": 0.8
+        },
+        {
+          "tag": "plant_girl",
+          "weight": 0.8
+        },
+        {
+          "tag": "centaur",
+          "weight": 0.75
+        },
+        {
+          "tag": "centauroid",
+          "weight": 0.75
+        },
+        {
+          "tag": "mermaid",
+          "weight": 0.7
+        },
+        {
+          "tag": "female_goblin",
+          "weight": 0.75
+        },
+        {
+          "tag": "goblin",
+          "weight": 0.55
+        },
+        {
+          "tag": "demon_girl",
+          "weight": 0.65
+        }
       ]
     },
     {
@@ -396,15 +684,42 @@
         "animalization"
       ],
       "evidence": [
-        { "tag": "furry", "weight": 1.0 },
-        { "tag": "furry_male", "weight": 0.95 },
-        { "tag": "furry_female", "weight": 0.95 },
-        { "tag": "furry_with_furry", "weight": 0.9 },
-        { "tag": "furry_with_non-furry", "weight": 0.85 },
-        { "tag": "body_fur", "weight": 0.55 },
-        { "tag": "digitigrade", "weight": 0.5 },
-        { "tag": "animal_nose", "weight": 0.5 },
-        { "tag": "snout", "weight": 0.5 }
+        {
+          "tag": "furry",
+          "weight": 1.0
+        },
+        {
+          "tag": "furry_male",
+          "weight": 0.95
+        },
+        {
+          "tag": "furry_female",
+          "weight": 0.95
+        },
+        {
+          "tag": "furry_with_furry",
+          "weight": 0.9
+        },
+        {
+          "tag": "furry_with_non-furry",
+          "weight": 0.85
+        },
+        {
+          "tag": "body_fur",
+          "weight": 0.55
+        },
+        {
+          "tag": "digitigrade",
+          "weight": 0.5
+        },
+        {
+          "tag": "animal_nose",
+          "weight": 0.5
+        },
+        {
+          "tag": "snout",
+          "weight": 0.5
+        }
       ]
     },
     {
@@ -412,7 +727,11 @@
       "folder": "Pokemon",
       "priority": 11,
       "role": "theme",
-      "aliases": ["pokemon", "pokemon_(creature)", "pokemon_creature"],
+      "aliases": [
+        "pokemon",
+        "pokemon_(creature)",
+        "pokemon_creature"
+      ],
       "ignore": [
         "pokemon_ears",
         "pokemon_tail",
@@ -429,18 +748,657 @@
         "berry_(pokemon)"
       ],
       "evidence": [
-        { "tag": "pokemon_(creature)", "weight": 1.0 },
-        { "tag": "pokemon_creature", "weight": 1.0 },
-        { "tag": "pokephilia", "weight": 0.9 },
-        { "tag": "holding_pokemon", "weight": 0.9 },
-        { "tag": "shiny_pokemon", "weight": 0.9 },
-        { "tag": "mega_pokemon", "weight": 0.9 },
-        { "tag": "clothed_pokemon", "weight": 0.9 },
-        { "tag": "starter_pokemon_trio", "weight": 0.85 },
-        { "tag": "pokemon_on_shoulder", "weight": 0.85 },
-        { "tag": "pokemon_on_head", "weight": 0.85 },
-        { "tag": "riding_pokemon", "weight": 0.8 },
-        { "tag": "poke_ball", "weight": 0.45 }
+        {
+          "tag": "pokemon_(creature)",
+          "weight": 1.0
+        },
+        {
+          "tag": "pokemon_creature",
+          "weight": 1.0
+        },
+        {
+          "tag": "pokephilia",
+          "weight": 0.9
+        },
+        {
+          "tag": "holding_pokemon",
+          "weight": 0.9
+        },
+        {
+          "tag": "shiny_pokemon",
+          "weight": 0.9
+        },
+        {
+          "tag": "mega_pokemon",
+          "weight": 0.9
+        },
+        {
+          "tag": "clothed_pokemon",
+          "weight": 0.9
+        },
+        {
+          "tag": "starter_pokemon_trio",
+          "weight": 0.85
+        },
+        {
+          "tag": "pokemon_on_shoulder",
+          "weight": 0.85
+        },
+        {
+          "tag": "pokemon_on_head",
+          "weight": 0.85
+        },
+        {
+          "tag": "riding_pokemon",
+          "weight": 0.8
+        },
+        {
+          "tag": "poke_ball",
+          "weight": 0.7
+        },
+        {
+          "tag": "poke_ball_basic",
+          "weight": 0.85
+        },
+        {
+          "tag": "holding_poke_ball",
+          "weight": 0.9
+        }
+      ]
+    },
+    {
+      "id": "voyeur_panties",
+      "folder": "Voyeur/panties",
+      "priority": 20,
+      "role": "soft",
+      "group": "voyeur",
+      "aliases": [
+        "Voyeur/panties",
+        "panties_voyeur"
+      ],
+      "ignore": [
+        "lingerie",
+        "panties_removed",
+        "no_panties",
+        "fundoshi",
+        "buruma"
+      ],
+      "evidence": [
+        {
+          "tag": "pantyshot",
+          "weight": 1.0
+        },
+        {
+          "tag": "panty_peek",
+          "weight": 0.95
+        },
+        {
+          "tag": "visible_panties",
+          "weight": 0.9
+        },
+        {
+          "tag": "panties",
+          "weight": 0.75
+        },
+        {
+          "tag": "panty_lift",
+          "weight": 0.85
+        },
+        {
+          "tag": "panty_pull",
+          "weight": 0.7
+        },
+        {
+          "tag": "skewed_panties",
+          "weight": 0.65
+        },
+        {
+          "tag": "panties_aside",
+          "weight": 0.85
+        },
+        {
+          "tag": "underwear",
+          "weight": 0.55
+        },
+        {
+          "tag": "white_panties",
+          "weight": 0.7
+        },
+        {
+          "tag": "black_panties",
+          "weight": 0.7
+        }
+      ]
+    },
+    {
+      "id": "voyeur_upskirt",
+      "folder": "Voyeur/upskirt",
+      "priority": 21,
+      "role": "soft",
+      "group": "voyeur",
+      "aliases": [
+        "Voyeur/upskirt",
+        "upskirt"
+      ],
+      "ignore": [
+        "from_below",
+        "low_angle",
+        "skirt"
+      ],
+      "evidence": [
+        {
+          "tag": "upskirt",
+          "weight": 1.0
+        },
+        {
+          "tag": "under_skirt",
+          "weight": 0.85
+        },
+        {
+          "tag": "skirt_lift",
+          "weight": 0.7
+        },
+        {
+          "tag": "wind_lift",
+          "weight": 0.65
+        }
+      ]
+    },
+    {
+      "id": "voyeur_ass",
+      "folder": "Voyeur/ass",
+      "priority": 22,
+      "role": "soft",
+      "group": "voyeur",
+      "aliases": [
+        "Voyeur/ass",
+        "ass_focus"
+      ],
+      "ignore": [
+        "from_behind",
+        "bent_over",
+        "all_fours",
+        "topless",
+        "nude"
+      ],
+      "evidence": [
+        {
+          "tag": "ass_focus",
+          "weight": 1.0
+        },
+        {
+          "tag": "presenting_ass",
+          "weight": 0.95
+        },
+        {
+          "tag": "ass",
+          "weight": 0.7
+        },
+        {
+          "tag": "butt_crack",
+          "weight": 0.8
+        },
+        {
+          "tag": "spread_ass",
+          "weight": 0.85
+        },
+        {
+          "tag": "top-down_bottom-up",
+          "weight": 0.6
+        },
+        {
+          "tag": "presenting",
+          "weight": 0.65
+        },
+        {
+          "tag": "grabbing_own_ass",
+          "weight": 0.75
+        },
+        {
+          "tag": "anus_peek",
+          "weight": 0.7
+        }
+      ]
+    },
+    {
+      "id": "voyeur_cleavage",
+      "folder": "Voyeur/cleavage",
+      "priority": 23,
+      "role": "soft",
+      "group": "voyeur",
+      "aliases": [
+        "Voyeur/cleavage",
+        "cleavage"
+      ],
+      "ignore": [
+        "breasts",
+        "large_breasts",
+        "huge_breasts",
+        "nipples",
+        "nude"
+      ],
+      "evidence": [
+        {
+          "tag": "cleavage",
+          "weight": 1.0
+        },
+        {
+          "tag": "cleavage_cutout",
+          "weight": 0.9
+        },
+        {
+          "tag": "between_breasts",
+          "weight": 0.75
+        },
+        {
+          "tag": "sideboob",
+          "weight": 0.7
+        },
+        {
+          "tag": "underboob",
+          "weight": 0.7
+        },
+        {
+          "tag": "bra",
+          "weight": 0.75
+        },
+        {
+          "tag": "one_breast_out",
+          "weight": 0.95
+        },
+        {
+          "tag": "breast_hold",
+          "weight": 0.7
+        },
+        {
+          "tag": "breast_lift",
+          "weight": 0.7
+        },
+        {
+          "tag": "pasties",
+          "weight": 0.85
+        },
+        {
+          "tag": "nipples",
+          "weight": 0.7
+        },
+        {
+          "tag": "erect_nipples",
+          "weight": 0.75
+        },
+        {
+          "tag": "no_bra",
+          "weight": 0.65
+        }
+      ]
+    },
+    {
+      "id": "voyeur_pussy",
+      "folder": "Voyeur/pussy",
+      "priority": 19,
+      "role": "soft",
+      "group": "voyeur",
+      "aliases": [
+        "Voyeur/pussy",
+        "pussy_voyeur"
+      ],
+      "ignore": [
+        "nude",
+        "completely_nude",
+        "bottomless",
+        "no_panties",
+        "spread_legs"
+      ],
+      "evidence": [
+        {
+          "tag": "spread_pussy",
+          "weight": 1.0
+        },
+        {
+          "tag": "spread_pussy_under_clothes",
+          "weight": 0.9
+        },
+        {
+          "tag": "pussy_peek",
+          "weight": 0.95
+        },
+        {
+          "tag": "pussy",
+          "weight": 0.85
+        },
+        {
+          "tag": "cleft_of_venus",
+          "weight": 0.8
+        },
+        {
+          "tag": "pussy_juice",
+          "weight": 0.45
+        },
+        {
+          "tag": "partially_visible_vulva",
+          "weight": 0.9
+        },
+        {
+          "tag": "anus",
+          "weight": 0.7
+        },
+        {
+          "tag": "spread_anus",
+          "weight": 0.75
+        },
+        {
+          "tag": "anus_peek",
+          "weight": 0.8
+        }
+      ]
+    },
+    {
+      "id": "voyeur_caught",
+      "folder": "Voyeur/caught",
+      "priority": 24,
+      "role": "soft",
+      "group": "voyeur",
+      "aliases": [
+        "Voyeur/caught"
+      ],
+      "ignore": [
+        "watching",
+        "looking_at_viewer",
+        "audience",
+        "crowd"
+      ],
+      "evidence": [
+        {
+          "tag": "voyeurism",
+          "weight": 1.0
+        },
+        {
+          "tag": "peeping",
+          "weight": 0.95
+        },
+        {
+          "tag": "through_window",
+          "weight": 0.65
+        },
+        {
+          "tag": "caught",
+          "weight": 0.5
+        },
+        {
+          "tag": "doorway",
+          "weight": 0.45
+        }
+      ]
+    },
+    {
+      "id": "voyeur",
+      "folder": "Voyeur",
+      "priority": 25,
+      "role": "soft",
+      "group": "voyeur",
+      "aliases": [
+        "Voyeur",
+        "voyeur"
+      ],
+      "ignore": [
+        "1girl",
+        "adapted_costume",
+        "blush",
+        "breasts",
+        "dress",
+        "jewelry",
+        "looking_at_viewer",
+        "skirt",
+        "smile",
+        "solo",
+        "sweat",
+        "sweatdrop",
+        "thighhighs"
+      ],
+      "evidence": [
+        {
+          "tag": "flashing",
+          "weight": 0.9
+        },
+        {
+          "tag": "exhibitionism",
+          "weight": 0.85
+        },
+        {
+          "tag": "clothes_lift",
+          "weight": 0.7
+        },
+        {
+          "tag": "shirt_lift",
+          "weight": 0.7
+        },
+        {
+          "tag": "wedgie",
+          "weight": 0.75
+        },
+        {
+          "tag": "cameltoe",
+          "weight": 0.7
+        },
+        {
+          "tag": "lingerie",
+          "weight": 0.5
+        },
+        {
+          "tag": "suggestive",
+          "weight": 0.45
+        },
+        {
+          "tag": "highleg_leotard",
+          "weight": 0.95
+        },
+        {
+          "tag": "leotard",
+          "weight": 0.8
+        },
+        {
+          "tag": "highleg",
+          "weight": 0.75
+        },
+        {
+          "tag": "highleg_panties",
+          "weight": 0.7
+        },
+        {
+          "tag": "highleg_bikini",
+          "weight": 0.7
+        },
+        {
+          "tag": "highleg_swimsuit",
+          "weight": 0.7
+        },
+        {
+          "tag": "covered_nipples",
+          "weight": 0.85
+        },
+        {
+          "tag": "covered_navel",
+          "weight": 0.5
+        },
+        {
+          "tag": "see-through",
+          "weight": 0.75
+        },
+        {
+          "tag": "wet_clothes",
+          "weight": 0.55
+        },
+        {
+          "tag": "skindentation",
+          "weight": 0.5
+        },
+        {
+          "tag": "no_bra",
+          "weight": 0.6
+        },
+        {
+          "tag": "erect_nipples",
+          "weight": 0.65
+        },
+        {
+          "tag": "presenting",
+          "weight": 0.7
+        },
+        {
+          "tag": "take_your_pick",
+          "weight": 0.8
+        },
+        {
+          "tag": "nipples",
+          "weight": 0.65
+        },
+        {
+          "tag": "nude",
+          "weight": 0.65
+        },
+        {
+          "tag": "bottomless",
+          "weight": 0.55
+        },
+        {
+          "tag": "topless",
+          "weight": 0.6
+        },
+        {
+          "tag": "spread_legs",
+          "weight": 0.5
+        },
+        {
+          "tag": "bikini",
+          "weight": 0.8
+        },
+        {
+          "tag": "swimsuit",
+          "weight": 0.75
+        },
+        {
+          "tag": "one_piece_swimsuit",
+          "weight": 0.75
+        },
+        {
+          "tag": "pantyhose",
+          "weight": 0.7
+        },
+        {
+          "tag": "fishnets",
+          "weight": 0.75
+        },
+        {
+          "tag": "fishnet_pantyhose",
+          "weight": 0.8
+        },
+        {
+          "tag": "bodystocking",
+          "weight": 0.8
+        },
+        {
+          "tag": "garter_straps",
+          "weight": 0.65
+        },
+        {
+          "tag": "zettai_ryouiki",
+          "weight": 0.55
+        },
+        {
+          "tag": "maebari",
+          "weight": 0.85
+        },
+        {
+          "tag": "pasties",
+          "weight": 0.8
+        },
+        {
+          "tag": "open_clothes",
+          "weight": 0.6
+        },
+        {
+          "tag": "clothes_pull",
+          "weight": 0.65
+        },
+        {
+          "tag": "bulge",
+          "weight": 0.7
+        },
+        {
+          "tag": "erection_under_clothes",
+          "weight": 0.75
+        },
+        {
+          "tag": "underwear",
+          "weight": 0.55
+        },
+        {
+          "tag": "bra",
+          "weight": 0.65
+        },
+        {
+          "tag": "crop_top",
+          "weight": 0.55
+        },
+        {
+          "tag": "midriff",
+          "weight": 0.55
+        },
+        {
+          "tag": "navel",
+          "weight": 0.5
+        },
+        {
+          "tag": "bare_shoulders",
+          "weight": 0.5
+        },
+        {
+          "tag": "thighs",
+          "weight": 0.45
+        }
+      ]
+    },
+    {
+      "id": "voyeur_feet",
+      "folder": "Voyeur/feet",
+      "priority": 26,
+      "role": "soft",
+      "group": "voyeur",
+      "aliases": [
+        "Voyeur/feet",
+        "feet_voyeur"
+      ],
+      "ignore": [
+        "shoes",
+        "boots",
+        "socks",
+        "barefoot"
+      ],
+      "evidence": [
+        {
+          "tag": "soles",
+          "weight": 1.0
+        },
+        {
+          "tag": "feet",
+          "weight": 0.85
+        },
+        {
+          "tag": "toes",
+          "weight": 0.75
+        },
+        {
+          "tag": "foot_focus",
+          "weight": 0.95
+        },
+        {
+          "tag": "presenting_foot",
+          "weight": 0.9
+        },
+        {
+          "tag": "barefoot",
+          "weight": 0.55
+        }
       ]
     }
   ]

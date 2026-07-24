@@ -34,6 +34,7 @@ from .schemas import (
 )
 from .services import (
     VIDEO_EXTENSIONS,
+    destination_path,
     discover_tag_folders,
     extract_scores,
     extract_scores_batch,
@@ -52,6 +53,7 @@ from .taxonomy import (
     bucket_role_for_folder,
     choose_best_destination,
     resolve_taxonomy_folder,
+    taxonomy_folder_names,
 )
 from .providers import clear_provider_probe_cache, probe_execution_providers
 from .storage import execute, fetch_all, fetch_one, from_json, to_json
@@ -1217,7 +1219,7 @@ def _execute_run(
                             continue
 
                         suggested_destination = (
-                            str(categories_root / sanitize_folder_name(result.primary_tag))
+                            str(destination_path(categories_root, result.primary_tag))
                             if result.primary_tag is not None
                             else None
                         )
@@ -1556,7 +1558,7 @@ def _execute_reclassify(
                         if row is None:
                             continue
                         suggested_destination = (
-                            str(categories_root / sanitize_folder_name(result.primary_tag))
+                            str(destination_path(categories_root, result.primary_tag))
                             if result.primary_tag is not None
                             else None
                         )
@@ -1697,10 +1699,26 @@ def save_settings(payload: SaveSettingsRequest) -> AppSettings:
 
 @router.get("/tags")
 def search_tags(query: str = Query("", min_length=0), limit: int = 50) -> dict:
-    known = sorted(load_known_tags(TAGS_CSV))
-    if query:
-        known = [t for t in known if query.lower() in t.lower()]
-    return {"items": known[:limit], "count": len(known)}
+    """Suggest destination folders (taxonomy) first, then tags.csv matches."""
+    q = (query or "").strip().lower()
+    limit = max(1, min(int(limit), 200))
+
+    def _matches(name: str) -> bool:
+        return (not q) or (q in name.lower())
+
+    items: list[str] = []
+    seen: set[str] = set()
+    # Taxonomy destinations (e.g. Voyeur, Voyeur/panties) before raw danbooru tags
+    # like voyeurism, so users pick the folder they want to migrate into.
+    for name in taxonomy_folder_names():
+        if _matches(name) and name not in seen:
+            items.append(name)
+            seen.add(name)
+    for name in sorted(load_known_tags(TAGS_CSV)):
+        if _matches(name) and name not in seen:
+            items.append(name)
+            seen.add(name)
+    return {"items": items[:limit], "count": len(items)}
 
 
 @router.get("/scan/preview")
@@ -2058,13 +2076,23 @@ def _resolve_item_assignment(
                 break
 
     destination = row.get("final_destination") or row.get("suggested_destination")
-    if destination and tag:
-        # If an existing destination folder already matches the tag, keep it.
+    if destination and tag and categories_root is not None:
+        expected = destination_path(categories_root, tag)
         dest_path = Path(str(destination))
-        if sanitize_folder_name(dest_path.name) == sanitize_folder_name(tag):
+        try:
+            if dest_path.resolve() == expected.resolve():
+                return tag, str(dest_path)
+        except OSError:
+            if dest_path == expected:
+                return tag, str(dest_path)
+    elif destination and tag:
+        # Fallback when categories_root unknown: leaf name match (flat folders).
+        dest_path = Path(str(destination))
+        leaf = tag.replace("\\", "/").rstrip("/").split("/")[-1]
+        if sanitize_folder_name(dest_path.name) == sanitize_folder_name(leaf):
             return tag, str(dest_path)
     if tag and categories_root is not None:
-        return tag, str(Path(categories_root) / sanitize_folder_name(tag))
+        return tag, str(destination_path(categories_root, tag))
     if destination:
         return tag, str(destination)
     return tag, None

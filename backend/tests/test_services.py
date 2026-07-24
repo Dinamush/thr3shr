@@ -279,6 +279,18 @@ def test_collision_resolution_has_max_attempts(tmp_path: Path) -> None:
         raise AssertionError("Expected RuntimeError for collision exhaustion")
 
 
+def test_destination_path_supports_nested_taxonomy_folders(tmp_path: Path) -> None:
+    from app.services import destination_path
+
+    nested = destination_path(tmp_path, "Voyeur/panties")
+    assert nested == tmp_path / "Voyeur" / "panties"
+    flat = destination_path(tmp_path, "loli")
+    assert flat == tmp_path / "loli"
+    # Path separators are preserved as nesting; only illegal chars are sanitized.
+    weird = destination_path(tmp_path, "Voyeur/panty:shot")
+    assert weird == tmp_path / "Voyeur" / "panty_shot"
+
+
 def test_even_frame_indices_covers_span() -> None:
     assert _even_frame_indices(1, 8) == [0]
     assert _even_frame_indices(8, 8) == list(range(8))

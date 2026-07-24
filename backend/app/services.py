@@ -305,6 +305,22 @@ def sanitize_folder_name(value: str) -> str:
     return result or "_"
 
 
+def destination_path(categories_root: Path, folder: str) -> Path:
+    """Build a destination path, supporting nested taxonomy folders like ``Voyeur/panties``.
+
+    Each path segment is sanitized independently so ``/`` remains a directory
+    separator instead of being flattened to ``Voyeur_panties``.
+    """
+    text = (folder or "").strip().replace("\\", "/")
+    parts = [part for part in text.split("/") if part.strip()]
+    path = Path(categories_root)
+    if not parts:
+        return path / "_"
+    for part in parts:
+        path = path / sanitize_folder_name(part)
+    return path
+
+
 def is_experimental_media(path: Path) -> bool:
     ext = path.suffix.lower()
     return ext == ".gif" or ext in VIDEO_EXTENSIONS
