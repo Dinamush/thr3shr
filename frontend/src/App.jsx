@@ -10,6 +10,7 @@ const DEFAULT_SETTINGS = {
   scan_recursive: true,
   experimental_media_enabled: false,
   experimental_style_detector_enabled: false,
+  hybrid_ml_on_review: true,
   selected_tags: [],
   max_inference_workers: 2,
   inference_batch_size: 8,
@@ -905,6 +906,20 @@ function App() {
                 />
                 Experimental: real vs anime style gate (dedicated ONNX →{" "}
                 <code>real_life</code>; uncertain → needs review)
+              </label>
+              <label className="inline-check">
+                <input
+                  type="checkbox"
+                  checked={Boolean(settings.hybrid_ml_on_review)}
+                  onChange={(e) =>
+                    setSettings({
+                      ...settings,
+                      hybrid_ml_on_review: e.target.checked,
+                    })
+                  }
+                />
+                Hybrid: on needs-review (WD primary), re-run ML-Danbooru and merge
+                allowlisted high-recall tags only (skips Voyeur soft cues)
               </label>
             </div>
           </fieldset>

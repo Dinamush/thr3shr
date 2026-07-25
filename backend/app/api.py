@@ -58,6 +58,7 @@ from .taxonomy import (
     resolve_taxonomy_folder,
     taxonomy_folder_names,
 )
+from .hybrid_ml import merge_ml_allowlist_scores, should_run_hybrid_ml
 from .providers import probe_execution_providers
 from .storage import execute, fetch_all, fetch_one, from_json, to_json
 
@@ -98,6 +99,58 @@ class _ImageInferenceResult:
 
 def _assignment_noise_floor(confidence_threshold: float) -> float:
     return max(0.15, float(confidence_threshold) * 0.5)
+
+
+def _maybe_hybrid_ml_rescue(
+    result: _ImageInferenceResult,
+    matched_tags: set[str],
+    confidence_threshold: float,
+    experimental_media_enabled: bool,
+    tagger_model: str,
+    wd_general_threshold: float,
+    experimental_style_detector_enabled: bool,
+    hybrid_ml_on_review: bool,
+) -> _ImageInferenceResult:
+    """On WD needs_review, merge allowlisted ML scores and re-route."""
+    if not should_run_hybrid_ml(
+        enabled=hybrid_ml_on_review,
+        tagger_model=tagger_model,
+        needs_review=result.needs_review,
+        inference_failed=result.inference_failed,
+    ):
+        return result
+    try:
+        if experimental_media_enabled and is_experimental_media(result.image_path):
+            ml_scores = extract_scores_with_experimental_media(
+                result.image_path,
+                experimental_media_enabled,
+                tagger_model="ml_danbooru",
+                wd_general_threshold=wd_general_threshold,
+            )
+        else:
+            ml_scores = extract_scores(
+                result.image_path,
+                tagger_model="ml_danbooru",
+                wd_general_threshold=wd_general_threshold,
+            )
+        merged = merge_ml_allowlist_scores(result.scores, ml_scores)
+        rescued = _classify_from_scores(
+            result.image_path,
+            merged,
+            matched_tags,
+            confidence_threshold,
+            experimental_style_detector_enabled=experimental_style_detector_enabled,
+            hybrid_real_life=False,
+        )
+        note = "Hybrid ML allowlist rescue."
+        if rescued.reason:
+            rescued.reason = f"{rescued.reason} {note}"
+        elif rescued.needs_review != result.needs_review or rescued.primary_tag != result.primary_tag:
+            rescued.reason = note
+        return rescued
+    except Exception:
+        logger.exception("hybrid_ml_rescue_failed image=%s", result.image_path)
+        return result
 
 
 def _now_iso() -> str:
@@ -634,6 +687,7 @@ def _infer_one_image(
     wd_general_threshold: float = 0.35,
     experimental_style_detector_enabled: bool = False,
     hybrid_real_life: bool = False,
+    hybrid_ml_on_review: bool = False,
 ) -> _ImageInferenceResult:
     if hybrid_real_life:
         return _infer_hybrid_one_image(
@@ -660,13 +714,23 @@ def _infer_one_image(
                 tagger_model=tagger_model,
                 wd_general_threshold=wd_general_threshold,
             )
-        return _classify_from_scores(
+        result = _classify_from_scores(
             image_path,
             scores,
             matched_tags,
             confidence_threshold,
             experimental_style_detector_enabled=experimental_style_detector_enabled,
             hybrid_real_life=False,
+        )
+        return _maybe_hybrid_ml_rescue(
+            result,
+            matched_tags,
+            confidence_threshold,
+            experimental_media_enabled,
+            tagger_model,
+            wd_general_threshold,
+            experimental_style_detector_enabled,
+            hybrid_ml_on_review,
         )
     except Exception as err:
         if _is_provider_related_error(err):
@@ -695,6 +759,7 @@ def _infer_batch_with_fallback(
     wd_general_threshold: float = 0.35,
     experimental_style_detector_enabled: bool = False,
     hybrid_real_life: bool = False,
+    hybrid_ml_on_review: bool = False,
 ) -> tuple[list[_ImageInferenceResult], float, str]:
     if not image_paths:
         return [], 0.0, "none"
@@ -738,6 +803,7 @@ def _infer_batch_with_fallback(
                 wd_general_threshold,
                 experimental_style_detector_enabled,
                 False,
+                hybrid_ml_on_review,
             )
         ]
         elapsed_ms = (time.perf_counter() - start) * 1000.0
@@ -757,6 +823,7 @@ def _infer_batch_with_fallback(
                 wd_general_threshold,
                 experimental_style_detector_enabled,
                 False,
+                hybrid_ml_on_review,
             )
             for p in image_paths
         ]
@@ -773,13 +840,22 @@ def _infer_batch_with_fallback(
         if len(scores_by_image) != len(image_paths):
             raise RuntimeError("Batch inference result count mismatch")
         rows = [
-            _classify_from_scores(
-                image_path,
-                scores,
+            _maybe_hybrid_ml_rescue(
+                _classify_from_scores(
+                    image_path,
+                    scores,
+                    matched_tags,
+                    confidence_threshold,
+                    experimental_style_detector_enabled=experimental_style_detector_enabled,
+                    hybrid_real_life=False,
+                ),
                 matched_tags,
                 confidence_threshold,
-                experimental_style_detector_enabled=experimental_style_detector_enabled,
-                hybrid_real_life=False,
+                experimental_media_enabled,
+                tagger_model,
+                wd_general_threshold,
+                experimental_style_detector_enabled,
+                hybrid_ml_on_review,
             )
             for image_path, scores in zip(image_paths, scores_by_image)
         ]
@@ -802,6 +878,7 @@ def _infer_batch_with_fallback(
                 wd_general_threshold,
                 experimental_style_detector_enabled,
                 False,
+                hybrid_ml_on_review,
             )
             right_rows, right_ms, _ = _infer_batch_with_fallback(
                 image_paths[mid:],
@@ -813,6 +890,7 @@ def _infer_batch_with_fallback(
                 wd_general_threshold,
                 experimental_style_detector_enabled,
                 False,
+                hybrid_ml_on_review,
             )
             return left_rows + right_rows, left_ms + right_ms, "batch_fallback"
         row = _infer_one_image(
@@ -824,6 +902,7 @@ def _infer_batch_with_fallback(
             wd_general_threshold,
             experimental_style_detector_enabled,
             False,
+            hybrid_ml_on_review,
         )
         elapsed_ms = (time.perf_counter() - start) * 1000.0
         return [row], elapsed_ms, "single_fallback"
@@ -851,6 +930,7 @@ def _settings_from_db() -> AppSettings:
         experimental_style_detector_enabled=bool(
             row.get("experimental_style_detector_enabled", 0)
         ),
+        hybrid_ml_on_review=bool(row.get("hybrid_ml_on_review", 1)),
         selected_tags=selected_tags,
         max_inference_workers=int(row.get("max_inference_workers") or 2),
         inference_batch_size=int(row.get("inference_batch_size") or 4),
@@ -1026,6 +1106,7 @@ def _execute_run(
     wd_general_threshold: float = 0.35,
     experimental_style_detector_enabled: bool = False,
     real_life_filter: bool = False,
+    hybrid_ml_on_review: bool = False,
 ) -> None:
     try:
         # Mark running immediately so clients can cancel during provider probe / scan.
@@ -1174,6 +1255,7 @@ def _execute_run(
                         wd_general_threshold,
                         experimental_style_detector_enabled,
                         real_life_filter,
+                        False if real_life_filter else hybrid_ml_on_review,
                     )
                     pending[future] = next_batch
 
@@ -1384,6 +1466,7 @@ def _execute_reclassify(
     tagger_model: str = "wd_eva02_large",
     wd_general_threshold: float = 0.35,
     experimental_style_detector_enabled: bool = False,
+    hybrid_ml_on_review: bool = False,
 ) -> None:
     try:
         # Claim already set status=running; only refresh bookkeeping here.
@@ -1513,6 +1596,8 @@ def _execute_reclassify(
                         tagger_model,
                         wd_general_threshold,
                         experimental_style_detector_enabled,
+                        False,
+                        hybrid_ml_on_review,
                     )
                     pending[future] = next_batch
 
@@ -1671,7 +1756,7 @@ def save_settings(payload: SaveSettingsRequest) -> AppSettings:
             UPDATE settings
             SET root_repo = ?, categories_root = ?, confidence_threshold = ?,
                 default_migrate_mode = ?, scan_recursive = ?, experimental_media_enabled = ?,
-                experimental_style_detector_enabled = ?,
+                experimental_style_detector_enabled = ?, hybrid_ml_on_review = ?,
                 selected_tags_json = ?, max_inference_workers = ?, inference_batch_size = ?,
                 force_cpu_inference = ?, tagger_model = ?, wd_general_threshold = ?
             WHERE id = 1
@@ -1684,6 +1769,7 @@ def save_settings(payload: SaveSettingsRequest) -> AppSettings:
                 1 if payload.scan_recursive else 0,
                 1 if payload.experimental_media_enabled else 0,
                 1 if payload.experimental_style_detector_enabled else 0,
+                1 if payload.hybrid_ml_on_review else 0,
                 to_json(cleaned_tags),
                 int(payload.max_inference_workers),
                 int(payload.inference_batch_size),
@@ -1870,6 +1956,7 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
             "wd_general_threshold": current.wd_general_threshold,
             "experimental_style_detector_enabled": style_detector_enabled,
             "real_life_filter": real_life_filter,
+            "hybrid_ml_on_review": bool(current.hybrid_ml_on_review),
         },
         daemon=True,
     )
@@ -2010,6 +2097,7 @@ def reclassify_run(run_id: int, payload: ReclassifyRequest) -> ReclassifyRespons
             payload.tagger_model,
             current.wd_general_threshold,
             current.experimental_style_detector_enabled,
+            current.hybrid_ml_on_review,
         ),
         daemon=True,
     )

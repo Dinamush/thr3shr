@@ -40,18 +40,21 @@ def test_settings_round_trip_includes_tagger_model(tmp_path: Path):
             "force_cpu_inference": False,
             "tagger_model": "wd_eva02_large",
             "wd_general_threshold": 0.4,
+            "hybrid_ml_on_review": False,
         }
         put_resp = client.put("/api/settings", json=payload)
         put_resp.raise_for_status()
         saved = put_resp.json()
         assert saved["tagger_model"] == "wd_eva02_large"
         assert saved["wd_general_threshold"] == 0.4
+        assert saved["hybrid_ml_on_review"] is False
         get_resp = client.get("/api/settings")
         get_resp.raise_for_status()
         loaded = get_resp.json()
         assert loaded["tagger_model"] == "wd_eva02_large"
         assert loaded["wd_general_threshold"] == 0.4
         assert loaded["max_inference_workers"] == 2
+        assert loaded["hybrid_ml_on_review"] is False
 
 
 def test_start_run_missing_root_returns_400(tmp_path: Path):

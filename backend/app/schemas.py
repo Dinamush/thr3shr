@@ -20,6 +20,9 @@ class AppSettings(BaseModel):
     experimental_media_enabled: bool = False
     # Dedicated real-vs-anime ONNX gate (imgutils / deepghs anime_real_cls).
     experimental_style_detector_enabled: bool = False
+    # When primary tagger is WD and an item needs review, re-run ML-Danbooru and
+    # merge only allowlisted high-recall tags (never Voyeur soft cues).
+    hybrid_ml_on_review: bool = True
     # Shuck3r-style persisted preferences (survive reload / restart).
     selected_tags: list[str] = Field(default_factory=list)
     # Shared ORT run lock; preprocess overlaps across workers. Prefer 2 on GPU.
