@@ -7,6 +7,7 @@ from app.services import (
     TAGGER_MODEL_WD_EVA02,
     TAGGER_MODEL_WD_SWINV2,
     _even_frame_indices,
+    categories_exclude_dirs,
     choose_best_tags,
     discover_tag_folders,
     ensure_collision_free_destination,
@@ -153,6 +154,33 @@ def test_scan_images_excludes_specified_directory(tmp_path: Path) -> None:
     names = {p.name for p in result.image_paths}
     assert "in.jpg" in names
     assert "out.jpg" not in names
+
+
+def test_categories_exclude_dirs_skips_parent_categories_root(tmp_path: Path) -> None:
+    """Inbox under categories_root must not exclude the whole tree (0-image runs)."""
+    art = tmp_path / "Art"
+    inbox = art / "Organize" / "Uncategorised"
+    dest = art / "loli"
+    inbox.mkdir(parents=True)
+    dest.mkdir(parents=True)
+    Image.new("RGB", (8, 8), color="red").save(inbox / "a.jpg")
+    Image.new("RGB", (8, 8), color="blue").save(dest / "b.jpg")
+
+    # Parent categories root: do not exclude (would wipe the inbox scan).
+    assert categories_exclude_dirs(inbox, art) == set()
+    kept = scan_images(inbox, exclude_dirs=categories_exclude_dirs(inbox, art))
+    assert {p.name for p in kept.image_paths} == {"a.jpg"}
+
+    # Nested destination under scan root: still excluded.
+    scan_root = tmp_path / "inbox"
+    nested_cats = scan_root / "organised"
+    nested_cats.mkdir(parents=True)
+    Image.new("RGB", (8, 8), color="green").save(nested_cats / "c.jpg")
+    Image.new("RGB", (8, 8), color="yellow").save(scan_root / "d.jpg")
+    excl = categories_exclude_dirs(scan_root, nested_cats)
+    assert excl == {nested_cats.resolve()}
+    nested = scan_images(scan_root, exclude_dirs=excl)
+    assert {p.name for p in nested.image_paths} == {"d.jpg"}
 
 
 def test_choose_best_tags_single_primary_and_secondary() -> None:

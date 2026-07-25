@@ -253,9 +253,10 @@ def test_migrate_fails_missing_source_and_missing_destination(tmp_path: Path) ->
         # primary_tag via _resolve_item_assignment and can succeed.
         assert payload["failed_count"] == 1
         assert payload["migrated_count"] == 1
+        # Response only includes failures (successes are counted only).
         errors = {r["error"] for r in payload["results"]}
         assert any("does not exist" in (e or "") for e in errors)
-        assert any(r.get("success") for r in payload["results"])
+        assert all(not r.get("success") for r in payload["results"])
 
 
 def test_migrate_create_missing_folders_false_fails_when_absent(tmp_path: Path) -> None:

@@ -1,0 +1,553 @@
+{
+  "version": 1,
+  "defaults": {
+    "threshold": 0.35,
+    "top_k": 20
+  },
+  "buckets": [
+    {
+      "id": "control_1girl",
+      "source": "safebooru",
+      "search_tag": "1girl",
+      "allow_nsfw": false,
+      "desired_tags": [
+        "1girl",
+        "solo"
+      ],
+      "samples": [
+        {
+          "source": "safebooru",
+          "post_id": "6993099",
+          "desired_tags": [
+            "1girl",
+            "solo"
+          ]
+        },
+        {
+          "source": "safebooru",
+          "post_id": "6992354",
+          "desired_tags": [
+            "1girl",
+            "solo"
+          ]
+        },
+        {
+          "source": "safebooru",
+          "post_id": "6991996",
+          "desired_tags": [
+            "1girl",
+            "solo"
+          ]
+        },
+        {
+          "source": "safebooru",
+          "post_id": "6991664",
+          "desired_tags": [
+            "1girl",
+            "solo"
+          ]
+        },
+        {
+          "source": "safebooru",
+          "post_id": "6991658",
+          "desired_tags": [
+            "1girl",
+            "solo"
+          ]
+        },
+        {
+          "source": "safebooru",
+          "post_id": "6991656",
+          "desired_tags": [
+            "1girl",
+            "solo"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "monster_girl",
+      "source": "danbooru",
+      "search_tag": "monster_girl",
+      "allow_nsfw": true,
+      "desired_tags": [
+        "monster_girl"
+      ],
+      "samples": [
+        {
+          "source": "danbooru",
+          "post_id": "11862302",
+          "desired_tags": [
+            "monster_girl"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11860922",
+          "desired_tags": [
+            "monster_girl"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11860734",
+          "desired_tags": [
+            "monster_girl"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11860505",
+          "desired_tags": [
+            "monster_girl"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11859838",
+          "desired_tags": [
+            "monster_girl"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11859810",
+          "desired_tags": [
+            "monster_girl"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "slime_girl",
+      "source": "danbooru",
+      "search_tag": "slime_girl",
+      "allow_nsfw": true,
+      "desired_tags": [
+        "slime_girl"
+      ],
+      "samples": [
+        {
+          "source": "danbooru",
+          "post_id": "11859810",
+          "desired_tags": [
+            "slime_girl"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11853871",
+          "desired_tags": [
+            "slime_girl"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11851541",
+          "desired_tags": [
+            "slime_girl"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11851519",
+          "desired_tags": [
+            "slime_girl"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11851512",
+          "desired_tags": [
+            "slime_girl"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11851497",
+          "desired_tags": [
+            "slime_girl"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "android",
+      "source": "danbooru",
+      "search_tag": "android",
+      "allow_nsfw": true,
+      "desired_tags": [
+        "android"
+      ],
+      "samples": [
+        {
+          "source": "danbooru",
+          "post_id": "11862464",
+          "desired_tags": [
+            "android"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11862460",
+          "desired_tags": [
+            "android"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11862453",
+          "desired_tags": [
+            "android"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11862452",
+          "desired_tags": [
+            "android"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11862451",
+          "desired_tags": [
+            "android"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11862443",
+          "desired_tags": [
+            "android"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "robot_girl",
+      "source": "danbooru",
+      "search_tag": "robot_girl",
+      "allow_nsfw": true,
+      "desired_tags": [
+        "robot_girl"
+      ],
+      "samples": [
+        {
+          "source": "danbooru",
+          "post_id": "11862090",
+          "desired_tags": [
+            "robot_girl"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11861538",
+          "desired_tags": [
+            "robot_girl"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11858118",
+          "desired_tags": [
+            "robot_girl"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11857182",
+          "desired_tags": [
+            "robot_girl"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11857150",
+          "desired_tags": [
+            "robot_girl"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11855181",
+          "desired_tags": [
+            "robot_girl"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "tentacle_sex",
+      "source": "danbooru",
+      "search_tag": "tentacle_sex",
+      "allow_nsfw": true,
+      "desired_tags": [
+        "tentacle_sex",
+        "tentacles"
+      ],
+      "samples": [
+        {
+          "source": "danbooru",
+          "post_id": "11859830",
+          "desired_tags": [
+            "tentacle_sex",
+            "tentacles"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11855492",
+          "desired_tags": [
+            "tentacle_sex",
+            "tentacles"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11853466",
+          "desired_tags": [
+            "tentacle_sex",
+            "tentacles"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11853372",
+          "desired_tags": [
+            "tentacle_sex",
+            "tentacles"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11853323",
+          "desired_tags": [
+            "tentacle_sex",
+            "tentacles"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11853075",
+          "desired_tags": [
+            "tentacle_sex",
+            "tentacles"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "fellatio",
+      "source": "danbooru",
+      "search_tag": "fellatio",
+      "allow_nsfw": true,
+      "desired_tags": [
+        "fellatio"
+      ],
+      "samples": [
+        {
+          "source": "danbooru",
+          "post_id": "11862430",
+          "desired_tags": [
+            "fellatio"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11861811",
+          "desired_tags": [
+            "fellatio"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11861663",
+          "desired_tags": [
+            "fellatio"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11861517",
+          "desired_tags": [
+            "fellatio"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11861321",
+          "desired_tags": [
+            "fellatio"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11861307",
+          "desired_tags": [
+            "fellatio"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "nakadashi",
+      "source": "danbooru",
+      "search_tag": "cum_in_pussy",
+      "allow_nsfw": true,
+      "desired_tags": [
+        "cum_in_pussy"
+      ],
+      "samples": [
+        {
+          "source": "danbooru",
+          "post_id": "11862295",
+          "desired_tags": [
+            "cum_in_pussy"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11862279",
+          "desired_tags": [
+            "cum_in_pussy"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11862162",
+          "desired_tags": [
+            "cum_in_pussy"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11861880",
+          "desired_tags": [
+            "cum_in_pussy"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11861722",
+          "desired_tags": [
+            "cum_in_pussy"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11861663",
+          "desired_tags": [
+            "cum_in_pussy"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pokemon",
+      "source": "danbooru",
+      "search_tag": "pokemon_(creature)",
+      "allow_nsfw": true,
+      "desired_tags": [
+        "pokemon_(creature)"
+      ],
+      "samples": [
+        {
+          "source": "danbooru",
+          "post_id": "11862435",
+          "desired_tags": [
+            "pokemon_(creature)"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11862425",
+          "desired_tags": [
+            "pokemon_(creature)"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11862421",
+          "desired_tags": [
+            "pokemon_(creature)"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11862415",
+          "desired_tags": [
+            "pokemon_(creature)"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11862414",
+          "desired_tags": [
+            "pokemon_(creature)"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11862411",
+          "desired_tags": [
+            "pokemon_(creature)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "furry",
+      "source": "danbooru",
+      "search_tag": "furry",
+      "allow_nsfw": true,
+      "desired_tags": [
+        "furry"
+      ],
+      "samples": [
+        {
+          "source": "danbooru",
+          "post_id": "11862435",
+          "desired_tags": [
+            "furry"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11862425",
+          "desired_tags": [
+            "furry"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11862421",
+          "desired_tags": [
+            "furry"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11862179",
+          "desired_tags": [
+            "furry"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11862102",
+          "desired_tags": [
+            "furry"
+          ]
+        },
+        {
+          "source": "danbooru",
+          "post_id": "11862093",
+          "desired_tags": [
+            "furry"
+          ]
+        }
+      ]
+    }
+  ]
+}

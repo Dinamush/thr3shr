@@ -312,6 +312,14 @@ button.danger {
   font-size: 1.05rem;
 }
 
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 12px;
+  font-size: 0.95rem;
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;
@@ -473,6 +481,15 @@ th {
   padding: 10px;
   margin-bottom: 12px;
   color: var(--danger);
+}
+
+.notice {
+  background: #e8f6ec;
+  border: 1px solid #b7dfc3;
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 12px;
+  color: var(--ok);
 }
 
 .image-cell {

@@ -221,6 +221,34 @@ class ScanOutput:
     stats: ScanStats
 
 
+def categories_exclude_dirs(root_repo: Path, categories_root: Path | None) -> set[Path]:
+    """Dirs to skip while scanning the inbox.
+
+    Destination folders nested *under* the scan root must be skipped so migrate
+    targets are not re-ingested. But when ``categories_root`` is a parent of
+    (or equal to) ``root_repo`` — e.g. inbox at ``library/inbox/unsorted``
+    with categories at ``Art`` — excluding it would skip every file and the run
+    would complete with 0 images.
+    """
+    if categories_root is None:
+        return set()
+    try:
+        root = root_repo.expanduser().resolve()
+        cats = categories_root.expanduser().resolve()
+    except OSError:
+        return {categories_root.expanduser()}
+    if cats == root:
+        return set()
+    # Inbox lives inside the categories tree — do not exclude the parent.
+    if root == cats or root.is_relative_to(cats):
+        return set()
+    # Categories live inside the inbox tree — exclude them.
+    if cats.is_relative_to(root):
+        return {cats}
+    # Disjoint trees — exclusion is a no-op for this scan.
+    return set()
+
+
 def scan_images(
     root_repo: Path,
     exclude_dirs: set[Path] | None = None,

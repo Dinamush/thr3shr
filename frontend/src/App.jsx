@@ -110,6 +110,7 @@ function App() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [providerInfo, setProviderInfo] = useState(null);
   const [migrateMode, setMigrateMode] = useState("copy");
   const [selectedIds, setSelectedIds] = useState([]);
@@ -134,6 +135,8 @@ function App() {
   const [reclassifyModel, setReclassifyModel] = useState("wd_swinv2_v3");
   const finalTagTimersRef = useRef({});
   const pollTimerRef = useRef(null);
+  const lastItemsRefreshAtRef = useRef(0);
+  const lastItemsProcessedRef = useRef(-1);
   const tagsHydratedRef = useRef(false);
   const skipNextTagPersistRef = useRef(false);
 
@@ -153,12 +156,14 @@ function App() {
     runStatus && ["pending", "running"].includes(runStatus.status)
   );
 
-  async function refreshItems(currentRunId) {
+  async function refreshItems(currentRunId, options = {}) {
     if (!currentRunId) return;
     try {
       const [runInfo, runItems] = await Promise.all([
         api.getRun(currentRunId),
-        api.getRunItems(currentRunId),
+        api.getRunItems(currentRunId, {
+          timeoutMs: Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 120000,
+        }),
       ]);
       setRunMeta(runInfo);
       setItems(runItems);
@@ -256,21 +261,58 @@ function App() {
   }, []);
 
   const stats = useMemo(() => {
-    return {
+    const fromList = {
       total: items.length,
       reviewNeeded: items.filter((x) => x.needs_review).length,
       approved: items.filter((x) => x.status === "approved").length,
       rejected: items.filter((x) => x.status === "rejected").length,
       migrated: items.filter((x) => x.status === "migrated").length,
     };
-  }, [items]);
+    // Prefer server status counts when present — list refresh can lag on big runs.
+    const counts = Array.isArray(runMeta?.counts) ? runMeta.counts : [];
+    if (!counts.length) return fromList;
+    const byStatus = Object.fromEntries(
+      counts.map((row) => [row.status, Number(row.count) || 0])
+    );
+    return {
+      ...fromList,
+      approved: byStatus.approved ?? fromList.approved,
+      rejected: byStatus.rejected ?? fromList.rejected,
+      migrated: byStatus.migrated ?? fromList.migrated,
+    };
+  }, [items, runMeta]);
 
   async function pollRunStatus(currentRunId) {
     try {
       const status = await api.getRunStatus(currentRunId);
       setRunStatus(status);
-      await refreshItems(currentRunId);
-      if (["completed", "cancelled", "failed"].includes(status.status)) {
+      setError((prev) =>
+        String(prev || "").startsWith("Failed to poll run status:") ? "" : prev
+      );
+
+      const terminal = ["completed", "cancelled", "failed"].includes(
+        status.status
+      );
+      // Full item lists get heavy on large runs. Refresh when progress moves,
+      // especially early (first refresh often hits 0 items during scan).
+      const now = Date.now();
+      const processed = Number(status.processed_images || 0);
+      const sinceRefresh = now - lastItemsRefreshAtRef.current;
+      const processedAdvanced = processed > lastItemsProcessedRef.current;
+      const emptyTable = lastItemsProcessedRef.current <= 0;
+      const earlyIntervalMs = emptyTable || processed < 80 ? 3000 : 20000;
+      const dueForItems =
+        terminal ||
+        lastItemsRefreshAtRef.current === 0 ||
+        (processedAdvanced && sinceRefresh >= earlyIntervalMs) ||
+        sinceRefresh >= 20000;
+      if (dueForItems) {
+        lastItemsRefreshAtRef.current = now;
+        lastItemsProcessedRef.current = processed;
+        await refreshItems(currentRunId);
+      }
+
+      if (terminal) {
         if (pollTimerRef.current) {
           clearInterval(pollTimerRef.current);
           pollTimerRef.current = null;
@@ -278,11 +320,9 @@ function App() {
         localStorage.removeItem(ACTIVE_RUN_STORAGE_KEY);
       }
     } catch (err) {
+      // Keep polling through transient API/load blips; a hard stop made the
+      // UI look frozen while the backend was still classifying.
       setError(`Failed to poll run status: ${err.message}`);
-      if (pollTimerRef.current) {
-        clearInterval(pollTimerRef.current);
-        pollTimerRef.current = null;
-      }
     }
   }
 
@@ -300,6 +340,8 @@ function App() {
     localStorage.setItem(ACTIVE_RUN_STORAGE_KEY, String(runId));
     // Drop sticky thumb failures from prior preview bugs / aborted video loads.
     setPreviewErrors({});
+    lastItemsRefreshAtRef.current = 0;
+    lastItemsProcessedRef.current = -1;
     startStatusPolling(runId);
     return () => {
       if (pollTimerRef.current) {
@@ -451,6 +493,7 @@ function App() {
     setLoading(true);
     setOpsLoading((prev) => ({ ...prev, migrating: true }));
     setError("");
+    setNotice("");
     const confirmed = window.confirm(
       `Migrate approved items using ${migrateMode}? This can move/copy many files.`
     );
@@ -464,10 +507,19 @@ function App() {
         mode: migrateMode,
         create_missing_folders: true,
       });
-      setOfflineMode(api.isOfflineMode());
-      await refreshItems(runId);
+      setOfflineMode(api.isQueueMode());
       const failed = Number(result?.failed_count || 0);
       const moved = Number(result?.migrated_count || 0);
+      const candidates = Number(result?.total_candidates || 0);
+      // Immediate UI update so Migrated/Approved counts don't wait on a huge refresh.
+      if (moved > 0) {
+        setItems((prev) =>
+          prev.map((item) =>
+            item.status === "approved" ? { ...item, status: "migrated" } : item
+          )
+        );
+      }
+      await refreshItems(runId, { timeoutMs: 180000 });
       if (failed > 0) {
         const sample = (result?.results || [])
           .filter((r) => !r.success && r.error)
@@ -477,6 +529,12 @@ function App() {
         setError(
           `Migrate finished: ${moved} ok, ${failed} failed${sample ? ` (${sample})` : ""}`
         );
+      } else if (candidates === 0) {
+        setNotice(
+          "Nothing to migrate — no approved items left (already migrated or still in review)."
+        );
+      } else {
+        setNotice(`Migrated ${moved} file(s) successfully (${migrateMode}).`);
       }
     } catch (err) {
       setError(err.message);
@@ -642,6 +700,7 @@ function App() {
         <div className="error">{providerInfo.provider_error}</div>
       )}
       {error && <div className="error">{error}</div>}
+      {notice && <div className="notice">{notice}</div>}
 
       <section className="panel">
         <h2>Settings</h2>

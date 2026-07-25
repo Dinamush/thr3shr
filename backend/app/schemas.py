@@ -156,6 +156,32 @@ class RealismDebugEvalRequest(BaseModel):
     compare_models: bool = False
 
 
+class TagRecallEvalRequest(BaseModel):
+    models: list[TaggerModel] = Field(
+        default_factory=lambda: ["ml_danbooru", "wd_swinv2_v3"]
+    )
+    threshold: float = Field(default=0.35, gt=0.0, le=1.0)
+    top_k: int = Field(default=20, ge=1, le=200)
+    refresh_cache: bool = False
+    include_items: bool = True
+
+
+class TagFpEvalRequest(BaseModel):
+    models: list[TaggerModel] = Field(
+        default_factory=lambda: ["ml_danbooru", "wd_swinv2_v3"]
+    )
+    tag_threshold: float | None = Field(
+        default=None,
+        gt=0.0,
+        le=1.0,
+        description="Defaults to settings confidence_threshold",
+    )
+    route_threshold: float | None = Field(default=None, gt=0.0, le=1.0)
+    min_weight: float = Field(default=0.85, ge=0.0, le=1.0)
+    also_wd_threshold: bool = True
+    refresh_cache: bool = False
+
+
 class StyleDebugEvalRequest(BaseModel):
     count_per_class: int = Field(default=12, ge=5, le=40)
     tagger_model: str | None = None

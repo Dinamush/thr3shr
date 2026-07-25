@@ -237,7 +237,104 @@ def test_monster_girl_ignores_parts_alone() -> None:
 
     folder, score, _ = choose_best_destination({"slime_girl": 0.84}, selected)
     assert folder == "monster_girl"
-    assert abs(score - 0.84 * 0.9) < 1e-9
+    assert abs(score - 0.84 * 0.95) < 1e-9
+
+
+def test_monster_girl_catch_all_species() -> None:
+    """Monster Musume / classic species tags should all land in the catch-all."""
+    selected = {"monster_girl", "Voyeur", "furry", "sex"}
+    cases = [
+        ("lamia", 0.9),
+        ("harpy", 0.88),
+        ("scylla", 0.87),
+        ("spider_girl", 0.86),
+        ("dragon_girl", 0.85),
+        ("plant_girl", 0.84),
+        ("fish_girl", 0.83),
+        ("shark_girl", 0.82),
+        ("frog_girl", 0.81),
+        ("bird_girl", 0.8),
+        ("moth_girl", 0.8),
+        ("arthropod_girl", 0.79),
+        ("centaur", 0.78),
+        ("mermaid", 0.77),
+        ("cyclops", 0.76),
+        ("traditional_youkai", 0.85),
+        ("oni", 0.8),
+        ("werewolf", 0.8),
+        ("monsterification", 0.75),
+        ("slime_(creature)", 0.8),
+    ]
+    for tag, score in cases:
+        folder, _score, _ = choose_best_destination({tag: score}, selected)
+        assert folder == "monster_girl", f"{tag} routed to {folder}"
+
+    # Kemonomimi / mammal-girl noise must not become the catch-all.
+    for tag in ("fox_girl", "cat_girl", "dog_girl", "wolf_girl", "cow_girl", "rabbit_girl"):
+        assert choose_best_destination({tag: 0.99}, selected)[0] is None, tag
+
+    # Costume-only vampire must not route; real vampire tag does.
+    assert choose_best_destination({"vampire_costume": 0.99}, selected)[0] is None
+    folder, _score, _ = choose_best_destination({"vampire": 0.85}, selected)
+    assert folder == "monster_girl"
+
+    # Body-feature gated hits need a species/identity cue.
+    assert choose_best_destination({"extra_eyes": 0.95, "multiple_legs": 0.9}, selected)[
+        0
+    ] is None
+    folder, _score, _ = choose_best_destination(
+        {"extra_eyes": 0.9, "monster_girl": 0.4}, selected
+    )
+    assert folder == "monster_girl"
+
+
+def test_android_catch_all() -> None:
+    selected = {"android", "monster_girl", "Voyeur", "sex"}
+    cases = [
+        ("android", 0.9),
+        ("robot_girl", 0.88),
+        ("humanoid_robot", 0.87),
+        ("cyborg", 0.86),
+        ("mecha_musume", 0.85),
+        ("mechanization", 0.8),
+        ("robot", 0.82),
+    ]
+    for tag, score in cases:
+        folder, _score, _ = choose_best_destination({tag: score}, selected)
+        assert folder == "android", f"{tag} routed to {folder}"
+
+    # Giant robots / props / weapons must not become the catch-all.
+    for tag in (
+        "mecha",
+        "mecha_focus",
+        "non-humanoid_robot",
+        "robot_animal",
+        "mechanical_pencil",
+        "machine_gun",
+        "vending_machine",
+        "science_fiction",
+        "cyberpunk",
+    ):
+        assert choose_best_destination({tag: 0.99}, selected)[0] is None, tag
+
+    # sex_machine belongs to the sex act folder, not android.
+    folder, _score, _ = choose_best_destination({"sex_machine": 0.99}, selected)
+    assert folder == "sex"
+
+    # Mechanical body parts alone are noise; need an android/robot identity cue.
+    assert choose_best_destination(
+        {"mechanical_arms": 0.95, "robot_joints": 0.9}, selected
+    )[0] is None
+    folder, _score, _ = choose_best_destination(
+        {"mechanical_arms": 0.9, "android": 0.4}, selected
+    )
+    assert folder == "android"
+
+    # Theme beats soft Voyeur when both fire.
+    folder, _score, _ = choose_best_destination(
+        {"robot_girl": 0.7, "cleavage": 0.95}, selected
+    )
+    assert folder == "android"
 
 
 def test_nakadashi_folder_alias() -> None:
@@ -762,7 +859,16 @@ def test_voyeur_vetoed_by_cum_or_penetration() -> None:
     assert folder != "Voyeur/ass"
 
 
-ALL_ACTS = {"sex", "nakadashi", "fellatio", "paizuri", "footjob", "fertilization", "NTR"}
+ALL_ACTS = {
+    "sex",
+    "nakadashi",
+    "fellatio",
+    "paizuri",
+    "footjob",
+    "tentacles",
+    "fertilization",
+    "NTR",
+}
 
 
 def test_sex_catches_vanilla_penetration() -> None:
@@ -789,6 +895,7 @@ def test_sex_defers_to_more_specific_acts() -> None:
         "fellatio": {"sex": 0.97, "fellatio": 0.55},
         "paizuri": {"sex": 0.9, "paizuri": 0.61},
         "footjob": {"sex": 0.9, "footjob": 0.58},
+        "tentacles": {"sex": 0.9, "tentacle_sex": 0.55},
         "fertilization": {"sex": 0.95, "impregnation": 0.4},
         "NTR": {"sex": 0.95, "netorare": 0.45},
     }
@@ -810,6 +917,30 @@ def test_sex_still_loses_to_character() -> None:
     )
     assert folder == "loli"
     assert score == 0.44
+
+
+def test_tentacles_catch_all_and_veto_voyeur() -> None:
+    folder, score, _ = choose_best_destination(
+        {"tentacle_sex": 0.9, "tentacles": 0.85}, ALL_ACTS
+    )
+    assert folder == "tentacles"
+    assert score == 0.9
+
+    folder, _score, _ = choose_best_destination(
+        {"consensual_tentacles": 0.88, "nude": 0.9, "pussy": 0.8},
+        ALL_ACTS | {"Voyeur"},
+    )
+    assert folder == "tentacles"
+
+    # Bare tentacles alone is character noise; needs a sexual gate.
+    assert choose_best_destination({"tentacles": 0.95}, ALL_ACTS)[0] is None
+    folder, _score, _ = choose_best_destination(
+        {"tentacles": 0.9, "sex": 0.5}, ALL_ACTS
+    )
+    assert folder == "tentacles"
+
+    # tentacle_hair is a hairstyle, not the act.
+    assert choose_best_destination({"tentacle_hair": 0.99}, ALL_ACTS)[0] is None
 
 
 def test_paizuri_and_footjob_ignore_bare_body_parts() -> None:

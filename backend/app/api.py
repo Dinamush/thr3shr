@@ -24,6 +24,8 @@ from .schemas import (
     RealismDebugEvalRequest,
     RealismDebugEvalResponse,
     StyleDebugEvalRequest,
+    TagFpEvalRequest,
+    TagRecallEvalRequest,
     RunStatusResponse,
     SaveSettingsRequest,
     SfwDebugEvalRequest,
@@ -47,6 +49,7 @@ from .services import (
     normalize_tag_name,
     resolve_settings,
     sanitize_folder_name,
+    categories_exclude_dirs,
     scan_images,
 )
 from .taxonomy import (
@@ -1063,7 +1066,7 @@ def _execute_run(
             return
         scan_output = scan_images(
             root_repo,
-            exclude_dirs={categories_root},
+            exclude_dirs=categories_exclude_dirs(root_repo, categories_root),
             recursive=scan_recursive,
             experimental_media_enabled=experimental_media_enabled,
         )
@@ -1727,9 +1730,12 @@ def scan_preview() -> dict:
     if not settings.root_repo:
         raise HTTPException(status_code=400, detail="root_repo is not configured in settings")
     root_repo = Path(settings.root_repo).expanduser()
-    exclude_dirs: set[Path] = set()
-    if settings.categories_root:
-        exclude_dirs.add(Path(settings.categories_root).expanduser())
+    cats = (
+        Path(settings.categories_root).expanduser()
+        if settings.categories_root
+        else None
+    )
+    exclude_dirs = categories_exclude_dirs(root_repo, cats)
     try:
         output = scan_images(
             root_repo,
@@ -2342,15 +2348,6 @@ def migrate_run(run_id: int, payload: MigrateRequest) -> MigrateResponse:
                         (str(destination), row["id"]),
                     )
                     migrated_count += 1
-                    results.append(
-                        {
-                            "item_id": row["id"],
-                            "source": str(source),
-                            "destination": str(destination),
-                            "success": True,
-                            "error": None,
-                        }
-                    )
                 except Exception:
                     logger.exception(
                         "failed to persist already-migrated status item_id=%s", row["id"]
@@ -2439,7 +2436,9 @@ def migrate_run(run_id: int, payload: MigrateRequest) -> MigrateResponse:
                     )
         if not migration_result.success:
             failed_count += 1
-        results.append(migration_result.model_dump())
+            # Only return failures — full success lists are multi‑MB on large runs
+            # and cause the UI request to time out after the work already finished.
+            results.append(migration_result.model_dump())
 
     return MigrateResponse(
         mode=payload.mode,
@@ -2601,4 +2600,87 @@ def debug_sfw_eval_preview(source_id: str, file_name: str) -> FileResponse:
         filename=path.name,
         content_disposition_type="inline",
     )
+
+
+@router.post("/debug/tag-recall-eval", response_model=None)
+def debug_tag_recall_eval(payload: TagRecallEvalRequest):
+    """Curated-suite tag recall@threshold and recall@top-K across taggers."""
+    from .tag_recall_eval import run_tag_recall_eval
+
+    settings = _settings_from_db()
+    _apply_runtime_inference_env(settings)
+    try:
+        return run_tag_recall_eval(
+            models=[str(m) for m in payload.models],
+            threshold=float(payload.threshold),
+            top_k=int(payload.top_k),
+            refresh_cache=bool(payload.refresh_cache),
+            wd_general_threshold=float(settings.wd_general_threshold),
+            include_items=bool(payload.include_items),
+        )
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+    except Exception as err:
+        logger.exception("debug_tag_recall_eval_failed")
+        raise HTTPException(
+            status_code=500, detail=f"Tag recall eval failed: {err}"
+        ) from err
+
+
+@router.get("/debug/tag-recall-eval/preview/{source_id}/{file_name}")
+def debug_tag_recall_eval_preview(source_id: str, file_name: str) -> FileResponse:
+    from .tag_recall_eval import resolve_cached_file
+
+    try:
+        path = resolve_cached_file(source_id, file_name)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Preview not found")
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+    suffix = path.suffix.lower()
+    media = SUPPORTED_PREVIEW_SUFFIXES.get(suffix, "application/octet-stream")
+    return FileResponse(
+        path,
+        media_type=media,
+        filename=path.name,
+        content_disposition_type="inline",
+    )
+
+
+@router.post("/debug/tag-fp-eval", response_model=None)
+def debug_tag_fp_eval(payload: TagFpEvalRequest):
+    """Preferred-tag false-positive rates on the curated suite (+ folder route FPs)."""
+    from .tag_fp_eval import run_tag_fp_eval
+
+    settings = _settings_from_db()
+    _apply_runtime_inference_env(settings)
+    tag_thr = (
+        float(payload.tag_threshold)
+        if payload.tag_threshold is not None
+        else float(settings.confidence_threshold)
+    )
+    route_thr = (
+        float(payload.route_threshold)
+        if payload.route_threshold is not None
+        else tag_thr
+    )
+    try:
+        return run_tag_fp_eval(
+            selected_tags=list(settings.selected_tags or []),
+            models=[str(m) for m in payload.models],
+            tag_threshold=tag_thr,
+            route_threshold=route_thr,
+            min_weight=float(payload.min_weight),
+            also_wd_threshold=bool(payload.also_wd_threshold),
+            wd_general_threshold=float(settings.wd_general_threshold),
+            refresh_cache=bool(payload.refresh_cache),
+            include_items=False,
+        )
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+    except Exception as err:
+        logger.exception("debug_tag_fp_eval_failed")
+        raise HTTPException(
+            status_code=500, detail=f"Tag FP eval failed: {err}"
+        ) from err
 

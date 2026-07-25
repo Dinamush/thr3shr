@@ -2,6 +2,30 @@
 
 Utility / probe scripts for tagging accuracy, throughput, and model audits.
 
+## Tag recall benchmark (ML vs WD)
+
+UI: **Debug → Tag recall benchmark**.
+
+Pinned suite: `backend/app/data/tag_recall_suite.json`  
+Cache (gitignored): `sample_data/tag_recall_suite/`
+
+```text
+.venv\Scripts\python.exe backend\scripts\fetch_tag_recall_suite.py --rebuild
+.venv\Scripts\python.exe backend\scripts\run_tag_recall_eval.py
+```
+
+Latest report: `backend/scripts/out/tag_recall_eval_latest.json`.
+
+False-positive rates on the same suite (selected Settings folders → taxonomy
+evidence tags):
+
+```text
+.venv\Scripts\python.exe backend\scripts\run_tag_fp_eval.py --also-wd-threshold
+```
+
+UI: **Debug → Tag false-positive benchmark**.  
+Latest report: `backend/scripts/out/tag_fp_eval_latest.json`.
+
 ## Thresh3r debug: real-life vs anime eval
 
 UI: **Debug → Real-life vs anime**.

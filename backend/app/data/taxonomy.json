@@ -28,6 +28,10 @@
     "vaginal_object_insertion",
     "anal_object_insertion",
     "tentacle_sex",
+    "consensual_tentacles",
+    "tentacles_on_male",
+    "tentacle_pit",
+    "tentacles_under_clothes",
     "sex_from_behind",
     "clothed_sex",
     "penis",
@@ -241,34 +245,117 @@
       "folder": "monster_girl",
       "priority": 9,
       "role": "theme",
-      "aliases": ["monster girl", "Monster_Girl"],
+      "aliases": ["monster girl", "Monster_Girl", "MonsterGirl"],
       "ignore": [
-        "monster", "mermaid_costume", "animal_ears", "fake_animal_ears",
-        "pointy_ears", "horns", "wings", "tail", "fangs", "scales", "tentacles",
-        "girl_on_top", "furry", "pokemon_(creature)", "kemonomimi_mode",
-        "fox_girl", "dog_girl", "wolf_girl", "cat_girl", "monsterification",
-        "demon_horns", "demon_wings", "demon_tail"
+        "monster", "mermaid_costume", "vampire_costume", "animal_ears",
+        "fake_animal_ears", "pointy_ears", "horns", "wings", "tail", "fangs",
+        "scales", "tentacles", "girl_on_top", "furry", "pokemon_(creature)",
+        "kemonomimi_mode", "demon_horns", "demon_wings", "demon_tail",
+        "fox_girl", "dog_girl", "wolf_girl", "cat_girl", "cow_girl",
+        "rabbit_girl", "mouse_girl", "sheep_girl", "goat_girl", "horse_girl",
+        "deer_girl", "bear_girl", "bat_girl", "tiger_girl", "lion_girl",
+        "leopard_girl", "raccoon_girl", "squirrel_girl", "angel",
+        "personification", "colored_skin"
       ],
       "evidence": [
         { "tag": "monster_girl", "weight": 1.0 },
-        { "tag": "slime_girl", "weight": 0.9 },
-        { "tag": "lamia", "weight": 0.85 },
-        { "tag": "harpy", "weight": 0.85 },
-        { "tag": "spider_girl", "weight": 0.85 },
-        { "tag": "dragon_girl", "weight": 0.8 },
-        { "tag": "plant_girl", "weight": 0.8 },
-        { "tag": "centaur", "weight": 0.75 },
-        { "tag": "centauroid", "weight": 0.75 },
-        { "tag": "mermaid", "weight": 0.7 },
-        { "tag": "female_goblin", "weight": 0.75 },
+        { "tag": "miia_(monster_musume)", "weight": 0.95 },
+        { "tag": "slime_girl", "weight": 0.95 },
+        { "tag": "slime_(creature)", "weight": 0.85 },
+        { "tag": "lamia", "weight": 0.9 },
+        { "tag": "harpy", "weight": 0.9 },
+        { "tag": "scylla", "weight": 0.9 },
+        { "tag": "spider_girl", "weight": 0.9 },
+        { "tag": "arthropod_girl", "weight": 0.85 },
+        { "tag": "arthropod_boy", "weight": 0.8 },
+        { "tag": "moth_girl", "weight": 0.85 },
+        { "tag": "dragon_girl", "weight": 0.85 },
+        { "tag": "plant_girl", "weight": 0.85 },
+        { "tag": "fish_girl", "weight": 0.85 },
+        { "tag": "shark_girl", "weight": 0.85 },
+        { "tag": "frog_girl", "weight": 0.85 },
+        { "tag": "bird_girl", "weight": 0.8 },
+        { "tag": "centaur", "weight": 0.8 },
+        { "tag": "centauroid", "weight": 0.8 },
+        { "tag": "mermaid", "weight": 0.75 },
+        { "tag": "female_goblin", "weight": 0.8 },
         { "tag": "goblin", "weight": 0.55 },
-        { "tag": "demon_girl", "weight": 0.65 },
-        { "tag": "monster_boy", "weight": 0.7 },
-        { "tag": "arthropod_girl", "weight": 0.8 },
-        { "tag": "scylla", "weight": 0.85 },
-        { "tag": "minotaur", "weight": 0.7 },
-        { "tag": "orc", "weight": 0.6 },
-        { "tag": "living_clothes", "weight": 0.5 }
+        { "tag": "minotaur", "weight": 0.8 },
+        { "tag": "orc", "weight": 0.7 },
+        { "tag": "cyclops", "weight": 0.85 },
+        { "tag": "oni", "weight": 0.8 },
+        { "tag": "red_oni", "weight": 0.85 },
+        { "tag": "traditional_youkai", "weight": 0.9 },
+        { "tag": "demon_girl", "weight": 0.7 },
+        { "tag": "vampire", "weight": 0.7 },
+        { "tag": "werewolf", "weight": 0.8 },
+        { "tag": "monster_boy", "weight": 0.75 },
+        { "tag": "monsterification", "weight": 0.85 },
+        { "tag": "creature_and_personification", "weight": 0.7 },
+        { "tag": "living_clothes", "weight": 0.55 }
+      ],
+      "gate_tags": [
+        "monster_girl", "monster_boy", "slime_girl", "slime_(creature)",
+        "lamia", "harpy", "scylla", "spider_girl", "arthropod_girl",
+        "dragon_girl", "plant_girl", "fish_girl", "shark_girl", "frog_girl",
+        "bird_girl", "moth_girl", "centaur", "mermaid", "female_goblin",
+        "minotaur", "orc", "cyclops", "oni", "traditional_youkai",
+        "demon_girl", "vampire", "werewolf", "monsterification"
+      ],
+      "gated_evidence": [
+        { "tag": "arthropod_limbs", "weight": 0.7 },
+        { "tag": "extra_eyes", "weight": 0.65 },
+        { "tag": "multiple_legs", "weight": 0.65 },
+        { "tag": "insect_wings", "weight": 0.6 },
+        { "tag": "gills", "weight": 0.6 },
+        { "tag": "single_horn", "weight": 0.55 }
+      ]
+    },
+    {
+      "id": "android",
+      "folder": "android",
+      "priority": 9,
+      "role": "theme",
+      "aliases": ["Android", "androids", "android_girl", "robot_girl", "cyborg"],
+      "ignore": [
+        "mecha", "mecha_focus", "evangelion_(mecha)", "super_robot",
+        "non-humanoid_robot", "robot_animal", "walker_(robot)", "sex_machine",
+        "mechanical_pencil", "machine_gun", "light_machine_gun", "submachine_gun",
+        "vending_machine", "washing_machine", "milking_machine", "crane_(machine)",
+        "machinery", "machine", "mechanic", "gameplay_mechanics",
+        "science_fiction", "cyberpunk", "cable", "extra_arms",
+        "android_18", "android_21", "lucy_(cyberpunk)", "rebecca_(cyberpunk)",
+        "1girl", "1boy", "metal", "joints"
+      ],
+      "evidence": [
+        { "tag": "android", "weight": 1.0 },
+        { "tag": "robot_girl", "weight": 0.95 },
+        { "tag": "humanoid_robot", "weight": 0.95 },
+        { "tag": "cyborg", "weight": 0.9 },
+        { "tag": "mecha_musume", "weight": 0.9 },
+        { "tag": "mechanization", "weight": 0.85 },
+        { "tag": "robot", "weight": 0.75 }
+      ],
+      "gate_tags": [
+        "android", "robot_girl", "humanoid_robot", "cyborg", "mecha_musume",
+        "mechanization", "robot"
+      ],
+      "gated_evidence": [
+        { "tag": "mechanical_arms", "weight": 0.75 },
+        { "tag": "mechanical_legs", "weight": 0.75 },
+        { "tag": "mechanical_hands", "weight": 0.7 },
+        { "tag": "single_mechanical_arm", "weight": 0.7 },
+        { "tag": "mechanical_parts", "weight": 0.7 },
+        { "tag": "robot_joints", "weight": 0.75 },
+        { "tag": "doll_joints", "weight": 0.65 },
+        { "tag": "robot_ears", "weight": 0.7 },
+        { "tag": "mechanical_ears", "weight": 0.7 },
+        { "tag": "mechanical_eye", "weight": 0.7 },
+        { "tag": "artificial_eye", "weight": 0.65 },
+        { "tag": "mechanical_wings", "weight": 0.65 },
+        { "tag": "mechanical_tail", "weight": 0.6 },
+        { "tag": "mechanical_horns", "weight": 0.6 },
+        { "tag": "mechanical_halo", "weight": 0.6 }
       ]
     },
     {
@@ -361,6 +448,32 @@
       ]
     },
     {
+      "id": "tentacles",
+      "folder": "tentacles",
+      "priority": 13,
+      "role": "act",
+      "aliases": ["Tentacles", "tentacle", "tentacle_sex"],
+      "ignore": [
+        "tentacle_hair", "scylla", "monster_girl", "slime_girl", "1girl",
+        "1boy", "nude", "completely_nude", "pussy", "ass", "breasts",
+        "penis", "hetero", "censored", "blush", "sweat"
+      ],
+      "evidence": [
+        { "tag": "tentacle_sex", "weight": 1.0 },
+        { "tag": "consensual_tentacles", "weight": 0.95 },
+        { "tag": "tentacles_on_male", "weight": 0.9 },
+        { "tag": "tentacle_pit", "weight": 0.9 },
+        { "tag": "tentacles_under_clothes", "weight": 0.85 }
+      ],
+      "gate_tags": [
+        "sex", "vaginal", "anal", "rape", "penis", "erection", "ejaculation",
+        "cum", "bukkake", "object_insertion", "restrained", "bound"
+      ],
+      "gated_evidence": [
+        { "tag": "tentacles", "weight": 0.75 }
+      ]
+    },
+    {
       "id": "sex",
       "folder": "sex",
       "priority": 14,
@@ -371,7 +484,9 @@
         "internal_cumshot", "cum_in_pussy", "after_vaginal", "fellatio",
         "irrumatio", "deepthroat", "licking_penis", "cooperative_fellatio",
         "after_fellatio", "cunnilingus", "paizuri", "after_paizuri", "footjob",
-        "two_footed_footjob", "bestiality", "animal_penis", "knot", "netorare",
+        "two_footed_footjob", "tentacle_sex", "consensual_tentacles",
+        "tentacles_on_male", "tentacle_pit", "tentacles_under_clothes",
+        "bestiality", "animal_penis", "knot", "netorare",
         "cheating_(relationship)", "fertilization", "impregnation", "ovum",
         "sperm_cell", "incest", "twincest", "pokephilia", "photorealistic",
         "photo_(medium)"
@@ -409,7 +524,6 @@
         { "tag": "imminent_penetration", "weight": 0.7 },
         { "tag": "imminent_vaginal", "weight": 0.7 },
         { "tag": "sex_machine", "weight": 0.8 },
-        { "tag": "tentacle_sex", "weight": 0.85 },
         { "tag": "vaginal_object_insertion", "weight": 0.85 },
         { "tag": "anal_object_insertion", "weight": 0.85 },
         { "tag": "object_insertion", "weight": 0.7 },

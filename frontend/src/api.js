@@ -601,6 +601,23 @@ export const api = {
       body: JSON.stringify(payload),
       timeoutMs: 60 * 60 * 1000,
     }),
+  runTagRecallEval: (payload) =>
+    request("/debug/tag-recall-eval", {
+      method: "POST",
+      body: JSON.stringify(payload),
+      // Suite download + dual-model dense scoring can take a while.
+      timeoutMs: 60 * 60 * 1000,
+    }),
+  getTagRecallPreviewUrl: (sourceId, fileName) => {
+    if (backendAvailable === false) return null;
+    return `${API_BASE}/debug/tag-recall-eval/preview/${encodeURIComponent(sourceId)}/${encodeURIComponent(fileName)}`;
+  },
+  runTagFpEval: (payload) =>
+    request("/debug/tag-fp-eval", {
+      method: "POST",
+      body: JSON.stringify(payload),
+      timeoutMs: 60 * 60 * 1000,
+    }),
   getRunItems: (runId, filters = {}) => {
     const params = new URLSearchParams();
     if (filters.status) params.set("status", filters.status);
@@ -611,7 +628,9 @@ export const api = {
       params.set("include_scores", "true");
     }
     const query = params.toString();
-    return request(`/runs/${runId}/items${query ? `?${query}` : ""}`);
+    return request(`/runs/${runId}/items${query ? `?${query}` : ""}`, {
+      timeoutMs: Number(filters.timeoutMs) > 0 ? Number(filters.timeoutMs) : 120000,
+    });
   },
   getItemScores: (itemId) => request(`/items/${itemId}/scores`),
   updateItem: (itemId, payload) =>
@@ -628,6 +647,8 @@ export const api = {
     request(`/runs/${runId}/migrate`, {
       method: "POST",
       body: JSON.stringify(payload),
+      // Large approved sets can take many minutes (copy/move + DB updates).
+      timeoutMs: 60 * 60 * 1000,
     }),
   getItemPreviewUrl: (itemId) => {
     if (backendAvailable === false) return null;
