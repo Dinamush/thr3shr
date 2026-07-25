@@ -551,6 +551,11 @@ function App() {
     try {
       const status = await api.cancelRun(runId);
       setRunStatus(status);
+      // Cancel stops classifying but keeps already-tagged rows for review.
+      await refreshItems(runId);
+      setNotice(
+        "Run cancelled — already classified images are still available for review."
+      );
     } catch (err) {
       setError(`Failed to cancel run: ${err.message}`);
     }

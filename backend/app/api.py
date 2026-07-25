@@ -1115,15 +1115,11 @@ def _execute_run(
             (_now_iso(), run_id),
         )
         if _is_cancel_requested(run_id):
-            execute("DELETE FROM items WHERE run_id = ?", (run_id,))
             execute(
                 """
                 UPDATE runs
                 SET status = 'cancelled',
-                    finished_at = ?,
-                    total_images = 0,
-                    processed_images = 0,
-                    failed_images = 0
+                    finished_at = ?
                 WHERE id = ?
                 """,
                 (_now_iso(), run_id),
@@ -1136,10 +1132,7 @@ def _execute_run(
                 """
                 UPDATE runs
                 SET status = 'cancelled',
-                    finished_at = ?,
-                    total_images = 0,
-                    processed_images = 0,
-                    failed_images = 0
+                    finished_at = ?
                 WHERE id = ?
                 """,
                 (_now_iso(), run_id),
@@ -1348,22 +1341,24 @@ def _execute_run(
                 _submit_until_capacity()
 
         if cancelled:
-            # Reset partial run artifacts so cancelled runs do not look like
-            # "missing file" runs with incomplete queues.
-            execute("DELETE FROM items WHERE run_id = ?", (run_id,))
+            # Keep already-classified rows so the user can still review / migrate
+            # the partial queue (cancel = stop classifying, not wipe results).
             execute(
                 """
                 UPDATE runs
                 SET status = 'cancelled',
                     finished_at = ?,
-                    total_images = 0,
-                    processed_images = 0,
-                    failed_images = 0
+                    processed_images = ?,
+                    failed_images = ?
                 WHERE id = ?
                 """,
-                (_now_iso(), run_id),
+                (_now_iso(), processed, failed, run_id),
             )
-            logger.info("run_cancelled run_id=%d processed=%d", run_id, processed)
+            logger.info(
+                "run_cancelled run_id=%d processed=%d kept_items=1",
+                run_id,
+                processed,
+            )
             return
 
         execute(

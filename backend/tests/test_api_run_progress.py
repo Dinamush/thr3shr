@@ -505,7 +505,7 @@ def test_item_scores_debug_endpoint(monkeypatch, tmp_path: Path):
         assert payload["full_scores"]["solo"] == 0.88
 
 
-def test_run_cancel_sets_cancelled(monkeypatch, tmp_path: Path):
+def test_run_cancel_keeps_partial_items_for_review(monkeypatch, tmp_path: Path):
     root = tmp_path / "root_cancel"
     cats = tmp_path / "cats_cancel"
     root.mkdir()
@@ -530,7 +530,7 @@ def test_run_cancel_sets_cancelled(monkeypatch, tmp_path: Path):
         )
 
     def slow_scores(_p, **_kwargs):
-        time.sleep(0.03)
+        time.sleep(0.04)
         return {"1girl": 0.88}
 
     monkeypatch.setattr("app.api.scan_images", fake_scan_images)
@@ -557,18 +557,33 @@ def test_run_cancel_sets_cancelled(monkeypatch, tmp_path: Path):
         )
         start_resp.raise_for_status()
         run_id = start_resp.json()["run_id"]
+
+        # Let a few items land before cancelling so we can assert they survive.
+        deadline = time.time() + 4.0
+        saw_items = False
+        while time.time() < deadline:
+            items_resp = client.get(f"/api/runs/{run_id}/items")
+            items_resp.raise_for_status()
+            if items_resp.json():
+                saw_items = True
+                break
+            time.sleep(0.05)
+        assert saw_items, "expected at least one classified item before cancel"
+
         cancel_resp = client.post(f"/api/runs/{run_id}/cancel")
         cancel_resp.raise_for_status()
         final = _wait_for_status(client, run_id, {"cancelled", "completed", "failed"}, timeout_s=6.0)
         assert final is not None
         assert final["cancel_requested"] is True
         assert final["status"] in {"cancelled", "completed"}
+
+        items_resp = client.get(f"/api/runs/{run_id}/items")
+        items_resp.raise_for_status()
+        items = items_resp.json()
+        assert len(items) > 0
         if final["status"] == "cancelled":
-            items_resp = client.get(f"/api/runs/{run_id}/items")
-            items_resp.raise_for_status()
-            assert items_resp.json() == []
-            assert final["processed_images"] == 0
-            assert final["total_images"] == 0
+            assert final["processed_images"] >= len(items)
+            assert final["total_images"] == 20
 
     # Keep test environment clean of inserted rows.
     execute("DELETE FROM items WHERE run_id = ?", (run_id,))
