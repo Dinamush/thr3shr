@@ -965,9 +965,12 @@ def _apply_runtime_inference_env(settings: AppSettings) -> None:
 
 
 def _item_from_row(row: dict, include_full_scores: bool = False) -> ClassifiedItem:
-    scores = from_json(row.get("full_scores_json") or "{}", default={})
-    if not isinstance(scores, dict):
-        scores = {}
+    # List views must not touch full_scores_json — it dominates app.db I/O.
+    scores: dict[str, float] = {}
+    if include_full_scores:
+        parsed = from_json(row.get("full_scores_json") or "{}", default={})
+        if isinstance(parsed, dict):
+            scores = {str(k): float(v) for k, v in parsed.items()}
     return ClassifiedItem(
         id=row["id"],
         run_id=row["run_id"],
@@ -976,7 +979,7 @@ def _item_from_row(row: dict, include_full_scores: bool = False) -> ClassifiedIt
         primary_tag=row["primary_tag"],
         primary_score=row["primary_score"],
         secondary_suggestions=from_json(row.get("secondary_json") or "[]", default=[]),
-        global_top_tags=global_top_tags({str(k): float(v) for k, v in scores.items()}),
+        global_top_tags=global_top_tags(scores) if scores else [],
         full_scores=scores if include_full_scores else None,
         suggested_destination=row["suggested_destination"],
         final_tag=row["final_tag"],
@@ -986,6 +989,14 @@ def _item_from_row(row: dict, include_full_scores: bool = False) -> ClassifiedIt
         review_reason=row["review_reason"],
         migrated_to=row["migrated_to"],
     )
+
+
+# Columns for the run items table — excludes full_scores_json (dominates DB I/O).
+_ITEMS_LIST_COLUMNS = (
+    "id, run_id, file_path, relative_path, primary_tag, primary_score, "
+    "secondary_json, suggested_destination, final_tag, final_destination, "
+    "status, needs_review, review_reason, migrated_to"
+)
 
 
 def estimate_run_eta(
@@ -2125,7 +2136,10 @@ def get_run_items(
     needs_review: bool | None = None,
     include_scores: bool = Query(False),
 ) -> list[ClassifiedItem]:
-    query = "SELECT * FROM items WHERE run_id = ?"
+    # Never SELECT * here: full_scores_json is most of a multi‑GB app.db and
+    # caused disk-read spikes / UI freezes on every refresh.
+    cols = "*" if include_scores else _ITEMS_LIST_COLUMNS
+    query = f"SELECT {cols} FROM items WHERE run_id = ?"
     params: list = [run_id]
     if status:
         query += " AND status = ?"
