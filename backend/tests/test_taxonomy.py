@@ -184,6 +184,16 @@ def test_impregnation_alias_routes_to_fertilization() -> None:
     assert score == 0.88
 
 
+def test_pregnancy_test_routes_to_fertilization() -> None:
+    selected = {"fertilization", "nakadashi", "sex", "Voyeur"}
+    folder, score, _ = choose_best_destination({"pregnancy_test": 0.9}, selected)
+    assert folder == "fertilization"
+    assert abs(score - 0.9 * 0.95) < 1e-9
+
+    # Bare pregnant still does not count; pregnancy_test does.
+    assert choose_best_destination({"pregnant": 0.99}, selected)[0] is None
+
+
 def test_ntr_requires_netorare_or_cheating() -> None:
     selected = {"NTR", "incest"}
     folder, score, _ = choose_best_destination(

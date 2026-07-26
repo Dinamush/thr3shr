@@ -152,6 +152,7 @@
       "evidence": [
         { "tag": "fertilization", "weight": 1.0 },
         { "tag": "impregnation", "weight": 1.0 },
+        { "tag": "pregnancy_test", "weight": 0.95 },
         { "tag": "ovum", "weight": 0.9 },
         { "tag": "sperm_cell", "weight": 0.85 },
         { "tag": "uterus", "weight": 0.5 },
@@ -487,7 +488,8 @@
         "two_footed_footjob", "tentacle_sex", "consensual_tentacles",
         "tentacles_on_male", "tentacle_pit", "tentacles_under_clothes",
         "bestiality", "animal_penis", "knot", "netorare",
-        "cheating_(relationship)", "fertilization", "impregnation", "ovum",
+        "cheating_(relationship)", "fertilization", "impregnation", "pregnancy_test",
+        "ovum",
         "sperm_cell", "incest", "twincest", "pokephilia", "photorealistic",
         "photo_(medium)"
       ],

@@ -78,6 +78,7 @@ HYBRID_ML_ALLOWLIST: frozenset[str] = frozenset(
         "cheating_(relationship)",
         "impregnation",
         "fertilization",
+        "pregnancy_test",
         "ovum",
     }
 )
