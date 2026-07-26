@@ -10,16 +10,26 @@ from typing import Any
 DB_PATH = Path(__file__).resolve().parents[1] / "app.db"
 logger = logging.getLogger(__name__)
 
+# Writers (classify workers) + readers (UI poll) contend on a multi‑GB DB.
+# WAL lets readers proceed during writes; busy_timeout retries instead of
+# immediate "database is locked" failures that abort whole runs.
+_SQLITE_TIMEOUT_S = 60.0
+
 
 def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, timeout=30.0)
+    conn = sqlite3.connect(DB_PATH, timeout=_SQLITE_TIMEOUT_S, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 60000")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
     return conn
 
 
 def init_db() -> None:
     try:
         with get_connection() as conn:
+            # Ensure WAL is sticky for this DB file (also set per-connection above).
+            conn.execute("PRAGMA journal_mode = WAL")
             conn.executescript(
                 """
             CREATE TABLE IF NOT EXISTS settings (

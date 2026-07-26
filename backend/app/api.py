@@ -2394,8 +2394,11 @@ def migrate_run(run_id: int, payload: MigrateRequest) -> MigrateResponse:
     run = fetch_one("SELECT status, categories_root FROM runs WHERE id = ?", (run_id,))
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
-    if run["status"] not in {"completed", "cancelled"}:
-        raise HTTPException(status_code=409, detail="Run must be completed/cancelled before migration")
+    if run["status"] not in {"completed", "cancelled", "failed"}:
+        raise HTTPException(
+            status_code=409,
+            detail="Run must be completed/cancelled/failed before migration",
+        )
     categories_root = Path(run["categories_root"]) if run.get("categories_root") else None
     rows = fetch_all("SELECT * FROM items WHERE run_id = ? AND status = 'approved'", (run_id,))
     results = []

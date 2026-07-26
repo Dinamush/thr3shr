@@ -307,6 +307,40 @@ def test_migrate_rejects_running_run(tmp_path: Path) -> None:
         assert resp.status_code == 409
 
 
+def test_migrate_allows_failed_run(tmp_path: Path) -> None:
+    """DB-lock aborted runs still have approved items worth migrating."""
+    root = tmp_path / "root"
+    cats = tmp_path / "cats"
+    dest = cats / "loli"
+    root.mkdir()
+    cats.mkdir()
+    src = root / "ok.jpg"
+    src.write_bytes(b"ok")
+    run_id = _seed_completed_run(
+        root,
+        cats,
+        [
+            {
+                "file_path": str(src),
+                "primary_tag": "loli",
+                "final_destination": str(dest),
+                "status": "approved",
+            }
+        ],
+        status="failed",
+    )
+    with TestClient(app) as client:
+        resp = client.post(
+            f"/api/runs/{run_id}/migrate",
+            json={"mode": "move", "create_missing_folders": True},
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+        assert payload["migrated_count"] == 1
+        assert (dest / "ok.jpg").is_file()
+        assert not src.exists()
+
+
 def test_migrate_idempotent_second_pass(tmp_path: Path) -> None:
     root = tmp_path / "root"
     dest = tmp_path / "cats" / "fellatio"
