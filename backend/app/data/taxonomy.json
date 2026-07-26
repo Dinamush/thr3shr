@@ -73,6 +73,7 @@
       "folder": "incest",
       "priority": 1,
       "role": "theme",
+      "aliases": ["inseki", "Incest", "近親相姦"],
       "ignore": [
         "siblings", "sisters", "brothers", "parent_and_child", "mother_and_child",
         "motherly", "fatherly", "twins", "age_difference"
@@ -89,6 +90,20 @@
         { "tag": "cousins", "weight": 0.65 },
         { "tag": "aunt_and_niece", "weight": 0.8 },
         { "tag": "uncle_and_niece", "weight": 0.8 }
+      ]
+    },
+    {
+      "id": "milf",
+      "folder": "milf",
+      "priority": 3,
+      "role": "character",
+      "aliases": ["MILF", "mature_woman", "milf"],
+      "ignore": [
+        "mature_male", "old_man", "old_woman", "1girl", "1boy", "motherly",
+        "age_difference", "loli", "shota", "oppai_loli"
+      ],
+      "evidence": [
+        { "tag": "mature_female", "weight": 1.0 }
       ]
     },
     {

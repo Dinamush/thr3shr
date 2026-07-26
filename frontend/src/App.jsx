@@ -403,19 +403,38 @@ function App() {
       if (isDirty) {
         await handleSaveSettings();
       }
+      const doujinFolders = [
+        "loli",
+        "shota",
+        "milf",
+        "fertilization",
+        "monster_girl",
+        "incest",
+        "bestiality",
+        "Pokemon",
+        "NTR",
+        "tentacles",
+        "furry",
+        "android",
+      ];
       const result = await api.startRun({
         ...settings,
         selected_folders:
           runMode === "real_life_filter"
             ? ["real_life"]
-            : selectedTags.length > 0
-              ? selectedTags
-              : null,
+            : runMode === "doujin_works"
+              ? doujinFolders
+              : selectedTags.length > 0
+                ? selectedTags
+                : null,
         run_mode: runMode,
         // Filter mode always enables GIF/video scanning server-side; keep UI in sync.
         experimental_media_enabled:
           runMode === "real_life_filter" ? true : settings.experimental_media_enabled,
       });
+      if (runMode === "doujin_works") {
+        setMigrateMode("move");
+      }
       setOfflineMode(api.isOfflineMode());
       setRunId(result.run_id);
       setPreviewErrors({});
@@ -508,7 +527,7 @@ function App() {
         mode: migrateMode,
         create_missing_folders: true,
       });
-      setOfflineMode(api.isQueueMode());
+      setOfflineMode(api.isOfflineMode());
       const failed = Number(result?.failed_count || 0);
       const moved = Number(result?.migrated_count || 0);
       const candidates = Number(result?.total_candidates || 0);
@@ -1025,10 +1044,22 @@ function App() {
           >
             {opsLoading.startingRun ? "Starting…" : "Filter real-life only"}
           </button>
+          <button
+            type="button"
+            className="secondary"
+            title="Treat each child folder or top-level .cbz as one work. Sample pages → WD → primary + category tags. Migrate moves into Doujins/<tag>/ with junctions."
+            disabled={loading || opsLoading.startingRun || runActive}
+            onClick={() => handleStartRun("doujin_works")}
+          >
+            {opsLoading.startingRun ? "Starting…" : "Start Doujin works"}
+          </button>
         </div>
         <p className="help">
           Filter real-life only: style-first hybrid (skip WD on clear anime), capped GIF/video
           frames, stills stay batched. Only blended <code>real_life</code> hits are kept.
+          Doujin works: one review row per title folder/cbz; favourites loli / shota / milf /
+          fertilization / monster_girl / incest / bestiality / Pokemon / NTR / tentacles /
+          furry / android; approve then migrate (move + tag junctions).
         </p>
         <div className="stats">
           {selectedTags.length === 0 ? (
@@ -1171,8 +1202,8 @@ function App() {
         <section className="panel">
           <h2>Review</h2>
           <span className="kicker">
-            Primary is assigned only when a selected tag clears confidence and noise floor.
-            Global tops help spot mis-assignments.
+            Primary is the main destination folder; category tags (secondary) are extra labels
+            for junctions on Doujin runs. Global tops help spot mis-assignments.
           </span>
           <div className="stats">
             <span>Listed: {stats.total}</span>
@@ -1210,9 +1241,9 @@ function App() {
             <thead>
               <tr>
                 <th>Select</th>
-                <th>Image</th>
+                <th>Work / media</th>
                 <th>Primary</th>
-                <th>Secondary</th>
+                <th>Category tags</th>
                 <th>Global top</th>
                 <th>Status</th>
                 <th>Final tag</th>

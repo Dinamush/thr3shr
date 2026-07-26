@@ -622,9 +622,12 @@ def migrate_file(source: Path, destination: Path, mode: str) -> MigrationResult:
             raise FileNotFoundError(f"Source file not found: {source}")
         target = ensure_collision_free_destination(destination)
         if mode == "copy":
-            shutil.copy2(source, target)
+            if source.is_dir():
+                shutil.copytree(source, target)
+            else:
+                shutil.copy2(source, target)
         elif mode == "move":
-            shutil.move(source, target)
+            shutil.move(str(source), str(target))
         else:
             raise ValueError(f"Unsupported mode: {mode}")
         if not target.exists():

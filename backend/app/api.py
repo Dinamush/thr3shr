@@ -59,6 +59,16 @@ from .taxonomy import (
     resolve_taxonomy_folder,
     taxonomy_folder_names,
 )
+from .doujin_works import (
+    ARCHIVE_EXTENSIONS,
+    DOUJIN_FAVOURITE_FOLDERS,
+    classify_doujin_work,
+    create_tag_link,
+    doujin_destination_folder,
+    resolve_work_cover_file,
+    scan_doujin_works,
+    write_tags_sidecar,
+)
 from .hybrid_ml import merge_ml_allowlist_scores, should_run_hybrid_ml
 from .providers import probe_execution_providers
 from .storage import execute, fetch_all, fetch_one, from_json, to_json
@@ -1104,6 +1114,247 @@ def _update_run_progress(run_id: int, processed: int, failed: int) -> None:
     )
 
 
+def _is_doujin_row(row: dict) -> bool:
+    for key in ("suggested_destination", "final_destination", "migrated_to"):
+        raw = row.get(key)
+        if raw and "Doujins" in Path(str(raw)).parts:
+            return True
+    fp = row.get("file_path")
+    if not fp:
+        return False
+    path = Path(str(fp))
+    try:
+        if path.is_dir():
+            return True
+    except OSError:
+        pass
+    return path.suffix.lower() in ARCHIVE_EXTENSIONS
+
+
+def _finalize_doujin_migrate(
+    row: dict,
+    *,
+    destination: Path,
+    primary_tag: str | None,
+    categories_root: Path,
+) -> None:
+    tags: list[str] = []
+    if primary_tag and str(primary_tag).strip():
+        tags.append(str(primary_tag).strip())
+    for tag in _secondary_tags_from_row(row):
+        if tag not in tags:
+            tags.append(tag)
+    write_tags_sidecar(destination, tags)
+    for tag in tags:
+        if primary_tag and tag == primary_tag:
+            continue
+        link = doujin_destination_folder(categories_root, tag) / destination.name
+        try:
+            create_tag_link(link, destination)
+        except Exception:
+            logger.warning(
+                "doujin_tag_link_failed primary=%s tag=%s link=%s target=%s",
+                primary_tag,
+                tag,
+                link,
+                destination,
+                exc_info=True,
+            )
+
+
+def _execute_doujin_run(
+    run_id: int,
+    root_repo: Path,
+    categories_root: Path,
+    confidence_threshold: float,
+    matched_tags: set[str],
+    max_inference_workers: int = 2,
+    tagger_model: str = "wd_swinv2_v3",
+    wd_general_threshold: float = 0.35,
+) -> None:
+    """Classify each doujin folder/archive as one reviewable work."""
+    try:
+        execute(
+            "UPDATE runs SET status = 'running', started_at = ?, last_error = NULL WHERE id = ?",
+            (_now_iso(), run_id),
+        )
+        if _is_cancel_requested(run_id):
+            execute(
+                """
+                UPDATE runs
+                SET status = 'cancelled', finished_at = ?
+                WHERE id = ?
+                """,
+                (_now_iso(), run_id),
+            )
+            return
+
+        provider_state = probe_execution_providers()
+        logger.info("doujin_run_provider_state run_id=%d state=%s", run_id, provider_state)
+        if _is_cancel_requested(run_id):
+            execute(
+                """
+                UPDATE runs
+                SET status = 'cancelled', finished_at = ?
+                WHERE id = ?
+                """,
+                (_now_iso(), run_id),
+            )
+            return
+
+        works = scan_doujin_works(root_repo)
+        execute("UPDATE runs SET total_images = ? WHERE id = ?", (len(works), run_id))
+        logger.info("doujin_run_scan_complete run_id=%d works=%d", run_id, len(works))
+
+        queue_seed = _get_queue_shuffle_seed(run_id)
+        ordered = list(works)
+        if _get_queue_shuffle_enabled():
+            rng = random.Random(queue_seed)
+            rng.shuffle(ordered)
+
+        _set_run_telemetry(
+            run_id,
+            queue_seed=queue_seed,
+            inference_mode="doujin_sample",
+            batch_size=1,
+            avg_infer_ms_per_image=0.0,
+        )
+
+        processed = 0
+        failed = 0
+        cancelled = False
+        infer_elapsed_ms_total = 0.0
+        max_workers = max(1, min(_get_max_inference_workers(max_inference_workers), 2))
+
+        def _classify_one(work):
+            started = time.perf_counter()
+            result = classify_doujin_work(
+                work,
+                matched_tags=matched_tags,
+                confidence_threshold=confidence_threshold,
+                tagger_model=tagger_model,
+                wd_general_threshold=wd_general_threshold,
+            )
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            return result, elapsed_ms
+
+        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="doujin") as executor:
+            pending: dict[Future, object] = {}
+            iterator = iter(ordered)
+
+            def _submit_until_capacity() -> None:
+                while len(pending) < max_workers:
+                    try:
+                        work = next(iterator)
+                    except StopIteration:
+                        return
+                    pending[executor.submit(_classify_one, work)] = work
+
+            _submit_until_capacity()
+            while pending:
+                if _is_cancel_requested(run_id):
+                    cancelled = True
+                    for future in pending:
+                        future.cancel()
+                    break
+
+                done, _ = wait(set(pending.keys()), return_when=FIRST_COMPLETED)
+                for future in done:
+                    pending.pop(future, None)
+                    if future.cancelled():
+                        continue
+                    result, elapsed_ms = future.result()
+                    infer_elapsed_ms_total += elapsed_ms
+                    processed += 1
+                    avg_ms = infer_elapsed_ms_total / processed if processed else 0.0
+                    _set_run_telemetry(
+                        run_id,
+                        inference_mode="doujin_sample",
+                        batch_size=1,
+                        avg_infer_ms_per_image=avg_ms,
+                    )
+
+                    secondary = [
+                        {"tag": row["tag"], "score": row["score"]}
+                        for row in result.category_tags
+                        if row.get("tag") and row.get("tag") != result.primary_tag
+                    ]
+                    suggested_destination = (
+                        str(doujin_destination_folder(categories_root, result.primary_tag))
+                        if result.primary_tag is not None
+                        else None
+                    )
+                    status = "approved" if not result.needs_review else "proposed"
+                    execute(
+                        """
+                        INSERT INTO items (
+                            run_id, file_path, relative_path, primary_tag, primary_score,
+                            secondary_json, full_scores_json, suggested_destination,
+                            final_tag, final_destination, status, needs_review, review_reason
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            run_id,
+                            str(result.work.path),
+                            result.work.name,
+                            result.primary_tag,
+                            result.primary_score,
+                            to_json(secondary),
+                            to_json(result.scores),
+                            suggested_destination,
+                            result.primary_tag,
+                            suggested_destination,
+                            status,
+                            1 if result.needs_review else 0,
+                            result.reason,
+                        ),
+                    )
+                    if result.inference_failed:
+                        failed += 1
+                    _update_run_progress(run_id, processed, failed)
+                    if processed % 5 == 0:
+                        logger.info(
+                            "doujin_run_progress run_id=%d processed=%d total=%d avg_ms=%.1f",
+                            run_id,
+                            processed,
+                            len(ordered),
+                            avg_ms,
+                        )
+                _submit_until_capacity()
+
+        if cancelled:
+            execute(
+                """
+                UPDATE runs
+                SET status = 'cancelled',
+                    finished_at = ?,
+                    processed_images = ?,
+                    failed_images = ?
+                WHERE id = ?
+                """,
+                (_now_iso(), processed, failed, run_id),
+            )
+            logger.info("doujin_run_cancelled run_id=%d processed=%d", run_id, processed)
+            return
+
+        execute(
+            "UPDATE runs SET status = 'completed', finished_at = ? WHERE id = ?",
+            (_now_iso(), run_id),
+        )
+        logger.info(
+            "doujin_run_completed run_id=%d processed=%d failed=%d",
+            run_id,
+            processed,
+            failed,
+        )
+    except Exception as err:
+        logger.exception("doujin_run_failed run_id=%d", run_id)
+        execute(
+            "UPDATE runs SET status = 'failed', finished_at = ?, last_error = ? WHERE id = ?",
+            (_now_iso(), str(err), run_id),
+        )
+
+
 def _execute_run(
     run_id: int,
     root_repo: Path,
@@ -1872,6 +2123,7 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
     root_repo = Path(resolved.root_repo).expanduser()
     categories_root = Path(resolved.categories_root).expanduser()
     real_life_filter = payload.run_mode == "real_life_filter"
+    doujin_works = payload.run_mode == "doujin_works"
 
     if not resolved.root_repo or not resolved.categories_root:
         raise HTTPException(status_code=400, detail="root_repo and categories_root are required")
@@ -1903,6 +2155,8 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
     )
     if real_life_filter:
         selected_folders = ["real_life"]
+    elif doujin_works:
+        selected_folders = list(DOUJIN_FAVOURITE_FOLDERS)
     else:
         selected_folders = payload.selected_folders
         if not selected_folders:
@@ -1910,6 +2164,11 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
         selected_folders = destination_folders_for_tagger(
             selected_folders, current.tagger_model
         )
+
+    tagger_model = current.tagger_model
+    if doujin_works and not str(tagger_model).startswith("wd_"):
+        # Doujin pooling needs multi-folder WD routing, not ML loli-only.
+        tagger_model = "wd_swinv2_v3"
 
     try:
         known_tags = load_known_tags(TAGS_CSV)
@@ -1943,33 +2202,49 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
                 str(root_repo),
                 str(categories_root),
                 resolved.confidence_threshold,
-                current.tagger_model,
+                tagger_model,
             ),
         )
     except Exception:
         logger.exception("failed to create run row")
         raise HTTPException(status_code=500, detail="Failed to queue run")
 
-    worker = threading.Thread(
-        target=_execute_run,
-        kwargs={
-            "run_id": run_id,
-            "root_repo": root_repo,
-            "categories_root": categories_root,
-            "confidence_threshold": resolved.confidence_threshold,
-            "matched_tags": matched_tags,
-            "scan_recursive": resolved.scan_recursive,
-            "experimental_media_enabled": experimental_media_enabled,
-            "max_inference_workers": current.max_inference_workers,
-            "inference_batch_size": current.inference_batch_size,
-            "tagger_model": current.tagger_model,
-            "wd_general_threshold": current.wd_general_threshold,
-            "experimental_style_detector_enabled": style_detector_enabled,
-            "real_life_filter": real_life_filter,
-            "hybrid_ml_on_review": bool(current.hybrid_ml_on_review),
-        },
-        daemon=True,
-    )
+    if doujin_works:
+        worker = threading.Thread(
+            target=_execute_doujin_run,
+            kwargs={
+                "run_id": run_id,
+                "root_repo": root_repo,
+                "categories_root": categories_root,
+                "confidence_threshold": resolved.confidence_threshold,
+                "matched_tags": matched_tags,
+                "max_inference_workers": current.max_inference_workers,
+                "tagger_model": tagger_model,
+                "wd_general_threshold": current.wd_general_threshold,
+            },
+            daemon=True,
+        )
+    else:
+        worker = threading.Thread(
+            target=_execute_run,
+            kwargs={
+                "run_id": run_id,
+                "root_repo": root_repo,
+                "categories_root": categories_root,
+                "confidence_threshold": resolved.confidence_threshold,
+                "matched_tags": matched_tags,
+                "scan_recursive": resolved.scan_recursive,
+                "experimental_media_enabled": experimental_media_enabled,
+                "max_inference_workers": current.max_inference_workers,
+                "inference_batch_size": current.inference_batch_size,
+                "tagger_model": tagger_model,
+                "wd_general_threshold": current.wd_general_threshold,
+                "experimental_style_detector_enabled": style_detector_enabled,
+                "real_life_filter": real_life_filter,
+                "hybrid_ml_on_review": bool(current.hybrid_ml_on_review),
+            },
+            daemon=True,
+        )
     worker.start()
     mode_note = (
         " Real-life filter: experimental media on; hybrid WD realism + style detector; "
@@ -1977,7 +2252,14 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
         if real_life_filter
         else ""
     )
-    if not real_life_filter and current.tagger_model == "ml_danbooru":
+    if doujin_works:
+        mode_note = (
+            " Doujin works: one item per folder/cbz; sample-pool WD tags; "
+            "favourites loli/shota/milf/fertilization/monster_girl/incest/bestiality/"
+            "Pokemon/NTR/tentacles/furry/android; "
+            "migrate moves into Doujins/<primary>/ with junctions for category tags."
+        )
+    elif not real_life_filter and tagger_model == "ml_danbooru":
         mode_note += " ML-Danbooru mode: loli destination only."
     return StartRunResponse(
         run_id=run_id,
@@ -2186,15 +2468,25 @@ def _resolve_item_assignment(
                 tag = str(candidate).strip()
                 break
 
+    is_doujin = _is_doujin_row(row)
     destination = row.get("final_destination") or row.get("suggested_destination")
     if destination and tag and categories_root is not None:
-        expected = destination_path(categories_root, tag)
+        expected = (
+            doujin_destination_folder(categories_root, tag)
+            if is_doujin
+            else destination_path(categories_root, tag)
+        )
         dest_path = Path(str(destination))
         try:
             if dest_path.resolve() == expected.resolve():
                 return tag, str(dest_path)
         except OSError:
             if dest_path == expected:
+                return tag, str(dest_path)
+        # Doujin rows may already point at Doujins/<tag>; keep if leaf matches.
+        if is_doujin and "Doujins" in dest_path.parts:
+            leaf = sanitize_folder_name(tag.replace("\\", "/").rstrip("/").split("/")[-1])
+            if sanitize_folder_name(dest_path.name) == leaf:
                 return tag, str(dest_path)
     elif destination and tag:
         # Fallback when categories_root unknown: leaf name match (flat folders).
@@ -2203,6 +2495,8 @@ def _resolve_item_assignment(
         if sanitize_folder_name(dest_path.name) == sanitize_folder_name(leaf):
             return tag, str(dest_path)
     if tag and categories_root is not None:
+        if is_doujin:
+            return tag, str(doujin_destination_folder(categories_root, tag))
         return tag, str(destination_path(categories_root, tag))
     if destination:
         return tag, str(destination)
@@ -2298,6 +2592,14 @@ def get_item_preview(
         if raw_path:
             candidates.append(Path(str(raw_path)).expanduser())
     image_path = next((p for p in candidates if p.exists() and p.is_file()), None)
+    if image_path is None:
+        for candidate in candidates:
+            if not candidate.exists():
+                continue
+            cover = resolve_work_cover_file(candidate)
+            if cover is not None and cover.exists() and cover.is_file():
+                image_path = cover
+                break
     if image_path is None:
         raise HTTPException(status_code=404, detail="Preview media not found")
     suffix = image_path.suffix.lower()
@@ -2446,16 +2748,32 @@ def migrate_run(run_id: int, payload: MigrateRequest) -> MigrateResponse:
             continue
 
         destination_folder = Path(final_destination)
-        destination = destination_folder / source.name
+        # Doujin works store the parent Doujins/<tag>/ folder; append work name.
+        # If final_destination already ends with the work name, use it as-is.
+        if destination_folder.name == source.name:
+            destination = destination_folder
+            destination_folder = destination_folder.parent
+        else:
+            destination = destination_folder / source.name
+        is_doujin = _is_doujin_row(row) or source.is_dir() or (
+            source.suffix.lower() in ARCHIVE_EXTENSIONS
+        )
 
-        # Source already gone but file sits at destination (prior move / manual).
+        # Source already gone but work sits at destination (prior move / manual).
         if not source.exists():
-            if destination.exists() and destination.is_file():
+            if destination.exists() and (destination.is_file() or destination.is_dir()):
                 try:
                     execute(
                         "UPDATE items SET status = 'migrated', migrated_to = ? WHERE id = ?",
                         (str(destination), row["id"]),
                     )
+                    if is_doujin and categories_root is not None:
+                        _finalize_doujin_migrate(
+                            row,
+                            destination=destination,
+                            primary_tag=resolved_tag,
+                            categories_root=categories_root,
+                        )
                     migrated_count += 1
                 except Exception:
                     logger.exception(
@@ -2524,7 +2842,9 @@ def migrate_run(run_id: int, payload: MigrateRequest) -> MigrateResponse:
             )
             continue
 
-        migration_result = migrate_file(source, destination, payload.mode)
+        # Doujin runs must move (disk is full); copy would double archive/folder size.
+        migrate_mode = "move" if is_doujin else payload.mode
+        migration_result = migrate_file(source, destination, migrate_mode)
         migration_result.item_id = row["id"]
         if migration_result.success:
             if not Path(migration_result.destination).exists():
@@ -2536,6 +2856,13 @@ def migrate_run(run_id: int, payload: MigrateRequest) -> MigrateResponse:
                         "UPDATE items SET status = 'migrated', migrated_to = ? WHERE id = ?",
                         (migration_result.destination, row["id"]),
                     )
+                    if is_doujin and categories_root is not None:
+                        _finalize_doujin_migrate(
+                            row,
+                            destination=Path(migration_result.destination),
+                            primary_tag=resolved_tag,
+                            categories_root=categories_root,
+                        )
                     migrated_count += 1
                 except Exception:
                     logger.exception("failed to persist migration status item_id=%s", row["id"])
