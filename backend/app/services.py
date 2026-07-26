@@ -665,3 +665,21 @@ def resolve_settings(
             ),
         }
     )
+
+
+def destination_folders_for_tagger(
+    selected_folders: list[str],
+    tagger_model: str,
+    *,
+    real_life_filter: bool = False,
+) -> list[str]:
+    """ML-Danbooru primary runs only compete for the loli destination.
+
+    Benchmarks showed strong loli recall for ML, but weak/noisy behavior on the
+    broader preferred-folder set — so full multi-folder routing stays on WD.
+    """
+    if real_life_filter:
+        return list(selected_folders)
+    if str(tagger_model or "") == "ml_danbooru":
+        return ["loli"]
+    return list(selected_folders)

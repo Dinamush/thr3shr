@@ -23,7 +23,7 @@ const TAGGER_MODELS = [
   {
     id: "ml_danbooru",
     label: "ML-Danbooru",
-    help: "Original ONNX tagger used by this app. Fast baseline.",
+    help: "Loli-only classifier — strong recall on that folder (not used for full multi-folder runs).",
   },
   {
     id: "wd_swinv2_v3",

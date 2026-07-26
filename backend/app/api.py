@@ -50,6 +50,7 @@ from .services import (
     resolve_settings,
     sanitize_folder_name,
     categories_exclude_dirs,
+    destination_folders_for_tagger,
     scan_images,
 )
 from .taxonomy import (
@@ -1895,6 +1896,9 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
         selected_folders = payload.selected_folders
         if not selected_folders:
             selected_folders = list(current.selected_tags)
+        selected_folders = destination_folders_for_tagger(
+            selected_folders, current.tagger_model
+        )
 
     try:
         known_tags = load_known_tags(TAGS_CSV)
@@ -1962,6 +1966,8 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
         if real_life_filter
         else ""
     )
+    if not real_life_filter and current.tagger_model == "ml_danbooru":
+        mode_note += " ML-Danbooru mode: loli destination only."
     return StartRunResponse(
         run_id=run_id,
         status="pending",
@@ -2038,6 +2044,9 @@ def reclassify_run(run_id: int, payload: ReclassifyRequest) -> ReclassifyRespons
             status_code=400,
             detail="No selected tags in settings; save destination tags before reclassifying.",
         )
+    selected_folders = destination_folders_for_tagger(
+        selected_folders, payload.tagger_model
+    )
     try:
         known_tags = load_known_tags(TAGS_CSV)
         mappings = discover_tag_folders(categories_root, known_tags, selected_folders)
