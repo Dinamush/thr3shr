@@ -11,6 +11,7 @@ const DEFAULT_SETTINGS = {
   experimental_media_enabled: false,
   experimental_style_detector_enabled: false,
   hybrid_ml_on_review: true,
+  tagging_domain: "drawn",
   selected_tags: [],
   max_inference_workers: 2,
   inference_batch_size: 8,
@@ -18,6 +19,29 @@ const DEFAULT_SETTINGS = {
   tagger_model: "wd_swinv2_v3",
   wd_general_threshold: 0.35,
 };
+
+const REAL_LIFE_SENSITIVE_TAGS = new Set(["BBC", "Ebony", "Asian"]);
+const REAL_LIFE_DEFAULT_FOLDERS = [
+  "creampie",
+  "cumshot",
+  "facial",
+  "oral",
+  "blowjob",
+  "handjob",
+  "anal",
+  "vaginal",
+  "masturbation",
+  "threesome",
+  "group",
+  "lesbian",
+  "POV",
+  "interracial",
+  "cuck",
+  "hotwife",
+  "BBC",
+  "Ebony",
+  "Asian",
+];
 
 const TAGGER_MODELS = [
   {
@@ -113,6 +137,8 @@ function App() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [providerInfo, setProviderInfo] = useState(null);
+  const [realLifeStatus, setRealLifeStatus] = useState(null);
+  const [realLifeStatusLoading, setRealLifeStatusLoading] = useState(false);
   const [migrateMode, setMigrateMode] = useState("copy");
   const [selectedIds, setSelectedIds] = useState([]);
   const [tagQuery, setTagQuery] = useState("");
@@ -234,7 +260,7 @@ function App() {
     let cancelled = false;
     const timer = setTimeout(() => {
       api
-        .getTags(tagQuery, 50)
+        .getTags(tagQuery, 50, settings.tagging_domain || "drawn")
         .then((data) => {
           if (cancelled) return;
           setTagOptions(data.items || []);
@@ -248,7 +274,30 @@ function App() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [tagQuery]);
+  }, [tagQuery, settings.tagging_domain]);
+
+  useEffect(() => {
+    if (settings.tagging_domain !== "real_life" || offlineMode) {
+      setRealLifeStatus(null);
+      return;
+    }
+    let cancelled = false;
+    setRealLifeStatusLoading(true);
+    api
+      .getRealLifeStatus()
+      .then((data) => {
+        if (!cancelled) setRealLifeStatus(data);
+      })
+      .catch(() => {
+        if (!cancelled) setRealLifeStatus(null);
+      })
+      .finally(() => {
+        if (!cancelled) setRealLifeStatusLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [settings.tagging_domain, offlineMode]);
 
   useEffect(() => {
     return () => {
@@ -417,20 +466,29 @@ function App() {
         "furry",
         "android",
       ];
+      const domain = settings.tagging_domain === "real_life" ? "real_life" : "drawn";
+      const effectiveMode =
+        runMode === "classify" && domain === "real_life" ? "real_life_tag" : runMode;
       const result = await api.startRun({
         ...settings,
         selected_folders:
-          runMode === "real_life_filter"
+          effectiveMode === "real_life_filter"
             ? ["real_life"]
-            : runMode === "doujin_works"
+            : effectiveMode === "doujin_works"
               ? doujinFolders
-              : selectedTags.length > 0
-                ? selectedTags
-                : null,
-        run_mode: runMode,
-        // Filter mode always enables GIF/video scanning server-side; keep UI in sync.
+              : effectiveMode === "real_life_tag"
+                ? selectedTags.length > 0
+                  ? selectedTags
+                  : REAL_LIFE_DEFAULT_FOLDERS
+                : selectedTags.length > 0
+                  ? selectedTags
+                  : null,
+        run_mode: effectiveMode,
+        // Filter / real-life tagging always enables GIF/video scanning server-side.
         experimental_media_enabled:
-          runMode === "real_life_filter" ? true : settings.experimental_media_enabled,
+          effectiveMode === "real_life_filter" || effectiveMode === "real_life_tag"
+            ? true
+            : settings.experimental_media_enabled,
       });
       if (runMode === "doujin_works") {
         setMigrateMode("move");
@@ -644,7 +702,7 @@ function App() {
       return;
     }
 
-    const result = await api.getTags(value, 200);
+    const result = await api.getTags(value, 200, settings.tagging_domain || "drawn");
     const items = result.items || [];
     const match =
       items.find((t) => t === value) ||
@@ -654,7 +712,9 @@ function App() {
       return;
     }
     throw new Error(
-      `Unknown destination: ${value}. Try a taxonomy folder (e.g. Voyeur) or a tags.csv tag.`
+      settings.tagging_domain === "real_life"
+        ? `Unknown real-life category: ${value}. Try creampie, cumshot, oral, BBC…`
+        : `Unknown destination: ${value}. Try a taxonomy folder (e.g. Voyeur) or a tags.csv tag.`
     );
   }
 
@@ -941,10 +1001,83 @@ function App() {
                       hybrid_ml_on_review: e.target.checked,
                     })
                   }
+                  disabled={settings.tagging_domain === "real_life"}
                 />
                 Hybrid: on needs-review (WD primary), re-run ML-Danbooru and merge
                 allowlisted high-recall tags only (skips Voyeur soft cues)
               </label>
+              <fieldset className="domain-toggle">
+                <legend>Tagging domain</legend>
+                <label className="inline-check">
+                  <input
+                    type="radio"
+                    name="tagging_domain"
+                    checked={settings.tagging_domain !== "real_life"}
+                    onChange={() =>
+                      setSettings({ ...settings, tagging_domain: "drawn" })
+                    }
+                  />
+                  Animated / drawn (WD + ML-Danbooru taxonomy)
+                </label>
+                <label className="inline-check">
+                  <input
+                    type="radio"
+                    name="tagging_domain"
+                    checked={settings.tagging_domain === "real_life"}
+                    onChange={() =>
+                      setSettings({
+                        ...settings,
+                        tagging_domain: "real_life",
+                        experimental_media_enabled: true,
+                      })
+                    }
+                  />
+                  Real-life photos / videos (local adult tagger)
+                </label>
+                <span className="help">
+                  Real-life mode uses an isolated taxonomy under{" "}
+                  <code>Real Life/&lt;primary&gt;/</code>. Sensitive tags (BBC /
+                  Ebony / Asian) are suggestions only and need explicit Final-tag
+                  confirmation. Save settings after switching domains.
+                </span>
+                {settings.tagging_domain === "real_life" && !offlineMode ? (
+                  <div className="scan-preview real-life-status">
+                    {realLifeStatusLoading ? (
+                      <span className="muted">Checking local adult tagger…</span>
+                    ) : realLifeStatus?.engine ? (
+                      <>
+                        <div>
+                          VLM:{" "}
+                          <strong>
+                            {realLifeStatus.engine.vlm?.available ? "ready" : "unavailable"}
+                          </strong>
+                          {realLifeStatus.engine.vlm?.backend
+                            ? ` (${realLifeStatus.engine.vlm.backend})`
+                            : ""}
+                        </div>
+                        <div>
+                          Position classifier:{" "}
+                          <strong>
+                            {realLifeStatus.engine.position?.available
+                              ? "ready"
+                              : "unavailable"}
+                          </strong>
+                        </div>
+                        <div className="help">{realLifeStatus.engine.message}</div>
+                        {realLifeStatus.engine.fallback ? (
+                          <div className="help">
+                            Fallback active: style gate + manual review only until{" "}
+                            <code>llama-cpp-python</code> and the Qwen2.5-VL GGUF +
+                            mmproj are installed.
+                          </div>
+                        ) : null}
+                      </>
+                    ) : (
+                      <span className="muted">Real-life tagger status unavailable.</span>
+                    )}
+                  </div>
+                ) : null}
+              </fieldset>
             </div>
           </fieldset>
 
@@ -962,10 +1095,14 @@ function App() {
       <section className="panel">
         <h2>Tag selection</h2>
         <span className="kicker">
-          Only these tags compete for folder assignment. Changes auto-save.
+          {settings.tagging_domain === "real_life"
+            ? "Real-life categories only (isolated from anime tags.csv). Changes auto-save after settings save."
+            : "Only these tags compete for folder assignment. Changes auto-save."}
         </span>
         <label>
-          Tag match search (destinations + tags.csv)
+          {settings.tagging_domain === "real_life"
+            ? "Real-life category search"
+            : "Tag match search (destinations + tags.csv)"}
           <input
             value={tagQuery}
             onChange={(e) => setTagQuery(e.target.value)}
@@ -983,7 +1120,11 @@ function App() {
                 }
               }
             }}
-            placeholder="Type Voyeur, loli, Pokemon…"
+            placeholder={
+              settings.tagging_domain === "real_life"
+                ? "Type creampie, BBC, hotwife…"
+                : "Type Voyeur, loli, Pokemon…"
+            }
           />
           <datalist id="tag-match-suggestions">
             {tagOptions.map((tag) => (
@@ -1033,13 +1174,22 @@ function App() {
             disabled={loading || opsLoading.startingRun || runActive}
             onClick={() => handleStartRun("classify")}
           >
-            {opsLoading.startingRun ? "Starting…" : "Start run"}
+            {opsLoading.startingRun
+              ? "Starting…"
+              : settings.tagging_domain === "real_life"
+                ? "Start real-life tagging"
+                : "Start run"}
           </button>
           <button
             type="button"
             className="secondary"
             title="Scan root (including GIF/video). Keep only confident real_life hits — nothing else."
-            disabled={loading || opsLoading.startingRun || runActive}
+            disabled={
+              loading ||
+              opsLoading.startingRun ||
+              runActive ||
+              settings.tagging_domain === "real_life"
+            }
             onClick={() => handleStartRun("real_life_filter")}
           >
             {opsLoading.startingRun ? "Starting…" : "Filter real-life only"}
@@ -1048,18 +1198,34 @@ function App() {
             type="button"
             className="secondary"
             title="Treat each child folder or top-level .cbz as one work. Sample pages → WD → primary + category tags. Migrate moves into Doujins/<tag>/ with junctions."
-            disabled={loading || opsLoading.startingRun || runActive}
+            disabled={
+              loading ||
+              opsLoading.startingRun ||
+              runActive ||
+              settings.tagging_domain === "real_life"
+            }
             onClick={() => handleStartRun("doujin_works")}
           >
             {opsLoading.startingRun ? "Starting…" : "Start Doujin works"}
           </button>
         </div>
         <p className="help">
-          Filter real-life only: style-first hybrid (skip WD on clear anime), capped GIF/video
-          frames, stills stay batched. Only blended <code>real_life</code> hits are kept.
-          Doujin works: one review row per title folder/cbz; favourites loli / shota / milf /
-          fertilization / monster_girl / incest / bestiality / Pokemon / NTR / tentacles /
-          furry / android; approve then migrate (move + tag junctions).
+          {settings.tagging_domain === "real_life" ? (
+            <>
+              Real-life tagging: style gate → local adult VLM (+ optional position
+              classifier) → isolated categories under <code>Real Life/</code>. All
+              items start in needs-review. Sensitive tags require typing them into
+              Final tag before approve.
+            </>
+          ) : (
+            <>
+              Filter real-life only: style-first hybrid (skip WD on clear anime), capped GIF/video
+              frames, stills stay batched. Only blended <code>real_life</code> hits are kept.
+              Doujin works: one review row per title folder/cbz; favourites loli / shota / milf /
+              fertilization / monster_girl / incest / bestiality / Pokemon / NTR / tentacles /
+              furry / android; approve then migrate (move + tag junctions).
+            </>
+          )}
         </p>
         <div className="stats">
           {selectedTags.length === 0 ? (
@@ -1203,7 +1369,10 @@ function App() {
           <h2>Review</h2>
           <span className="kicker">
             Primary is the main destination folder; category tags (secondary) are extra labels
-            for junctions on Doujin runs. Global tops help spot mis-assignments.
+            for junctions on Doujin runs
+            {settings.tagging_domain === "real_life"
+              ? ", or supporting real-life categories. Sensitive suggestions are highlighted."
+              : ". Global tops help spot mis-assignments."}
           </span>
           <div className="stats">
             <span>Listed: {stats.total}</span>
@@ -1300,6 +1469,16 @@ function App() {
                     {item.primary_tag ? (
                       <>
                         {item.primary_tag}
+                        {REAL_LIFE_SENSITIVE_TAGS.has(item.primary_tag) ? (
+                          <span className="chip warn" title="Sensitive — confirm Final tag">
+                            sensitive
+                          </span>
+                        ) : null}
+                        {String(item.review_reason || "").includes("vlm_unavailable") ? (
+                          <span className="chip warn" title="Adult VLM unavailable">
+                            fallback
+                          </span>
+                        ) : null}
                         <div className="muted">
                           {item.primary_score != null
                             ? Number(item.primary_score).toFixed(3)
@@ -1315,7 +1494,15 @@ function App() {
                       {(item.secondary_suggestions || []).length === 0
                         ? "-"
                         : (item.secondary_suggestions || []).map((s) => (
-                            <span key={`${item.id}-${s.tag}`}>{formatTagScore(s)}</span>
+                            <span
+                              key={`${item.id}-${s.tag}`}
+                              className={
+                                REAL_LIFE_SENSITIVE_TAGS.has(s.tag) ? "chip warn" : undefined
+                              }
+                            >
+                              {formatTagScore(s)}
+                              {REAL_LIFE_SENSITIVE_TAGS.has(s.tag) ? " ⚠" : ""}
+                            </span>
                           ))}
                     </div>
                   </td>

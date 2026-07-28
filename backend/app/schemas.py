@@ -9,6 +9,7 @@ ItemStatus = Literal["proposed", "reviewed", "approved", "rejected", "migrated"]
 MigrateMode = Literal["move", "copy"]
 RunLifecycleStatus = Literal["pending", "running", "completed", "failed", "cancelled"]
 TaggerModel = Literal["ml_danbooru", "wd_swinv2_v3", "wd_eva02_large"]
+TaggingDomain = Literal["drawn", "real_life"]
 
 
 class AppSettings(BaseModel):
@@ -23,6 +24,8 @@ class AppSettings(BaseModel):
     # When primary tagger is WD and an item needs review, re-run ML-Danbooru and
     # merge only allowlisted high-recall tags (never Voyeur soft cues).
     hybrid_ml_on_review: bool = True
+    # Drawn/anime WD+ML taxonomy vs isolated real-life adult tagger taxonomy.
+    tagging_domain: TaggingDomain = "drawn"
     # Shuck3r-style persisted preferences (survive reload / restart).
     selected_tags: list[str] = Field(default_factory=list)
     # Shared ORT run lock; preprocess overlaps across workers. Prefer 2 on GPU.
@@ -57,8 +60,11 @@ class StartRunRequest(BaseModel):
     categories_root: str | None = None
     confidence_threshold: float | None = None
     selected_folders: list[str] | None = None
-    # classify = normal multi-folder run; real_life_filter = only keep real_life hits.
-    run_mode: Literal["classify", "real_life_filter", "doujin_works"] = "classify"
+    # classify = normal multi-folder run; real_life_filter = only keep real_life hits;
+    # doujin_works = folder/cbz pooling; real_life_tag = adult photo/video taxonomy.
+    run_mode: Literal[
+        "classify", "real_life_filter", "doujin_works", "real_life_tag"
+    ] = "classify"
 
 
 class SecondarySuggestion(BaseModel):

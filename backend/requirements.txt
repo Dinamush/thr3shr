@@ -5,3 +5,8 @@ dghs-imgutils==0.19.0
 onnxruntime-gpu[cuda,cudnn]==1.26.0
 opencv-python-headless>=4.8.0
 pytest==8.4.1
+# Optional for real-life adult tagging (install when enabling the domain):
+# llama-cpp-python
+# torch
+# timm
+# psutil

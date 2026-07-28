@@ -93,6 +93,7 @@ def _ensure_settings_columns(conn: sqlite3.Connection) -> None:
         "experimental_media_enabled": "INTEGER NOT NULL DEFAULT 0",
         "experimental_style_detector_enabled": "INTEGER NOT NULL DEFAULT 0",
         "hybrid_ml_on_review": "INTEGER NOT NULL DEFAULT 1",
+        "tagging_domain": "TEXT NOT NULL DEFAULT 'drawn'",
         "selected_tags_json": "TEXT NOT NULL DEFAULT '[]'",
         "max_inference_workers": "INTEGER NOT NULL DEFAULT 2",
         "inference_batch_size": "INTEGER NOT NULL DEFAULT 4",
@@ -118,6 +119,7 @@ def _ensure_runs_columns(conn: sqlite3.Connection) -> None:
         "last_error": "TEXT",
         "cancel_requested": "INTEGER NOT NULL DEFAULT 0",
         "tagger_model": "TEXT NOT NULL DEFAULT 'wd_swinv2_v3'",
+        "tagging_domain": "TEXT NOT NULL DEFAULT 'drawn'",
     }
     rows = conn.execute("PRAGMA table_info(runs)").fetchall()
     existing = {row[1] for row in rows}

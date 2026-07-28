@@ -1,0 +1,163 @@
+{
+  "accept_threshold": 0.45,
+  "secondary_threshold": 0.35,
+  "contextual_threshold": 0.7,
+  "sensitive_threshold": 0.55,
+  "root_folder": "Real Life",
+  "sensitive_tags": ["BBC", "Ebony", "Asian"],
+  "contextual_tags": ["cuck", "hotwife"],
+  "buckets": [
+    {
+      "id": "creampie",
+      "folder": "creampie",
+      "priority": 1,
+      "role": "act",
+      "aliases": ["Creampie", "internal_cumshot", "cum_inside"],
+      "evidence": ["creampie", "internal_cumshot", "cum_in_pussy"]
+    },
+    {
+      "id": "cumshot",
+      "folder": "cumshot",
+      "priority": 2,
+      "role": "act",
+      "aliases": ["Cumshot", "ejaculation"],
+      "evidence": ["cumshot", "ejaculation", "cum"]
+    },
+    {
+      "id": "facial",
+      "folder": "facial",
+      "priority": 3,
+      "role": "act",
+      "aliases": ["Facial", "cum_on_face"],
+      "evidence": ["facial", "cum_on_face", "bukkake"]
+    },
+    {
+      "id": "oral",
+      "folder": "oral",
+      "priority": 4,
+      "role": "act",
+      "aliases": ["Oral", "blowjob", "fellatio"],
+      "evidence": ["oral", "blowjob", "fellatio", "irrumatio", "deepthroat"]
+    },
+    {
+      "id": "blowjob",
+      "folder": "blowjob",
+      "priority": 5,
+      "role": "act",
+      "aliases": ["Blowjob"],
+      "evidence": ["blowjob", "fellatio", "oral"]
+    },
+    {
+      "id": "handjob",
+      "folder": "handjob",
+      "priority": 6,
+      "role": "act",
+      "aliases": ["Handjob"],
+      "evidence": ["handjob"]
+    },
+    {
+      "id": "anal",
+      "folder": "anal",
+      "priority": 7,
+      "role": "act",
+      "aliases": ["Anal"],
+      "evidence": ["anal", "anal_sex"]
+    },
+    {
+      "id": "vaginal",
+      "folder": "vaginal",
+      "priority": 8,
+      "role": "act",
+      "aliases": ["Vaginal", "missionary", "doggy", "cowgirl"],
+      "evidence": ["vaginal", "sex", "missionary", "doggy", "cowgirl", "penetration"]
+    },
+    {
+      "id": "masturbation",
+      "folder": "masturbation",
+      "priority": 9,
+      "role": "act",
+      "aliases": ["Masturbation", "solo"],
+      "evidence": ["masturbation", "fingering", "solo_sex"]
+    },
+    {
+      "id": "threesome",
+      "folder": "threesome",
+      "priority": 10,
+      "role": "theme",
+      "aliases": ["Threesome", "ffm", "mmf"],
+      "evidence": ["threesome", "ffm", "mmf"]
+    },
+    {
+      "id": "group",
+      "folder": "group",
+      "priority": 11,
+      "role": "theme",
+      "aliases": ["Group", "gangbang", "orgy"],
+      "evidence": ["group", "group_sex", "gangbang", "orgy"]
+    },
+    {
+      "id": "lesbian",
+      "folder": "lesbian",
+      "priority": 12,
+      "role": "theme",
+      "aliases": ["Lesbian", "girl_on_girl"],
+      "evidence": ["lesbian", "girl_on_girl", "cunnilingus"]
+    },
+    {
+      "id": "POV",
+      "folder": "POV",
+      "priority": 13,
+      "role": "theme",
+      "aliases": ["pov", "point_of_view"],
+      "evidence": ["POV", "pov", "point_of_view"]
+    },
+    {
+      "id": "interracial",
+      "folder": "interracial",
+      "priority": 14,
+      "role": "theme",
+      "aliases": ["Interracial"],
+      "evidence": ["interracial"]
+    },
+    {
+      "id": "cuck",
+      "folder": "cuck",
+      "priority": 20,
+      "role": "contextual",
+      "aliases": ["Cuck", "cuckold"],
+      "evidence": ["cuck", "cuckold"]
+    },
+    {
+      "id": "hotwife",
+      "folder": "hotwife",
+      "priority": 21,
+      "role": "contextual",
+      "aliases": ["Hotwife"],
+      "evidence": ["hotwife"]
+    },
+    {
+      "id": "BBC",
+      "folder": "BBC",
+      "priority": 30,
+      "role": "sensitive",
+      "aliases": ["bbc"],
+      "evidence": ["BBC", "bbc"]
+    },
+    {
+      "id": "Ebony",
+      "folder": "Ebony",
+      "priority": 31,
+      "role": "sensitive",
+      "aliases": ["ebony", "black"],
+      "evidence": ["Ebony", "ebony"]
+    },
+    {
+      "id": "Asian",
+      "folder": "Asian",
+      "priority": 32,
+      "role": "sensitive",
+      "aliases": ["asian"],
+      "evidence": ["Asian", "asian"]
+    }
+  ]
+}

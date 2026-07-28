@@ -17,6 +17,7 @@ from .schemas import (
     AppSettings,
     BatchUpdateRequest,
     ClassifiedItem,
+    FolderMapping,
     MigrateRequest,
     MigrateResponse,
     ReclassifyRequest,
@@ -931,6 +932,9 @@ def _settings_from_db() -> AppSettings:
     tagger_model = str(row.get("tagger_model") or "wd_swinv2_v3").strip()
     if tagger_model not in {"ml_danbooru", "wd_swinv2_v3", "wd_eva02_large"}:
         tagger_model = "wd_swinv2_v3"
+    tagging_domain = str(row.get("tagging_domain") or "drawn").strip().lower()
+    if tagging_domain not in {"drawn", "real_life"}:
+        tagging_domain = "drawn"
     return AppSettings(
         root_repo=row["root_repo"],
         categories_root=row["categories_root"],
@@ -942,6 +946,7 @@ def _settings_from_db() -> AppSettings:
             row.get("experimental_style_detector_enabled", 0)
         ),
         hybrid_ml_on_review=bool(row.get("hybrid_ml_on_review", 1)),
+        tagging_domain=tagging_domain,  # type: ignore[arg-type]
         selected_tags=selected_tags,
         max_inference_workers=int(row.get("max_inference_workers") or 2),
         inference_batch_size=int(row.get("inference_batch_size") or 4),
@@ -1349,6 +1354,190 @@ def _execute_doujin_run(
         )
     except Exception as err:
         logger.exception("doujin_run_failed run_id=%d", run_id)
+        execute(
+            "UPDATE runs SET status = 'failed', finished_at = ?, last_error = ? WHERE id = ?",
+            (_now_iso(), str(err), run_id),
+        )
+
+
+def _is_real_life_row(row: dict) -> bool:
+    for key in ("suggested_destination", "final_destination", "migrated_to"):
+        raw = row.get(key)
+        if raw and "Real Life" in Path(str(raw)).parts:
+            return True
+    scores = from_json(row.get("full_scores_json") or "{}", default={})
+    if isinstance(scores, dict) and any(str(k).startswith("rl:") for k in scores):
+        return True
+    run_id = row.get("run_id")
+    if run_id is not None:
+        run = fetch_one("SELECT tagging_domain, tagger_model FROM runs WHERE id = ?", (run_id,))
+        if run:
+            if str(run.get("tagging_domain") or "") == "real_life":
+                return True
+            if str(run.get("tagger_model") or "").startswith("real_life"):
+                return True
+    return False
+
+
+def _execute_real_life_tag_run(
+    run_id: int,
+    root_repo: Path,
+    categories_root: Path,
+    confidence_threshold: float,
+    matched_tags: set[str],
+    scan_recursive: bool = True,
+    max_inference_workers: int = 2,
+) -> None:
+    """Classify media with the isolated real-life adult tagger pipeline."""
+    from .real_life_engine import get_real_life_engine
+    from .real_life_taxonomy import real_life_destination
+
+    try:
+        execute(
+            "UPDATE runs SET status = 'running', started_at = ?, last_error = NULL WHERE id = ?",
+            (_now_iso(), run_id),
+        )
+        if _is_cancel_requested(run_id):
+            execute(
+                """
+                UPDATE runs
+                SET status = 'cancelled', finished_at = ?
+                WHERE id = ?
+                """,
+                (_now_iso(), run_id),
+            )
+            return
+
+        engine = get_real_life_engine()
+        status = engine.status()
+        logger.info("real_life_tag_engine_status run_id=%d status=%s", run_id, status)
+
+        scan = scan_images(
+            root_repo,
+            recursive=scan_recursive,
+            experimental_media_enabled=True,
+            exclude_dirs=categories_exclude_dirs(categories_root, root_repo),
+        )
+        paths = list(scan.image_paths)
+        execute(
+            "UPDATE runs SET total_images = ? WHERE id = ?",
+            (len(paths), run_id),
+        )
+        if not paths:
+            execute(
+                """
+                UPDATE runs
+                SET status = 'completed', finished_at = ?, processed_images = 0, failed_images = 0
+                WHERE id = ?
+                """,
+                (_now_iso(), run_id),
+            )
+            return
+
+        # VLM is process-singleton + lock-serialized; >1 workers only burn RAM on frames.
+        workers = 1
+        processed = 0
+        failed = 0
+        selected = set(matched_tags) if matched_tags else None
+
+        def _classify_one(path: Path):
+            return engine.classify_path(
+                path,
+                categories_root=categories_root,
+                selected_folders=selected,
+                confidence_threshold=confidence_threshold,
+            )
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures: dict[Future, Path] = {
+                pool.submit(_classify_one, path): path for path in paths
+            }
+            pending = set(futures)
+            while pending:
+                if _is_cancel_requested(run_id):
+                    for fut in pending:
+                        fut.cancel()
+                    execute(
+                        """
+                        UPDATE runs
+                        SET status = 'cancelled', finished_at = ?,
+                            processed_images = ?, failed_images = ?
+                        WHERE id = ?
+                        """,
+                        (_now_iso(), processed, failed, run_id),
+                    )
+                    return
+                done, pending = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
+                for fut in done:
+                    path = futures[fut]
+                    try:
+                        relative = str(path.relative_to(root_repo))
+                    except ValueError:
+                        relative = path.name
+                    try:
+                        result = fut.result()
+                    except Exception as err:  # noqa: BLE001
+                        logger.exception("real_life_tag_item_failed path=%s", path)
+                        failed += 1
+                        execute(
+                            """
+                            INSERT INTO items (
+                                run_id, file_path, relative_path, primary_tag, primary_score,
+                                secondary_json, full_scores_json, suggested_destination,
+                                final_tag, final_destination, status, needs_review, review_reason
+                            ) VALUES (?, ?, ?, NULL, NULL, '[]', '{}', NULL, NULL, NULL, 'proposed', 1, ?)
+                            """,
+                            (run_id, str(path), relative, f"inference_failed:{err}"),
+                        )
+                        processed += 1
+                        _update_run_progress(run_id, processed, failed)
+                        continue
+
+                    primary = result.primary_tag
+                    dest = result.suggested_destination
+                    if primary and not dest:
+                        dest = str(real_life_destination(categories_root, primary))
+                    status_value = "proposed"
+                    execute(
+                        """
+                        INSERT INTO items (
+                            run_id, file_path, relative_path, primary_tag, primary_score,
+                            secondary_json, full_scores_json, suggested_destination,
+                            final_tag, final_destination, status, needs_review, review_reason
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            run_id,
+                            str(path),
+                            relative,
+                            primary,
+                            result.primary_score,
+                            to_json(result.secondary),
+                            to_json(result.scores),
+                            dest,
+                            primary,
+                            dest,
+                            status_value,
+                            1 if result.needs_review else 0,
+                            result.reason,
+                        ),
+                    )
+                    if result.inference_failed:
+                        failed += 1
+                    processed += 1
+                    _update_run_progress(run_id, processed, failed)
+
+        execute(
+            """
+            UPDATE runs
+            SET status = 'completed', finished_at = ?,
+                processed_images = ?, failed_images = ?
+            WHERE id = ?
+            """,
+            (_now_iso(), processed, failed, run_id),
+        )
+    except Exception as err:  # noqa: BLE001
+        logger.exception("real_life_tag_run_failed run_id=%d", run_id)
         execute(
             "UPDATE runs SET status = 'failed', finished_at = ?, last_error = ? WHERE id = ?",
             (_now_iso(), str(err), run_id),
@@ -1992,12 +2181,24 @@ def get_settings() -> AppSettings:
 
 @router.put("/settings", response_model=AppSettings)
 def save_settings(payload: SaveSettingsRequest) -> AppSettings:
+    from .real_life_taxonomy import resolve_real_life_folder
+
+    tagging_domain = str(payload.tagging_domain or "drawn").strip().lower()
+    if tagging_domain not in {"drawn", "real_life"}:
+        tagging_domain = "drawn"
+    payload.tagging_domain = tagging_domain  # type: ignore[assignment]
+
     known = load_known_tags(TAGS_CSV)
     known_by_norm = {normalize_tag_name(t): t for t in known}
     cleaned_tags: list[str] = []
     for tag in payload.selected_tags:
         value = tag.strip()
         if not value:
+            continue
+        if tagging_domain == "real_life":
+            rl = resolve_real_life_folder(value)
+            if rl is not None and rl.folder not in cleaned_tags:
+                cleaned_tags.append(rl.folder)
             continue
         tax = resolve_taxonomy_folder(value)
         if tax is not None:
@@ -2015,6 +2216,7 @@ def save_settings(payload: SaveSettingsRequest) -> AppSettings:
             SET root_repo = ?, categories_root = ?, confidence_threshold = ?,
                 default_migrate_mode = ?, scan_recursive = ?, experimental_media_enabled = ?,
                 experimental_style_detector_enabled = ?, hybrid_ml_on_review = ?,
+                tagging_domain = ?,
                 selected_tags_json = ?, max_inference_workers = ?, inference_batch_size = ?,
                 force_cpu_inference = ?, tagger_model = ?, wd_general_threshold = ?
             WHERE id = 1
@@ -2028,6 +2230,7 @@ def save_settings(payload: SaveSettingsRequest) -> AppSettings:
                 1 if payload.experimental_media_enabled else 0,
                 1 if payload.experimental_style_detector_enabled else 0,
                 1 if payload.hybrid_ml_on_review else 0,
+                tagging_domain,
                 to_json(cleaned_tags),
                 int(payload.max_inference_workers),
                 int(payload.inference_batch_size),
@@ -2044,16 +2247,33 @@ def save_settings(payload: SaveSettingsRequest) -> AppSettings:
 
 
 @router.get("/tags")
-def search_tags(query: str = Query("", min_length=0), limit: int = 50) -> dict:
+def search_tags(
+    query: str = Query("", min_length=0),
+    limit: int = 50,
+    domain: str | None = Query(None),
+) -> dict:
     """Suggest destination folders (taxonomy) first, then tags.csv matches."""
     q = (query or "").strip().lower()
     limit = max(1, min(int(limit), 200))
+    settings = _settings_from_db()
+    active_domain = (domain or settings.tagging_domain or "drawn").strip().lower()
+    if active_domain not in {"drawn", "real_life"}:
+        active_domain = "drawn"
 
     def _matches(name: str) -> bool:
         return (not q) or (q in name.lower())
 
     items: list[str] = []
     seen: set[str] = set()
+    if active_domain == "real_life":
+        from .real_life_taxonomy import real_life_folder_names
+
+        for name in real_life_folder_names():
+            if _matches(name) and name not in seen:
+                items.append(name)
+                seen.add(name)
+        return {"items": items[:limit], "count": len(items), "domain": "real_life"}
+
     # Taxonomy destinations (e.g. Voyeur, Voyeur/panties) before raw danbooru tags
     # like voyeurism, so users pick the folder they want to migrate into.
     for name in taxonomy_folder_names():
@@ -2064,7 +2284,7 @@ def search_tags(query: str = Query("", min_length=0), limit: int = 50) -> dict:
         if _matches(name) and name not in seen:
             items.append(name)
             seen.add(name)
-    return {"items": items[:limit], "count": len(items)}
+    return {"items": items[:limit], "count": len(items), "domain": "drawn"}
 
 
 @router.get("/scan/preview")
@@ -2105,11 +2325,27 @@ def get_providers() -> dict[str, object]:
     _apply_runtime_inference_env(settings)
     info = probe_execution_providers()
     info["tagger_model"] = settings.tagger_model
+    info["tagging_domain"] = settings.tagging_domain
     info["note"] = (
         "CUDA usability reflects ORT GPU runtime readiness; "
         "the active tagger model is selected separately in settings."
     )
     return info
+
+
+@router.get("/real-life/status")
+def get_real_life_status() -> dict[str, object]:
+    """Report local adult-tagger readiness (VLM / position / capability)."""
+    from .real_life_engine import get_real_life_engine
+    from .real_life_taxonomy import real_life_folder_names
+
+    settings = _settings_from_db()
+    engine_status = get_real_life_engine().status()
+    return {
+        "tagging_domain": settings.tagging_domain,
+        "folders": real_life_folder_names(),
+        "engine": engine_status,
+    }
 
 
 @router.post("/runs/start", response_model=StartRunResponse)
@@ -2124,6 +2360,14 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
     categories_root = Path(resolved.categories_root).expanduser()
     real_life_filter = payload.run_mode == "real_life_filter"
     doujin_works = payload.run_mode == "doujin_works"
+    real_life_tag = (
+        payload.run_mode == "real_life_tag" or current.tagging_domain == "real_life"
+    )
+    # Domain toggle wins for normal classify starts from the UI.
+    if payload.run_mode == "classify" and current.tagging_domain == "real_life":
+        real_life_tag = True
+    if payload.run_mode in {"real_life_filter", "doujin_works"}:
+        real_life_tag = False
 
     if not resolved.root_repo or not resolved.categories_root:
         raise HTTPException(status_code=400, detail="root_repo and categories_root are required")
@@ -2148,7 +2392,9 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
 
     # Real-life filter: GIF/video on + hybrid WD realism × style detector.
     experimental_media_enabled = (
-        True if real_life_filter else bool(resolved.experimental_media_enabled)
+        True
+        if (real_life_filter or real_life_tag)
+        else bool(resolved.experimental_media_enabled)
     )
     style_detector_enabled = (
         True if real_life_filter else bool(current.experimental_style_detector_enabled)
@@ -2157,6 +2403,21 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
         selected_folders = ["real_life"]
     elif doujin_works:
         selected_folders = list(DOUJIN_FAVOURITE_FOLDERS)
+    elif real_life_tag:
+        from .real_life_taxonomy import real_life_folder_names, resolve_real_life_folder
+
+        selected_folders = payload.selected_folders
+        if not selected_folders:
+            selected_folders = list(current.selected_tags)
+        if selected_folders:
+            cleaned: list[str] = []
+            for name in selected_folders:
+                bucket = resolve_real_life_folder(name)
+                if bucket is not None and bucket.folder not in cleaned:
+                    cleaned.append(bucket.folder)
+            selected_folders = cleaned or list(real_life_folder_names())
+        else:
+            selected_folders = list(real_life_folder_names())
     else:
         selected_folders = payload.selected_folders
         if not selected_folders:
@@ -2169,17 +2430,41 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
     if doujin_works and not str(tagger_model).startswith("wd_"):
         # Doujin pooling needs multi-folder WD routing, not ML loli-only.
         tagger_model = "wd_swinv2_v3"
+    if real_life_tag:
+        tagger_model = "real_life_adult_v1"
 
     try:
-        known_tags = load_known_tags(TAGS_CSV)
-        mappings = discover_tag_folders(categories_root, known_tags, selected_folders)
-        matched_tags = {m.matched_tag for m in mappings if m.matched and m.matched_tag}
-        if style_detector_enabled or real_life_filter:
-            matched_tags.add("real_life")
+        if real_life_tag:
+            from .real_life_taxonomy import resolve_real_life_folder
+
+            mappings = []
+            matched_tags = set()
+            for name in selected_folders:
+                bucket = resolve_real_life_folder(name)
+                folder = bucket.folder if bucket is not None else str(name)
+                matched_tags.add(folder)
+                mappings.append(
+                    FolderMapping(
+                        folder_name=folder,
+                        normalized_name=folder,
+                        matched_tag=folder,
+                        matched=True,
+                    )
+                )
+        else:
+            known_tags = load_known_tags(TAGS_CSV)
+            mappings = discover_tag_folders(categories_root, known_tags, selected_folders)
+            matched_tags = {m.matched_tag for m in mappings if m.matched and m.matched_tag}
+            if style_detector_enabled or real_life_filter:
+                matched_tags.add("real_life")
         if not matched_tags:
             raise HTTPException(
                 status_code=400,
-                detail="No selected tags map to known tags.csv entries. Save tags in settings first.",
+                detail=(
+                    "No selected real-life categories."
+                    if real_life_tag
+                    else "No selected tags map to known tags.csv entries. Save tags in settings first."
+                ),
             )
     except HTTPException:
         raise
@@ -2190,19 +2475,22 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
         logger.exception("failed to prepare run")
         raise HTTPException(status_code=500, detail="Failed to prepare classification run")
 
+    tagging_domain = "real_life" if real_life_tag else "drawn"
     try:
         run_id = execute(
             """
             INSERT INTO runs (
                 root_repo, categories_root, confidence_threshold, status,
-                total_images, processed_images, failed_images, cancel_requested, tagger_model
-            ) VALUES (?, ?, ?, 'pending', 0, 0, 0, 0, ?)
+                total_images, processed_images, failed_images, cancel_requested,
+                tagger_model, tagging_domain
+            ) VALUES (?, ?, ?, 'pending', 0, 0, 0, 0, ?, ?)
             """,
             (
                 str(root_repo),
                 str(categories_root),
                 resolved.confidence_threshold,
                 tagger_model,
+                tagging_domain,
             ),
         )
     except Exception:
@@ -2221,6 +2509,20 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
                 "max_inference_workers": current.max_inference_workers,
                 "tagger_model": tagger_model,
                 "wd_general_threshold": current.wd_general_threshold,
+            },
+            daemon=True,
+        )
+    elif real_life_tag:
+        worker = threading.Thread(
+            target=_execute_real_life_tag_run,
+            kwargs={
+                "run_id": run_id,
+                "root_repo": root_repo,
+                "categories_root": categories_root,
+                "confidence_threshold": resolved.confidence_threshold,
+                "matched_tags": matched_tags,
+                "scan_recursive": resolved.scan_recursive,
+                "max_inference_workers": current.max_inference_workers,
             },
             daemon=True,
         )
@@ -2258,6 +2560,12 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
             "favourites loli/shota/milf/fertilization/monster_girl/incest/bestiality/"
             "Pokemon/NTR/tentacles/furry/android; "
             "migrate moves into Doujins/<primary>/ with junctions for category tags."
+        )
+    elif real_life_tag:
+        mode_note = (
+            " Real-life tagging: style-gated local adult tagger; isolated taxonomy under "
+            "Real Life/<primary>/; sensitive tags (BBC/Ebony/Asian) require manual approval; "
+            "all items start in needs-review for calibration."
         )
     elif not real_life_filter and tagger_model == "ml_danbooru":
         mode_note += " ML-Danbooru mode: loli destination only."
@@ -2469,13 +2777,17 @@ def _resolve_item_assignment(
                 break
 
     is_doujin = _is_doujin_row(row)
+    is_real_life = _is_real_life_row(row)
     destination = row.get("final_destination") or row.get("suggested_destination")
     if destination and tag and categories_root is not None:
-        expected = (
-            doujin_destination_folder(categories_root, tag)
-            if is_doujin
-            else destination_path(categories_root, tag)
-        )
+        if is_doujin:
+            expected = doujin_destination_folder(categories_root, tag)
+        elif is_real_life:
+            from .real_life_taxonomy import real_life_destination
+
+            expected = real_life_destination(categories_root, tag)
+        else:
+            expected = destination_path(categories_root, tag)
         dest_path = Path(str(destination))
         try:
             if dest_path.resolve() == expected.resolve():
@@ -2488,6 +2800,10 @@ def _resolve_item_assignment(
             leaf = sanitize_folder_name(tag.replace("\\", "/").rstrip("/").split("/")[-1])
             if sanitize_folder_name(dest_path.name) == leaf:
                 return tag, str(dest_path)
+        if is_real_life and "Real Life" in dest_path.parts:
+            leaf = sanitize_folder_name(tag.replace("\\", "/").rstrip("/").split("/")[-1])
+            if sanitize_folder_name(dest_path.name) == leaf:
+                return tag, str(dest_path)
     elif destination and tag:
         # Fallback when categories_root unknown: leaf name match (flat folders).
         dest_path = Path(str(destination))
@@ -2497,6 +2813,10 @@ def _resolve_item_assignment(
     if tag and categories_root is not None:
         if is_doujin:
             return tag, str(doujin_destination_folder(categories_root, tag))
+        if is_real_life:
+            from .real_life_taxonomy import real_life_destination
+
+            return tag, str(real_life_destination(categories_root, tag))
         return tag, str(destination_path(categories_root, tag))
     if destination:
         return tag, str(destination)
@@ -2534,6 +2854,18 @@ def update_item(item_id: int, payload: UpdateItemRequest) -> ClassifiedItem:
                     "Set Final tag (or ensure a secondary suggestion exists) first."
                 ),
             )
+        if new_status == "approved" and new_final_tag and _is_real_life_row(row):
+            from .real_life_taxonomy import is_sensitive_tag
+
+            explicit = bool(isinstance(tag_override, str) and tag_override.strip())
+            if is_sensitive_tag(new_final_tag) and not explicit:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Sensitive real-life tag '{new_final_tag}' requires an explicit "
+                        "Final tag confirmation before approval."
+                    ),
+                )
         new_needs_review = (
             0
             if new_status in {"reviewed", "approved", "migrated"}
@@ -2676,6 +3008,13 @@ def batch_update(run_id: int, payload: BatchUpdateRequest) -> dict:
             if new_status == "approved" and not new_final_destination:
                 skipped += 1
                 continue
+            if new_status == "approved" and new_final_tag and _is_real_life_row(row):
+                from .real_life_taxonomy import is_sensitive_tag
+
+                explicit = bool(isinstance(tag_override, str) and tag_override.strip())
+                if is_sensitive_tag(new_final_tag) and not explicit:
+                    skipped += 1
+                    continue
             new_needs_review = (
                 0
                 if new_status in {"reviewed", "approved", "migrated"}

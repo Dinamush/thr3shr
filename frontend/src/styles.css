@@ -421,6 +421,30 @@ button.danger {
   font-size: 13px;
 }
 
+.chip.warn {
+  background: #fff7ed;
+  border-color: #fdba74;
+  color: #9a3412;
+  margin-left: 6px;
+}
+
+.domain-toggle {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border, #cbd5e1);
+  border-radius: 8px;
+}
+
+.domain-toggle legend {
+  padding: 0 6px;
+  font-weight: 600;
+}
+
+.real-life-status {
+  margin-top: 8px;
+  font-size: 13px;
+}
+
 .chip button {
   padding: 0 6px;
   border-radius: 999px;

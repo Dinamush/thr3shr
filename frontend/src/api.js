@@ -8,6 +8,9 @@ const defaultSettings = {
   default_migrate_mode: "copy",
   scan_recursive: true,
   experimental_media_enabled: false,
+  experimental_style_detector_enabled: false,
+  hybrid_ml_on_review: true,
+  tagging_domain: "drawn",
   selected_tags: [],
   max_inference_workers: 2,
   inference_batch_size: 8,
@@ -544,18 +547,21 @@ function mockRequest(path, options = {}) {
 
 export const api = {
   isOfflineMode: () => backendAvailable === false,
-  getTags: (query = "", limit = 50) => {
+  getTags: (query = "", limit = 50, domain = null) => {
     const params = new URLSearchParams({ query, limit: String(limit) });
+    if (domain) params.set("domain", domain);
     return request(`/tags?${params.toString()}`);
   },
   getSettings: () => request("/settings"),
   getProviders: () => request("/providers"),
+  getRealLifeStatus: () => request("/real-life/status"),
   previewScan: () => request("/scan/preview"),
   saveSettings: (payload) =>
     request("/settings", {
       method: "PUT",
       body: JSON.stringify(payload),
-    }),  startRun: (payload) =>
+    }),
+  startRun: (payload) =>
     request("/runs/start", {
       method: "POST",
       body: JSON.stringify(payload),
