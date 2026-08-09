@@ -110,6 +110,12 @@
       ],
       "evidence": [
         { "tag": "mature_female", "weight": 1.0 }
+      ],
+      "gate_tags": ["mature_female"],
+      "gated_evidence": [
+        { "tag": "huge_breasts", "weight": 0.45 },
+        { "tag": "large_breasts", "weight": 0.4 },
+        { "tag": "thick_thighs", "weight": 0.4 }
       ]
     },
     {
@@ -132,6 +138,7 @@
         { "tag": "onee-loli", "weight": 0.85 },
         { "tag": "mesugaki", "weight": 0.8 },
         { "tag": "lolidom", "weight": 0.75 },
+        { "tag": "toddlercon", "weight": 0.7 },
         { "tag": "child_on_child", "weight": 0.55 }
       ]
     },
@@ -274,6 +281,8 @@
         { "tag": "pig", "weight": 0.55 },
         { "tag": "cow", "weight": 0.55 },
         { "tag": "wolf", "weight": 0.5 },
+        { "tag": "fox", "weight": 0.5 },
+        { "tag": "bear", "weight": 0.5 },
         { "tag": "animal", "weight": 0.45 }
       ]
     },

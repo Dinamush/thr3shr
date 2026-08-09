@@ -623,6 +623,28 @@ def test_group_sex_beats_milf_even_with_strong_mature_female() -> None:
     assert folder == "group_sex"
 
 
+def test_milf_accepts_expanded_mature_cues() -> None:
+    selected = {"milf", "sex", "group_sex"}
+    folder, score, _ = choose_best_destination(
+        {"mature_female": 0.7, "huge_breasts": 0.6}, selected
+    )
+    # huge_breasts alone must not win; mature_female must still route milf
+    assert folder == "milf"
+    assert score is not None
+
+
+def test_favourite_act_aliases_still_route() -> None:
+    selected = {
+        "nakadashi", "fellatio", "paizuri", "footjob", "fertilization",
+        "group_sex", "sex",
+    }
+    assert choose_best_destination({"internal_cumshot": 0.9}, selected)[0] == "nakadashi"
+    assert choose_best_destination({"irrumatio": 0.9}, selected)[0] == "fellatio"
+    assert choose_best_destination({"perpendicular_paizuri": 0.9}, selected)[0] == "paizuri"
+    assert choose_best_destination({"two_footed_footjob": 0.9}, selected)[0] == "footjob"
+    assert choose_best_destination({"pregnancy_test": 0.9}, selected)[0] == "fertilization"
+
+
 def test_fellatio_still_wins_without_group() -> None:
     folder, score, _ = choose_best_destination(
         {"fellatio": 0.95}, GROUP_SEX_SELECTED
