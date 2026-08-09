@@ -526,6 +526,118 @@ def test_fertilization_accepts_cross_section_underscore() -> None:
     assert abs(score - 0.9 * 0.45) < 1e-9
 
 
+GROUP_SEX_SELECTED = {
+    "group_sex",
+    "sex",
+    "milf",
+    "fellatio",
+    "nakadashi",
+    "paizuri",
+    "footjob",
+    "fertilization",
+    "loli",
+    "shota",
+    "incest",
+    "bestiality",
+    "NTR",
+    "Pokemon",
+    "furry",
+    "monster_girl",
+    "android",
+    "tentacles",
+}
+
+
+def test_group_sex_bucket_resolves() -> None:
+    bucket = resolve_taxonomy_folder("group_sex")
+    assert bucket is not None
+    assert bucket.folder == "group_sex"
+    assert resolve_taxonomy_folder("gangbang").folder == "group_sex"
+
+
+def test_group_sex_beats_sex_and_vanilla_acts() -> None:
+    folder, score, _ = choose_best_destination(
+        {"gangbang": 0.92, "sex": 0.9, "vaginal": 0.88}, GROUP_SEX_SELECTED
+    )
+    assert folder == "group_sex"
+    assert score is not None and score > 0.5
+
+    folder, _, _ = choose_best_destination(
+        {"group_sex": 0.9, "fellatio": 0.95}, GROUP_SEX_SELECTED
+    )
+    assert folder == "group_sex"
+
+    folder, _, _ = choose_best_destination(
+        {"threesome": 0.9, "nakadashi": 0.95, "cum_in_pussy": 0.9},
+        GROUP_SEX_SELECTED,
+    )
+    assert folder == "group_sex"
+
+    folder, _, _ = choose_best_destination(
+        {"mmf_threesome": 0.88, "paizuri": 0.95}, GROUP_SEX_SELECTED
+    )
+    assert folder == "group_sex"
+
+    folder, _, _ = choose_best_destination(
+        {"orgy": 0.9, "footjob": 0.95}, GROUP_SEX_SELECTED
+    )
+    assert folder == "group_sex"
+
+    folder, _, _ = choose_best_destination(
+        {"spitroast": 0.9, "fertilization": 0.95, "impregnation": 0.9},
+        GROUP_SEX_SELECTED,
+    )
+    assert folder == "group_sex"
+
+
+def test_sex_still_wins_without_group_markers() -> None:
+    folder, score, _ = choose_best_destination(
+        {"sex": 0.9, "vaginal": 0.88, "missionary": 0.85}, GROUP_SEX_SELECTED
+    )
+    assert folder == "sex"
+    assert score is not None and score > 0.5
+
+
+def test_group_sex_loses_to_overrides() -> None:
+    cases = [
+        ({"gangbang": 0.95, "loli": 0.9}, "loli"),
+        ({"gangbang": 0.95, "shota": 0.9}, "shota"),
+        ({"gangbang": 0.95, "incest": 0.9}, "incest"),
+        ({"gangbang": 0.95, "netorare": 0.85}, "NTR"),
+        ({"gangbang": 0.95, "bestiality": 0.9}, "bestiality"),
+        ({"gangbang": 0.95, "pokemon_(creature)": 0.9}, "Pokemon"),
+        ({"gangbang": 0.95, "furry": 0.9}, "furry"),
+        ({"gangbang": 0.95, "monster_girl": 0.9}, "monster_girl"),
+        ({"gangbang": 0.95, "android": 0.9}, "android"),
+        ({"gangbang": 0.95, "tentacle_sex": 0.9}, "tentacles"),
+    ]
+    for scores, expected in cases:
+        folder, _, _ = choose_best_destination(scores, GROUP_SEX_SELECTED)
+        assert folder == expected, (scores, folder)
+
+
+def test_group_sex_beats_milf_even_with_strong_mature_female() -> None:
+    folder, _, _ = choose_best_destination(
+        {"gangbang": 0.85, "mature_female": 0.99}, GROUP_SEX_SELECTED
+    )
+    assert folder == "group_sex"
+
+
+def test_fellatio_still_wins_without_group() -> None:
+    folder, score, _ = choose_best_destination(
+        {"fellatio": 0.95}, GROUP_SEX_SELECTED
+    )
+    assert folder == "fellatio"
+    assert score is not None and score > 0.5
+
+
+def test_voyeur_unchanged_by_group_sex_work() -> None:
+    # Soft Voyeur path must still work; selecting group_sex must not break Voyeur group expand.
+    folder, score, _ = choose_best_destination({"upskirt": 0.88}, {"Voyeur"})
+    assert folder == "Voyeur/upskirt"
+    assert score is not None and score > 0.5
+
+
 def test_voyeur_subfolder_routes_and_group_expands() -> None:
     # Selecting only parent Voyeur still scores nested buckets.
     folder, score, _ = choose_best_destination(
