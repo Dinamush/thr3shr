@@ -95,6 +95,8 @@ def _ensure_settings_columns(conn: sqlite3.Connection) -> None:
         "hybrid_ml_on_review": "INTEGER NOT NULL DEFAULT 1",
         "tagging_domain": "TEXT NOT NULL DEFAULT 'drawn'",
         "selected_tags_json": "TEXT NOT NULL DEFAULT '[]'",
+        "selected_tags_nsfw_json": "TEXT NOT NULL DEFAULT '[]'",
+        "sfw_classify_mode": "INTEGER NOT NULL DEFAULT 0",
         "max_inference_workers": "INTEGER NOT NULL DEFAULT 2",
         "inference_batch_size": "INTEGER NOT NULL DEFAULT 4",
         "force_cpu_inference": "INTEGER NOT NULL DEFAULT 0",

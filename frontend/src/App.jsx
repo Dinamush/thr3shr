@@ -12,7 +12,9 @@ const DEFAULT_SETTINGS = {
   experimental_style_detector_enabled: false,
   hybrid_ml_on_review: true,
   tagging_domain: "drawn",
+  sfw_classify_mode: false,
   selected_tags: [],
+  selected_tags_nsfw: [],
   max_inference_workers: 2,
   inference_batch_size: 8,
   force_cpu_inference: false,
@@ -61,6 +63,7 @@ const TAGGER_MODELS = [
   },
 ];
 
+const SFW_CLASSIFY_FOLDERS = ["SFW", "scenery"];
 const ACTIVE_RUN_STORAGE_KEY = "imageClassifierActiveRunId";
 const VIDEO_PREVIEW_EXTS = new Set([
   ".mp4",
@@ -685,8 +688,78 @@ function App() {
     }
   }
 
+  const sfwClassifyMode =
+    Boolean(settings.sfw_classify_mode) && settings.tagging_domain !== "real_life";
+  const parkedNsfwTags = Array.isArray(settings.selected_tags_nsfw)
+    ? settings.selected_tags_nsfw
+    : [];
+
+  async function setSfwClassifyMode(enabled) {
+    if (settings.tagging_domain === "real_life") return;
+    setError("");
+    skipNextTagPersistRef.current = true;
+    if (enabled) {
+      const parked = selectedTags.filter((t) => !SFW_CLASSIFY_FOLDERS.includes(t));
+      const nextTags = [...SFW_CLASSIFY_FOLDERS];
+      const next = {
+        ...settings,
+        sfw_classify_mode: true,
+        selected_tags: nextTags,
+        selected_tags_nsfw: parked.length ? parked : parkedNsfwTags,
+      };
+      setSelectedTags(nextTags);
+      setSettings(next);
+      try {
+        const saved = await api.saveSettings(next);
+        const merged = { ...DEFAULT_SETTINGS, ...saved };
+        setSettings(merged);
+        setSelectedTags(
+          Array.isArray(saved.selected_tags) ? saved.selected_tags : nextTags
+        );
+        setSavedSnapshot(
+          settingsSnapshot(
+            merged,
+            Array.isArray(saved.selected_tags) ? saved.selected_tags : nextTags
+          )
+        );
+      } catch (err) {
+        setError(`Failed to enable SFW mode: ${err.message}`);
+      }
+      return;
+    }
+
+    const restored =
+      parkedNsfwTags.length > 0
+        ? parkedNsfwTags
+        : selectedTags.filter((t) => !SFW_CLASSIFY_FOLDERS.includes(t));
+    const next = {
+      ...settings,
+      sfw_classify_mode: false,
+      selected_tags: restored,
+      selected_tags_nsfw: restored,
+    };
+    setSelectedTags(restored);
+    setSettings(next);
+    try {
+      const saved = await api.saveSettings(next);
+      const merged = { ...DEFAULT_SETTINGS, ...saved };
+      setSettings(merged);
+      setSelectedTags(
+        Array.isArray(saved.selected_tags) ? saved.selected_tags : restored
+      );
+      setSavedSnapshot(
+        settingsSnapshot(
+          merged,
+          Array.isArray(saved.selected_tags) ? saved.selected_tags : restored
+        )
+      );
+    } catch (err) {
+      setError(`Failed to disable SFW mode: ${err.message}`);
+    }
+  }
+
   function addSelectedTag(value) {
-    if (!value) return;
+    if (!value || sfwClassifyMode) return;
     setSelectedTags((prev) => (prev.includes(value) ? prev : [...prev, value]));
   }
 
@@ -732,6 +805,7 @@ function App() {
   }
 
   function removeSelectedTag(value) {
+    if (sfwClassifyMode) return;
     setSelectedTags((prev) => prev.filter((t) => t !== value));
   }
 
@@ -1029,6 +1103,7 @@ function App() {
                         ...settings,
                         tagging_domain: "real_life",
                         experimental_media_enabled: true,
+                        sfw_classify_mode: false,
                       })
                     }
                   />
@@ -1097,8 +1172,21 @@ function App() {
         <span className="kicker">
           {settings.tagging_domain === "real_life"
             ? "Real-life categories only (isolated from anime tags.csv). Changes auto-save after settings save."
-            : "Only these tags compete for folder assignment. Changes auto-save."}
+            : sfwClassifyMode
+              ? "SFW mode: only SFW / scenery compete. Your NSFW tags stay parked."
+              : "Only these tags compete for folder assignment. Changes auto-save."}
         </span>
+        {settings.tagging_domain !== "real_life" ? (
+          <label className="inline-check sfw-mode-toggle">
+            <input
+              type="checkbox"
+              checked={sfwClassifyMode}
+              disabled={runActive || opsLoading.startingRun}
+              onChange={(e) => setSfwClassifyMode(e.target.checked)}
+            />
+            SFW classify mode (parks NSFW tags; restore when off)
+          </label>
+        ) : null}
         <label>
           {settings.tagging_domain === "real_life"
             ? "Real-life category search"
@@ -1108,9 +1196,11 @@ function App() {
             onChange={(e) => setTagQuery(e.target.value)}
             list="tag-match-suggestions"
             autoComplete="off"
+            disabled={sfwClassifyMode}
             onKeyDown={async (e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
+                if (sfwClassifyMode) return;
                 setError("");
                 try {
                   await addTagsFromInput(tagQuery);
@@ -1121,9 +1211,11 @@ function App() {
               }
             }}
             placeholder={
-              settings.tagging_domain === "real_life"
-                ? "Type creampie, BBC, hotwife…"
-                : "Type Voyeur, loli, Pokemon…"
+              sfwClassifyMode
+                ? "Tag editing disabled in SFW mode"
+                : settings.tagging_domain === "real_life"
+                  ? "Type creampie, BBC, hotwife…"
+                  : "Type Voyeur, loli, Pokemon…"
             }
           />
           <datalist id="tag-match-suggestions">
@@ -1132,7 +1224,7 @@ function App() {
             ))}
           </datalist>
         </label>
-        {tagQuery.trim() && (
+        {tagQuery.trim() && !sfwClassifyMode && (
           <div className="tag-suggestions">
             {tagOptions.length === 0 ? (
               <span className="muted">No matching tags</span>
@@ -1158,6 +1250,7 @@ function App() {
           <button
             type="button"
             className="secondary"
+            disabled={sfwClassifyMode}
             onClick={async () => {
               setError("");
               try {
@@ -1227,20 +1320,37 @@ function App() {
             </>
           )}
         </p>
-        <div className="stats">
+        <div className={`stats${sfwClassifyMode ? " tags-locked" : ""}`}>
           {selectedTags.length === 0 ? (
             <span className="muted">No tags selected</span>
           ) : (
             selectedTags.map((tag) => (
               <span key={tag} className="chip">
                 {tag}
-                <button type="button" onClick={() => removeSelectedTag(tag)} aria-label={`Remove ${tag}`}>
+                <button
+                  type="button"
+                  onClick={() => removeSelectedTag(tag)}
+                  aria-label={`Remove ${tag}`}
+                  disabled={sfwClassifyMode}
+                >
                   ×
                 </button>
               </span>
             ))
           )}
         </div>
+        {sfwClassifyMode && parkedNsfwTags.length > 0 ? (
+          <div className="parked-tags">
+            <span className="help">Parked NSFW tags (inactive until SFW mode is off):</span>
+            <div className="stats tags-locked">
+              {parkedNsfwTags.map((tag) => (
+                <span key={`parked-${tag}`} className="chip chip-parked">
+                  {tag}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </section>
 
       {runId && runStatus && (

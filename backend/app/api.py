@@ -920,6 +920,9 @@ def _infer_batch_with_fallback(
         return [row], elapsed_ms, "single_fallback"
 
 
+SFW_CLASSIFY_FOLDERS: tuple[str, ...] = ("SFW", "scenery")
+
+
 def _settings_from_db() -> AppSettings:
     row = fetch_one("SELECT * FROM settings WHERE id = 1")
     if not row:
@@ -929,12 +932,20 @@ def _settings_from_db() -> AppSettings:
     if not isinstance(selected_tags, list):
         selected_tags = []
     selected_tags = [str(t).strip() for t in selected_tags if str(t).strip()]
+    nsfw_raw = row.get("selected_tags_nsfw_json") or "[]"
+    selected_tags_nsfw = from_json(nsfw_raw, default=[])
+    if not isinstance(selected_tags_nsfw, list):
+        selected_tags_nsfw = []
+    selected_tags_nsfw = [str(t).strip() for t in selected_tags_nsfw if str(t).strip()]
     tagger_model = str(row.get("tagger_model") or "wd_swinv2_v3").strip()
     if tagger_model not in {"ml_danbooru", "wd_swinv2_v3", "wd_eva02_large"}:
         tagger_model = "wd_swinv2_v3"
     tagging_domain = str(row.get("tagging_domain") or "drawn").strip().lower()
     if tagging_domain not in {"drawn", "real_life"}:
         tagging_domain = "drawn"
+    sfw_classify_mode = bool(row.get("sfw_classify_mode", 0))
+    if tagging_domain == "real_life":
+        sfw_classify_mode = False
     return AppSettings(
         root_repo=row["root_repo"],
         categories_root=row["categories_root"],
@@ -947,7 +958,9 @@ def _settings_from_db() -> AppSettings:
         ),
         hybrid_ml_on_review=bool(row.get("hybrid_ml_on_review", 1)),
         tagging_domain=tagging_domain,  # type: ignore[arg-type]
+        sfw_classify_mode=sfw_classify_mode,
         selected_tags=selected_tags,
+        selected_tags_nsfw=selected_tags_nsfw,
         max_inference_workers=int(row.get("max_inference_workers") or 2),
         inference_batch_size=int(row.get("inference_batch_size") or 4),
         force_cpu_inference=bool(row.get("force_cpu_inference", 0)),
@@ -2187,28 +2200,50 @@ def save_settings(payload: SaveSettingsRequest) -> AppSettings:
     if tagging_domain not in {"drawn", "real_life"}:
         tagging_domain = "drawn"
     payload.tagging_domain = tagging_domain  # type: ignore[assignment]
+    sfw_classify_mode = bool(payload.sfw_classify_mode)
+    if tagging_domain == "real_life":
+        sfw_classify_mode = False
+    payload.sfw_classify_mode = sfw_classify_mode
 
     known = load_known_tags(TAGS_CSV)
     known_by_norm = {normalize_tag_name(t): t for t in known}
+
+    def _resolve_drawn_tags(raw_tags: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for tag in raw_tags:
+            value = str(tag).strip()
+            if not value:
+                continue
+            tax = resolve_taxonomy_folder(value)
+            if tax is not None:
+                if tax.folder not in cleaned:
+                    cleaned.append(tax.folder)
+                continue
+            matched = value if value in known else known_by_norm.get(normalize_tag_name(value))
+            if matched and matched not in cleaned:
+                cleaned.append(matched)
+        return cleaned
+
+    cleaned_nsfw = _resolve_drawn_tags(list(payload.selected_tags_nsfw or []))
+    # Never park the SFW-mode destinations inside the NSFW stash.
+    cleaned_nsfw = [t for t in cleaned_nsfw if t not in SFW_CLASSIFY_FOLDERS]
+
     cleaned_tags: list[str] = []
-    for tag in payload.selected_tags:
-        value = tag.strip()
-        if not value:
-            continue
-        if tagging_domain == "real_life":
+    if tagging_domain == "real_life":
+        for tag in payload.selected_tags:
+            value = tag.strip()
+            if not value:
+                continue
             rl = resolve_real_life_folder(value)
             if rl is not None and rl.folder not in cleaned_tags:
                 cleaned_tags.append(rl.folder)
-            continue
-        tax = resolve_taxonomy_folder(value)
-        if tax is not None:
-            if tax.folder not in cleaned_tags:
-                cleaned_tags.append(tax.folder)
-            continue
-        matched = value if value in known else known_by_norm.get(normalize_tag_name(value))
-        if matched and matched not in cleaned_tags:
-            cleaned_tags.append(matched)
+    elif sfw_classify_mode:
+        cleaned_tags = list(SFW_CLASSIFY_FOLDERS)
+    else:
+        cleaned_tags = _resolve_drawn_tags(list(payload.selected_tags or []))
+
     payload.selected_tags = cleaned_tags
+    payload.selected_tags_nsfw = cleaned_nsfw
     try:
         execute(
             """
@@ -2216,8 +2251,9 @@ def save_settings(payload: SaveSettingsRequest) -> AppSettings:
             SET root_repo = ?, categories_root = ?, confidence_threshold = ?,
                 default_migrate_mode = ?, scan_recursive = ?, experimental_media_enabled = ?,
                 experimental_style_detector_enabled = ?, hybrid_ml_on_review = ?,
-                tagging_domain = ?,
-                selected_tags_json = ?, max_inference_workers = ?, inference_batch_size = ?,
+                tagging_domain = ?, sfw_classify_mode = ?,
+                selected_tags_json = ?, selected_tags_nsfw_json = ?,
+                max_inference_workers = ?, inference_batch_size = ?,
                 force_cpu_inference = ?, tagger_model = ?, wd_general_threshold = ?
             WHERE id = 1
             """,
@@ -2231,7 +2267,9 @@ def save_settings(payload: SaveSettingsRequest) -> AppSettings:
                 1 if payload.experimental_style_detector_enabled else 0,
                 1 if payload.hybrid_ml_on_review else 0,
                 tagging_domain,
+                1 if sfw_classify_mode else 0,
                 to_json(cleaned_tags),
+                to_json(cleaned_nsfw),
                 int(payload.max_inference_workers),
                 int(payload.inference_batch_size),
                 1 if payload.force_cpu_inference else 0,

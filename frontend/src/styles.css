@@ -453,6 +453,31 @@ button.danger {
   font-weight: 700;
 }
 
+.chip button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.sfw-mode-toggle {
+  margin: 8px 0 12px;
+  font-weight: 600;
+}
+
+.tags-locked .chip {
+  opacity: 0.72;
+  filter: grayscale(0.35);
+}
+
+.chip-parked {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #64748b;
+}
+
+.parked-tags {
+  margin-top: 10px;
+}
+
 .muted {
   color: var(--muted);
   font-size: 13px;

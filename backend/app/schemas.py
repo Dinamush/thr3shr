@@ -26,8 +26,13 @@ class AppSettings(BaseModel):
     hybrid_ml_on_review: bool = True
     # Drawn/anime WD+ML taxonomy vs isolated real-life adult tagger taxonomy.
     tagging_domain: TaggingDomain = "drawn"
+    # When true, classify uses only SFW/scenery; NSFW tags are parked.
+    # comic is omitted: WD SwinV2 is weak on B&W / lineart comic cues.
+    sfw_classify_mode: bool = False
     # Shuck3r-style persisted preferences (survive reload / restart).
     selected_tags: list[str] = Field(default_factory=list)
+    # Parked NSFW/specialty destinations while sfw_classify_mode is on.
+    selected_tags_nsfw: list[str] = Field(default_factory=list)
     # Shared ORT run lock; preprocess overlaps across workers. Prefer 2 on GPU.
     max_inference_workers: int = Field(default=2, ge=1, le=16)
     inference_batch_size: int = Field(default=4, ge=1, le=64)

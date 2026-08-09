@@ -11,7 +11,9 @@ const defaultSettings = {
   experimental_style_detector_enabled: false,
   hybrid_ml_on_review: true,
   tagging_domain: "drawn",
+  sfw_classify_mode: false,
   selected_tags: [],
+  selected_tags_nsfw: [],
   max_inference_workers: 2,
   inference_batch_size: 8,
   force_cpu_inference: false,
@@ -320,7 +322,17 @@ function mockRequest(path, options = {}) {
     return Promise.resolve({ items, count: items.length });
   }
   if (path === "/settings" && method === "PUT") {
-    mockState.settings = { ...defaultSettings, ...body };
+    const next = { ...defaultSettings, ...mockState.settings, ...body };
+    if (next.tagging_domain === "real_life") {
+      next.sfw_classify_mode = false;
+    }
+    if (next.sfw_classify_mode) {
+      next.selected_tags = ["SFW", "scenery"];
+    }
+    if (!Array.isArray(next.selected_tags_nsfw)) {
+      next.selected_tags_nsfw = [];
+    }
+    mockState.settings = next;
     persistMockState();
     return Promise.resolve(mockState.settings);
   }
