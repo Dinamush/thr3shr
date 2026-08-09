@@ -1171,8 +1171,10 @@ def test_sfw_refuses_swimwear_lingerie_and_suggestive() -> None:
 
 def test_sfw_accepts_plain_clothed_character_art() -> None:
     folder, score, _ = choose_best_destination(
-        {"1girl": 0.9, "solo": 0.85, "school_uniform": 0.7, "smile": 0.6},
+        {"1girl": 0.9, "solo": 0.85, "smile": 0.6},
         FALLBACKS,
     )
     assert folder == "SFW"
     assert score is not None and score > 0.5
+    # school_uniform is not SFW evidence (too genre-specific / noisy as a cue).
+    assert choose_best_destination({"school_uniform": 0.99}, FALLBACKS)[0] is None
