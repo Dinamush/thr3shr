@@ -1170,11 +1170,40 @@ def test_sfw_refuses_swimwear_lingerie_and_suggestive() -> None:
 
 
 def test_sfw_accepts_plain_clothed_character_art() -> None:
+    # SFW evidence is character-presence only (WD has no rating:safe tags).
     folder, score, _ = choose_best_destination(
-        {"1girl": 0.9, "solo": 0.85, "smile": 0.6},
+        {"1girl": 0.9, "solo": 0.85},
         FALLBACKS,
     )
     assert folder == "SFW"
     assert score is not None and score > 0.5
-    # school_uniform is not SFW evidence (too genre-specific / noisy as a cue).
-    assert choose_best_destination({"school_uniform": 0.99}, FALLBACKS)[0] is None
+    # Framing / clothing cues must not be SFW evidence by themselves.
+    for scores in (
+        {"school_uniform": 0.99},
+        {"smile": 0.99},
+        {"cowboy_shot": 0.99},
+        {"portrait": 0.99},
+        {"upper_body": 0.99},
+    ):
+        assert choose_best_destination(scores, FALLBACKS)[0] is None, scores
+
+
+def test_sfw_vetoes_favourite_folder_signals() -> None:
+    """Favourite NSFW/specialty primaries must zero SFW even if 1girl is strong."""
+    for scores in (
+        {"1girl": 0.99, "gangbang": 0.5},
+        {"1girl": 0.99, "fellatio": 0.5},
+        {"1girl": 0.99, "internal_cumshot": 0.5},
+        {"1girl": 0.99, "netorare": 0.5},
+        {"1girl": 0.99, "incest": 0.5},
+        {"1girl": 0.99, "mature_female": 0.5},
+        {"1girl": 0.99, "pokemon_(creature)": 0.5},
+        {"1girl": 0.99, "furry": 0.5},
+        {"1girl": 0.99, "monster_girl": 0.5},
+        {"1girl": 0.99, "android": 0.5},
+        {"1girl": 0.99, "tentacle_sex": 0.5},
+        {"1girl": 0.99, "bestiality": 0.5},
+        {"1girl": 0.99, "impregnation": 0.5},
+        {"1girl": 0.99, "pantyshot": 0.5},
+    ):
+        assert choose_best_destination(scores, FALLBACKS)[0] is None, scores

@@ -1204,7 +1204,7 @@
       "folder": "SFW",
       "priority": 95,
       "role": "fallback",
-      "aliases": ["SFW", "safe", "portrait"],
+      "aliases": ["SFW", "safe"],
       "veto_threshold": 0.35,
       "veto": [
         "nude", "completely_nude", "topless", "bottomless", "nipples", "areolae",
@@ -1213,9 +1213,31 @@
         "panties", "bikini", "micro_bikini", "swimsuit", "lingerie", "underwear",
         "leotard", "ass_focus", "cameltoe", "cleavage", "sideboob", "underboob",
         "see-through", "upskirt", "undressing", "clothes_lift", "skirt_lift",
-        "masturbation", "fellatio", "paizuri", "footjob", "condom", "erection",
-        "bulge", "spread_legs", "bestiality", "loli", "shota",
-        "sexually_suggestive"
+        "pantyshot", "panty_peek", "masturbation", "condom", "erection", "bulge",
+        "spread_legs", "sexually_suggestive",
+        "fellatio", "irrumatio", "deepthroat", "cooperative_fellatio",
+        "after_fellatio", "licking_penis", "imminent_fellatio", "implied_fellatio",
+        "paizuri", "perpendicular_paizuri", "cooperative_paizuri",
+        "straddling_paizuri", "paizuri_under_clothes", "after_paizuri",
+        "footjob", "two_footed_footjob", "licking_foot", "foot_worship",
+        "internal_cumshot", "cum_in_pussy", "after_vaginal",
+        "fertilization", "impregnation", "pregnancy_test", "ovum", "sperm_cell",
+        "gangbang", "group_sex", "orgy", "threesome", "mmf_threesome",
+        "ffm_threesome", "spitroast", "reverse_spitroast",
+        "double_penetration", "triple_penetration",
+        "loli", "oppai_loli", "onee-loli", "mesugaki", "lolidom", "toddlercon",
+        "shota", "onee-shota", "onii-shota", "miniboy",
+        "incest", "twincest", "mother_and_son", "father_and_daughter",
+        "brother_and_sister", "mother_and_daughter", "father_and_son",
+        "bestiality", "animal_penis", "knot",
+        "netorare", "cheating_(relationship)",
+        "mature_female",
+        "pokemon_(creature)", "pokephilia",
+        "furry", "furry_male", "furry_female",
+        "monster_girl", "slime_girl",
+        "android", "robot_girl", "humanoid_robot", "cyborg",
+        "tentacle_sex", "consensual_tentacles", "tentacles_on_male",
+        "tentacle_pit", "tentacles_under_clothes"
       ],
       "evidence": [
         { "tag": "1girl", "weight": 1.0 },
@@ -1227,13 +1249,7 @@
         { "tag": "multiple_girls", "weight": 0.85 },
         { "tag": "multiple_boys", "weight": 0.85 },
         { "tag": "multiple_others", "weight": 0.85 },
-        { "tag": "chibi", "weight": 0.8 },
-        { "tag": "solo", "weight": 0.8 },
-        { "tag": "portrait", "weight": 0.7 },
-        { "tag": "cowboy_shot", "weight": 0.6 },
-        { "tag": "upper_body", "weight": 0.6 },
-        { "tag": "full_body", "weight": 0.6 },
-        { "tag": "smile", "weight": 0.45 }
+        { "tag": "solo", "weight": 0.8 }
       ]
     }
   ]
