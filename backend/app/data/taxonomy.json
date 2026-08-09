@@ -1208,11 +1208,13 @@
       "veto_threshold": 0.35,
       "veto": [
         "nude", "completely_nude", "topless", "bottomless", "nipples", "areolae",
-        "pussy", "penis", "anus", "sex", "vaginal", "anal", "cum", "cum_on_body",
-        "censored", "bar_censor", "mosaic_censoring", "panties", "bikini",
-        "swimsuit", "lingerie", "underwear", "leotard", "ass_focus", "cameltoe",
-        "cleavage", "masturbation", "fellatio", "paizuri", "footjob", "condom",
-        "erection", "bulge", "spread_legs", "bestiality", "loli", "shota",
+        "covered_nipples", "pussy", "penis", "anus", "sex", "vaginal", "anal",
+        "cum", "cum_on_body", "censored", "bar_censor", "mosaic_censoring",
+        "panties", "bikini", "micro_bikini", "swimsuit", "lingerie", "underwear",
+        "leotard", "ass_focus", "cameltoe", "cleavage", "sideboob", "underboob",
+        "see-through", "upskirt", "undressing", "clothes_lift", "skirt_lift",
+        "masturbation", "fellatio", "paizuri", "footjob", "condom", "erection",
+        "bulge", "spread_legs", "bestiality", "loli", "shota",
         "sexually_suggestive"
       ],
       "evidence": [
@@ -1228,8 +1230,11 @@
         { "tag": "chibi", "weight": 0.8 },
         { "tag": "solo", "weight": 0.8 },
         { "tag": "portrait", "weight": 0.7 },
+        { "tag": "school_uniform", "weight": 0.65 },
+        { "tag": "cowboy_shot", "weight": 0.6 },
         { "tag": "upper_body", "weight": 0.6 },
-        { "tag": "full_body", "weight": 0.6 }
+        { "tag": "full_body", "weight": 0.6 },
+        { "tag": "smile", "weight": 0.45 }
       ]
     }
   ]

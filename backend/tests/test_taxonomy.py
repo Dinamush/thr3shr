@@ -1148,3 +1148,31 @@ def test_sfw_refuses_explicit_content() -> None:
         {"1girl": 0.99, "cameltoe": 0.4},
     ):
         assert choose_best_destination(scores, FALLBACKS)[0] is None
+
+
+def test_sfw_refuses_swimwear_lingerie_and_suggestive() -> None:
+    """Strict-safe SFW must not catch swimsuit / lingerie / soft-tease cues."""
+    for scores in (
+        {"1girl": 0.99, "bikini": 0.5},
+        {"1girl": 0.99, "swimsuit": 0.5},
+        {"1girl": 0.99, "lingerie": 0.5},
+        {"1girl": 0.99, "sideboob": 0.5},
+        {"1girl": 0.99, "underboob": 0.5},
+        {"1girl": 0.99, "see-through": 0.5},
+        {"1girl": 0.99, "upskirt": 0.5},
+        {"1girl": 0.99, "undressing": 0.5},
+        {"1girl": 0.99, "clothes_lift": 0.5},
+        {"1girl": 0.99, "skirt_lift": 0.5},
+        {"1girl": 0.99, "micro_bikini": 0.5},
+        {"1girl": 0.99, "covered_nipples": 0.5},
+    ):
+        assert choose_best_destination(scores, FALLBACKS)[0] is None, scores
+
+
+def test_sfw_accepts_plain_clothed_character_art() -> None:
+    folder, score, _ = choose_best_destination(
+        {"1girl": 0.9, "solo": 0.85, "school_uniform": 0.7, "smile": 0.6},
+        FALLBACKS,
+    )
+    assert folder == "SFW"
+    assert score is not None and score > 0.5
