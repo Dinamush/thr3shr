@@ -75,6 +75,15 @@ def test_doujin_favourites_include_ntr_tentacles_furry_android() -> None:
     assert folder == "tentacles"
 
 
+def test_doujin_favourites_include_group_sex() -> None:
+    assert "group_sex" in DOUJIN_FAVOURITE_FOLDERS
+    folder, score, _ = choose_best_destination(
+        {"gangbang": 0.9, "sex": 0.85}, set(DOUJIN_FAVOURITE_FOLDERS)
+    )
+    assert folder == "group_sex"
+    assert score is not None and score > 0.5
+
+
 def test_scan_doujin_works_folders_and_archives(tmp_path: Path) -> None:
     work = tmp_path / "Title A"
     work.mkdir()

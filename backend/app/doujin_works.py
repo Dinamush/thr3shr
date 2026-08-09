@@ -25,6 +25,7 @@ DOUJIN_FAVOURITE_FOLDERS: tuple[str, ...] = (
     "loli",
     "shota",
     "milf",
+    "group_sex",
     "fertilization",
     "monster_girl",
     "incest",
