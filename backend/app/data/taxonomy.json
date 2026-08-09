@@ -96,8 +96,14 @@
       "id": "milf",
       "folder": "milf",
       "priority": 3,
-      "role": "character",
+      "role": "theme",
       "aliases": ["MILF", "mature_woman", "milf"],
+      "veto_threshold": 0.35,
+      "veto": [
+        "gangbang", "group_sex", "orgy", "threesome", "mmf_threesome", "ffm_threesome",
+        "spitroast", "reverse_spitroast", "double_penetration", "triple_penetration",
+        "loli", "shota", "oppai_loli"
+      ],
       "ignore": [
         "mature_male", "old_man", "old_woman", "1girl", "1boy", "motherly",
         "age_difference", "loli", "shota", "oppai_loli"
@@ -159,6 +165,11 @@
       "priority": 4,
       "role": "act",
       "aliases": ["impregnation", "Impregnation", "Fertilization"],
+      "veto_threshold": 0.35,
+      "veto": [
+        "gangbang", "group_sex", "orgy", "threesome", "mmf_threesome", "ffm_threesome",
+        "spitroast", "reverse_spitroast"
+      ],
       "ignore": [
         "pregnant", "birth", "cum_in_pussy", "internal_cumshot", "after_vaginal",
         "overflow", "cumdrip", "pussy_juice", "cum_in_ass", "excessive_cum",
@@ -197,6 +208,11 @@
       "priority": 6,
       "role": "act",
       "aliases": ["creampie", "Nakadashi"],
+      "veto_threshold": 0.35,
+      "veto": [
+        "gangbang", "group_sex", "orgy", "threesome", "mmf_threesome", "ffm_threesome",
+        "spitroast", "reverse_spitroast"
+      ],
       "ignore": [
         "cum_in_ass", "cum_in_mouth", "cumdrip", "pussy_juice", "excessive_cum",
         "pregnant", "fertilization", "impregnation", "ovum", "sperm_cell",
@@ -213,6 +229,11 @@
       "folder": "fellatio",
       "priority": 7,
       "role": "act",
+      "veto_threshold": 0.35,
+      "veto": [
+        "gangbang", "group_sex", "orgy", "threesome", "mmf_threesome", "ffm_threesome",
+        "spitroast", "reverse_spitroast"
+      ],
       "ignore": [
         "oral", "cunnilingus", "fellatio_gesture", "covering_mouth", "cum_in_mouth",
         "paizuri", "oral_invitation", "simulated_fellatio"
@@ -432,6 +453,11 @@
       "priority": 12,
       "role": "act",
       "aliases": ["Paizuri", "titfuck", "breast_sex"],
+      "veto_threshold": 0.35,
+      "veto": [
+        "gangbang", "group_sex", "orgy", "threesome", "mmf_threesome", "ffm_threesome",
+        "spitroast", "reverse_spitroast"
+      ],
       "ignore": [
         "breasts", "large_breasts", "huge_breasts", "medium_breasts", "cleavage",
         "breast_press", "between_breasts", "breast_hold", "penis", "hetero",
@@ -452,6 +478,11 @@
       "priority": 13,
       "role": "act",
       "aliases": ["Footjob"],
+      "veto_threshold": 0.35,
+      "veto": [
+        "gangbang", "group_sex", "orgy", "threesome", "mmf_threesome", "ffm_threesome",
+        "spitroast", "reverse_spitroast"
+      ],
       "ignore": [
         "feet", "soles", "toes", "barefoot", "foot_focus", "legs", "penis",
         "hetero", "censored", "presenting_foot", "foot_out_of_frame"
@@ -490,6 +521,55 @@
       ]
     },
     {
+      "id": "group_sex",
+      "folder": "group_sex",
+      "priority": 13,
+      "role": "act",
+      "aliases": ["gangbang", "Group_sex", "orgy", "Group Sex"],
+      "veto_threshold": 0.35,
+      "veto": [
+        "loli", "oppai_loli", "onee-loli", "mesugaki",
+        "shota", "onee-shota", "onii-shota", "miniboy",
+        "incest", "twincest", "mother_and_son", "father_and_daughter",
+        "brother_and_sister", "mother_and_daughter", "father_and_son",
+        "bestiality", "animal_penis", "knot",
+        "netorare", "cheating_(relationship)",
+        "pokemon_(creature)", "pokephilia",
+        "furry", "furry_female", "furry_male",
+        "monster_girl", "slime_girl",
+        "android", "robot_girl", "humanoid_robot", "cyborg",
+        "tentacle_sex", "consensual_tentacles", "tentacles_on_male",
+        "tentacle_pit", "tentacles_under_clothes"
+      ],
+      "ignore": [
+        "1boy", "2boys", "1girl", "2girls", "hetero", "penis", "erection",
+        "nude", "completely_nude", "censored", "blush", "sweat", "multiple_girls"
+      ],
+      "evidence": [
+        { "tag": "gangbang", "weight": 1.0 },
+        { "tag": "group_sex", "weight": 1.0 },
+        { "tag": "orgy", "weight": 0.95 },
+        { "tag": "threesome", "weight": 0.95 },
+        { "tag": "mmf_threesome", "weight": 0.95 },
+        { "tag": "ffm_threesome", "weight": 0.95 },
+        { "tag": "spitroast", "weight": 0.95 },
+        { "tag": "reverse_spitroast", "weight": 0.9 },
+        { "tag": "double_penetration", "weight": 0.85 },
+        { "tag": "triple_penetration", "weight": 0.9 }
+      ],
+      "gate_tags": [
+        "sex", "vaginal", "anal", "rape", "penis", "erection", "ejaculation",
+        "cum", "bukkake", "gangbang", "group_sex", "threesome", "orgy"
+      ],
+      "gated_evidence": [
+        { "tag": "multiple_boys", "weight": 0.55 },
+        { "tag": "3boys", "weight": 0.6 },
+        { "tag": "4boys", "weight": 0.65 },
+        { "tag": "5boys", "weight": 0.65 },
+        { "tag": "6+boys", "weight": 0.7 }
+      ]
+    },
+    {
       "id": "sex",
       "folder": "sex",
       "priority": 14,
@@ -506,7 +586,9 @@
         "cheating_(relationship)", "fertilization", "impregnation", "pregnancy_test",
         "ovum",
         "sperm_cell", "incest", "twincest", "pokephilia", "photorealistic",
-        "photo_(medium)"
+        "photo_(medium)",
+        "gangbang", "group_sex", "orgy", "threesome", "mmf_threesome", "ffm_threesome",
+        "spitroast", "reverse_spitroast"
       ],
       "ignore": [
         "1girl", "1boy", "breasts", "large_breasts", "nipples", "nude",
@@ -529,7 +611,6 @@
         { "tag": "rough_sex", "weight": 0.85 },
         { "tag": "emotionless_sex", "weight": 0.85 },
         { "tag": "stealth_sex", "weight": 0.85 },
-        { "tag": "group_sex", "weight": 0.85 },
         { "tag": "shimaidon_(sex)", "weight": 0.85 },
         { "tag": "thigh_sex", "weight": 0.8 },
         { "tag": "armpit_sex", "weight": 0.8 },
