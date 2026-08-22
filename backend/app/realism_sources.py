@@ -133,12 +133,19 @@ def fetch_randomuser_people_photos(limit: int) -> list[RealismSample]:
 
 
 def fetch_local_people_photos(limit: int) -> list[RealismSample]:
-    """Fallback: local camera/people folders when remotes fail."""
-    roots = [
-        Path.home() / "Pictures" / "photos",
-        Path.home() / "Pictures" / "album",
-        Path.home() / "Pictures",
-    ]
+    """Fallback: local photo folders when remotes fail.
+
+    Set THR3SHR_LOCAL_PHOTO_DIRS to a pathsep/semicolon-separated list of dirs.
+    Defaults to ~/Pictures only (no personal album names).
+    """
+    import os
+
+    raw = os.environ.get("THR3SHR_LOCAL_PHOTO_DIRS", "").strip()
+    if raw:
+        sep = ";" if ";" in raw else os.pathsep
+        roots = [Path(p.strip()) for p in raw.split(sep) if p.strip()]
+    else:
+        roots = [Path.home() / "Pictures"]
     exts = {".jpg", ".jpeg", ".png", ".webp", ".jfif"}
     found: list[Path] = []
     for root in roots:
@@ -165,7 +172,6 @@ def fetch_local_people_photos(limit: int) -> list[RealismSample]:
             )
         )
     return samples
-
 
 def fetch_commons_people_photos(limit: int) -> list[RealismSample]:
     """Pull real people photographs from Wikimedia Commons search."""

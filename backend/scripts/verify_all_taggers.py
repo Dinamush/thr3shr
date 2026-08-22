@@ -2,11 +2,13 @@
 End-to-end verification of all tagger models against a small image folder.
 
 Usage (from backend/):
+  set THR3SHR_PROBE_ROOT=C:\\path\\to\\probe_images
   ../.venv/Scripts/python.exe scripts/verify_all_taggers.py
 """
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -14,8 +16,8 @@ import urllib.request
 from pathlib import Path
 
 API = "http://127.0.0.1:8000/api"
-ROOT = Path(r"/examples/probe")
-CATS = ROOT / "cats"
+ROOT = Path(os.environ.get("THR3SHR_PROBE_ROOT", "")).expanduser()
+CATS = ROOT / "cats" if ROOT.parts else Path("cats")
 # Keep selected tags broad enough that anime stills usually hit something.
 SELECTED = ["1girl", "solo", "long_hair", "blush", "smile"]
 MODELS = ["ml_danbooru", "wd_swinv2_v3", "wd_eva02_large"]
@@ -59,8 +61,12 @@ def wait_run(run_id: int, timeout_s: float = 1800.0) -> dict:
 
 
 def main() -> int:
-    if not ROOT.is_dir():
-        print(f"ERROR: probe root missing: {ROOT}", file=sys.stderr)
+    if not ROOT.parts or not ROOT.is_dir():
+        print(
+            "ERROR: set THR3SHR_PROBE_ROOT to a folder of probe images "
+            "(with optional cats/ subcategory root).",
+            file=sys.stderr,
+        )
         return 2
     CATS.mkdir(parents=True, exist_ok=True)
 
@@ -180,21 +186,30 @@ def main() -> int:
         if not ok:
             print(f"FAIL model={model}", file=sys.stderr)
 
-    # Restore the large Organize library paths for the user UI (tags preserved).
-    user_settings = req("GET", "/settings")
-    user_settings.update(
-        {
-            "root_repo": r"/examples/library",
-            "categories_root": r"/examples/categories",
-            "selected_tags": [],
-            "tagger_model": "wd_swinv2_v3",
-            "confidence_threshold": 0.6,
-            "wd_general_threshold": 0.35,
-            "max_inference_workers": 2,
-        }
-    )
-    req("PUT", "/settings", user_settings)
-    print("\nRestored UI settings to Organize library + wd_swinv2_v3", flush=True)
+    # Optionally restore durable library paths for the user UI (tags preserved).
+    restore_root = os.environ.get("THR3SHR_RESTORE_ROOT_REPO", "").strip()
+    restore_cats = os.environ.get("THR3SHR_RESTORE_CATEGORIES_ROOT", "").strip()
+    if restore_root and restore_cats:
+        user_settings = req("GET", "/settings")
+        user_settings.update(
+            {
+                "root_repo": restore_root,
+                "categories_root": restore_cats,
+                "selected_tags": [],
+                "tagger_model": "wd_swinv2_v3",
+                "confidence_threshold": 0.6,
+                "wd_general_threshold": 0.35,
+                "max_inference_workers": 2,
+            }
+        )
+        req("PUT", "/settings", user_settings)
+        print("\nRestored UI settings from THR3SHR_RESTORE_* env vars", flush=True)
+    else:
+        print(
+            "\nSkipped UI path restore (set THR3SHR_RESTORE_ROOT_REPO and "
+            "THR3SHR_RESTORE_CATEGORIES_ROOT to restore).",
+            flush=True,
+        )
 
     print("\n=== SUMMARY ===")
     all_ok = True

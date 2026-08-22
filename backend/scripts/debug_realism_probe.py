@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import statistics
 import sys
@@ -80,20 +81,17 @@ PRIMARY_EVIDENCE_TAGS = (
     "3d_background",
 )
 
-# Auto-discovery candidates (first existing dirs with enough images win).
-DEFAULT_PHOTO_DIRS = [
-    Path(r"~/Pictures"),
-    Path(r"~/Pictures"),
-    Path(r"~/Pictures"),
-    Path(r"/examples/photos"),
-]
-DEFAULT_ANIME_DIRS = [
-    Path(r"/examples/anime/a"),
-    Path(r"/examples/anime/b"),
-    Path(r"/examples/anime/c"),
-    Path(r"/examples/anime/d"),
-    Path(r"/examples/anime/e"),
-    Path(r"~/Pictures"),
+# Optional local dirs via env (colon/semicolon-separated). Empty = Wikimedia fallbacks.
+def _env_dirs(name: str) -> list[Path]:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return []
+    sep = ";" if ";" in raw else os.pathsep
+    return [Path(p.strip()) for p in raw.split(sep) if p.strip()]
+
+
+DEFAULT_PHOTO_DIRS = _env_dirs("THR3SHR_PROBE_PHOTO_DIRS")
+DEFAULT_ANIME_DIRS = _env_dirs("THR3SHR_PROBE_ANIME_DIRS") + [
     Path(__file__).resolve().parents[2] / "sample_data" / "sfw_safebooru",
 ]
 
@@ -238,19 +236,25 @@ def collect_labeled_sets(
             if found:
                 photo_paths.extend(found)
                 notes.append(f"auto photo dir {d} (+{len(found)})")
-        # WhatsApp / obvious camera dumps at Pictures root
-        pics_root = Path(r"~/Pictures")
-        if pics_root.exists():
-            extras = []
-            for p in pics_root.iterdir():
-                if not p.is_file() or p.suffix.lower() not in IMAGE_EXTS:
-                    continue
-                name = p.name.lower()
-                if "whatsapp" in name or name.startswith("img_"):
-                    extras.append(p)
-            if extras:
-                photo_paths.extend(extras)
-                notes.append(f"auto Pictures root camera-like (+{len(extras)})")
+        # Optional: scan Pictures for WhatsApp / camera dumps when enabled
+        if os.environ.get("THR3SHR_PROBE_SCAN_PICTURES", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            pics_root = Path.home() / "Pictures"
+            if pics_root.exists():
+                extras = []
+                for p in pics_root.iterdir():
+                    if not p.is_file() or p.suffix.lower() not in IMAGE_EXTS:
+                        continue
+                    name = p.name.lower()
+                    if "whatsapp" in name or name.startswith("img_"):
+                        extras.append(p)
+                if extras:
+                    photo_paths.extend(extras)
+                    notes.append(f"auto Pictures root camera-like (+{len(extras)})")
 
     anime_paths: list[Path] = []
     if anime_dir:

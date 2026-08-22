@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,11 +36,13 @@ def _settings_from_db() -> AppSettings:
 
 
 def _probe_local_videos(settings: AppSettings, model: str, limit: int = 8) -> dict:
-    """Score local Organize videos with multi-frame pooling if present."""
-    roots = [
-        Path(settings.root_repo).expanduser() if settings.root_repo else None,
-        Path(r"/examples/library"),
-    ]
+    """Score local videos with multi-frame pooling if present."""
+    roots = []
+    if settings.root_repo:
+        roots.append(Path(settings.root_repo).expanduser())
+    extra = os.environ.get("THR3SHR_VIDEO_PROBE_ROOT", "").strip()
+    if extra:
+        roots.append(Path(extra).expanduser())
     videos: list[Path] = []
     for root in roots:
         if root is None or not root.is_dir():

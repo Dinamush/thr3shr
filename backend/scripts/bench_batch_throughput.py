@@ -2,12 +2,12 @@
 """Compare WD single vs batched ORT throughput on local images.
 
 Usage (from backend/):
-  ../.venv/Scripts/python.exe scripts/bench_batch_throughput.py
-  ../.venv/Scripts/python.exe scripts/bench_batch_throughput.py --root "E:\\path" --n 24
+  ../.venv/Scripts/python.exe scripts/bench_batch_throughput.py --root /path/to/images --n 24
 """
 from __future__ import annotations
 
 import argparse
+import os
 import time
 from pathlib import Path
 
@@ -57,13 +57,17 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--root",
-        default=r"/examples/inbox",
+        default=os.environ.get("THR3SHR_BENCH_ROOT", ""),
+        help="Image root (or set THR3SHR_BENCH_ROOT)",
     )
     parser.add_argument("--n", type=int, default=24)
     parser.add_argument("--model", default="wd_swinv2_v3")
     parser.add_argument("--threshold", type=float, default=0.35)
     parser.add_argument("--batches", default="1,4,8")
     args = parser.parse_args()
+
+    if not str(args.root).strip():
+        raise SystemExit("Pass --root /path/to/images or set THR3SHR_BENCH_ROOT")
 
     root = Path(args.root)
     images = _collect_images(root, args.n)
