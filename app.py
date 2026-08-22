@@ -2,18 +2,18 @@ import gradio as gr
 
 
 INFO = """
-# ML-Danbooru ONNX Web App
+# THR3SHR
 
-This Space is the deployment scaffold for the project.
+Legacy Hugging Face Space scaffold for this project.
 
 - The core ONNX models are large and are managed separately.
-- Local tooling and migration workflows are being integrated.
+- Local tooling and migration workflows live in the FastAPI + React app.
 
-Use this Space as the frontend host while backend/image-pipeline features are added.
+Use this Space as a placeholder host while backend/image-pipeline features are added.
 """
 
 
-with gr.Blocks(title="ML-Danbooru ONNX Webapp") as demo:
+with gr.Blocks(title="THR3SHR") as demo:
     gr.Markdown(INFO)
 
 

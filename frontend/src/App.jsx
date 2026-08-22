@@ -64,7 +64,7 @@ const TAGGER_MODELS = [
 ];
 
 const SFW_CLASSIFY_FOLDERS = ["SFW", "scenery"];
-const ACTIVE_RUN_STORAGE_KEY = "imageClassifierActiveRunId";
+const ACTIVE_RUN_STORAGE_KEY = "thr3shrActiveRunId";
 const VIDEO_PREVIEW_EXTS = new Set([
   ".mp4",
   ".m4v",
@@ -231,7 +231,7 @@ function App() {
       .catch(() => setProviderInfo(null));
   }, []);
 
-  // Persist typed/selected tags (Shuck3r-style preference survival across reloads).
+  // Persist typed/selected tags (THR3SHR preference survival across reloads).
   useEffect(() => {
     if (!tagsHydratedRef.current) return;
     if (skipNextTagPersistRef.current) {
@@ -836,13 +836,13 @@ function App() {
       <header className="app-header">
         <div className="app-nav">
           <a href="#/" className="nav-link active" aria-current="page">
-            Thresh3r
+            THR3SHR
           </a>
           <a href="#/debug" className="nav-link">
             Debug
           </a>
         </div>
-        <h1>Thresh3r</h1>
+        <h1>THR3SHR</h1>
         <p className="lede">
           Thresh a media dump into destination bins — configure paths and tagger, pick tags, run
           inference, then review and migrate.

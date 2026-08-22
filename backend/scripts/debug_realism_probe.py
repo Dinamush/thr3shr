@@ -94,7 +94,7 @@ DEFAULT_ANIME_DIRS = [
     Path(r"/examples/anime/d"),
     Path(r"/examples/anime/e"),
     Path(r"~/Pictures"),
-    Path(r"sample_data/..\sample_data\sfw_safebooru"),
+    Path(__file__).resolve().parents[2] / "sample_data" / "sfw_safebooru",
 ]
 
 WIKIMEDIA_FALLBACK_PHOTOS = [

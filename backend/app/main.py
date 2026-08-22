@@ -11,8 +11,8 @@ from .api import router
 from .providers import preload_onnx_runtime_dlls, probe_execution_providers
 from .storage import init_db
 
-app = FastAPI(title="Thresh3r API", version="0.1.0")
-logger = logging.getLogger("thresh3r_api")
+app = FastAPI(title="THR3SHR API", version="0.1.0")
+logger = logging.getLogger("thr3shr_api")
 
 app.add_middleware(
     CORSMiddleware,

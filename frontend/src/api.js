@@ -1,5 +1,5 @@
 const API_BASE = "http://127.0.0.1:8000/api";
-const STORAGE_KEY = "imageClassifierMockStateV1";
+const STORAGE_KEY = "thr3shrMockStateV1";
 
 const defaultSettings = {
   root_repo: "",

@@ -26,7 +26,7 @@ evidence tags):
 UI: **Debug → Tag false-positive benchmark**.  
 Latest report: `backend/scripts/out/tag_fp_eval_latest.json`.
 
-## Thresh3r debug: real-life vs anime eval
+## THR3SHR debug: real-life vs anime eval
 
 UI: **Debug → Real-life vs anime**.
 

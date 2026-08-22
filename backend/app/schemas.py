@@ -29,7 +29,7 @@ class AppSettings(BaseModel):
     # When true, classify uses only SFW/scenery; NSFW tags are parked.
     # comic is omitted: WD SwinV2 is weak on B&W / lineart comic cues.
     sfw_classify_mode: bool = False
-    # Shuck3r-style persisted preferences (survive reload / restart).
+    # THR3SHR persisted preferences (survive reload / restart).
     selected_tags: list[str] = Field(default_factory=list)
     # Parked NSFW/specialty destinations while sfw_classify_mode is on.
     selected_tags_nsfw: list[str] = Field(default_factory=list)

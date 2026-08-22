@@ -1,5 +1,5 @@
 ---
-title: Thresh3r
+title: THR3SHR
 emoji: "🌾"
 colorFrom: yellow
 colorTo: green
@@ -19,7 +19,7 @@ tags:
 - computer-vision
 ---
 
-# Thresh3r
+# THR3SHR
 
 Local FastAPI + React workflow that threshes a media dump into destination bins — anime/GIF/video tagging, review, and folder migration (ML-Danbooru / WD taggers).
 

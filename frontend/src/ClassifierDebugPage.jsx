@@ -237,13 +237,13 @@ export default function ClassifierDebugPage() {
       <header className="app-header">
         <div className="app-nav">
           <a href="#/" className="nav-link">
-            Thresh3r
+            THR3SHR
           </a>
           <a href="#/debug" className="nav-link active" aria-current="page">
             Debug
           </a>
         </div>
-        <h1>Thresh3r debug</h1>
+        <h1>THR3SHR debug</h1>
         <p className="lede">
           Curated tag recall / false-positive benchmarks, SFW pull-tag recall, and real-life vs
           anime separation. Uses saved settings from the main page — no migrate.
@@ -492,7 +492,7 @@ export default function ClassifierDebugPage() {
           Selected:{" "}
           {(settingsSummary.selected_tags || []).length
             ? settingsSummary.selected_tags.join(", ")
-            : "(none — pick folders on Thresh3r settings)"}
+            : "(none — pick folders on THR3SHR settings)"}
         </p>
         <div className="grid">
           <label>
@@ -768,7 +768,7 @@ export default function ClassifierDebugPage() {
           Debug-only compare: dedicated ONNX classifiers (
           <code>deepghs/anime_real_cls</code> via imgutils) vs WD{" "}
           <code>real_life</code> taxonomy. Same photo/anime corpus as below. Enable the
-          experimental style gate on the main Thresh3r settings (next to GIF/video) to use
+          experimental style gate on the main THR3SHR settings (next to GIF/video) to use
           CAFormer in production runs.
         </span>
         <div className="grid">
@@ -794,7 +794,7 @@ export default function ClassifierDebugPage() {
           <strong>
             {settingsSummary.experimental_style_detector_enabled ? "ON" : "OFF"}
           </strong>{" "}
-          (toggle on Thresh3r settings)
+          (toggle on THR3SHR settings)
         </p>
         <div className="actions">
           <button
@@ -1152,10 +1152,10 @@ export default function ClassifierDebugPage() {
         </section>
       )}
 
-      <section className="panel" aria-label="Thresh3r debug controls">
+      <section className="panel" aria-label="THR3SHR debug controls">
         <h2>SFW tag recall</h2>
         <span className="kicker">
-          Safebooru / Danbooru only. Change tagger and destination tags on the main Thresh3r page,
+          Safebooru / Danbooru only. Change tagger and destination tags on the main THR3SHR page,
           then return here.
         </span>
         <div className="grid">
@@ -1272,7 +1272,7 @@ export default function ClassifierDebugPage() {
       </section>
 
       {result && (
-        <section className="panel debug-eval-results" aria-label="Thresh3r debug results">
+        <section className="panel debug-eval-results" aria-label="THR3SHR debug results">
           <h2>SFW results</h2>
           <div className="stats">
             <span>
