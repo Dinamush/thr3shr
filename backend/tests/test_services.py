@@ -158,8 +158,8 @@ def test_scan_images_excludes_specified_directory(tmp_path: Path) -> None:
 
 def test_categories_exclude_dirs_skips_parent_categories_root(tmp_path: Path) -> None:
     """Inbox under categories_root must not exclude the whole tree (0-image runs)."""
-    art = tmp_path / "Art"
-    inbox = art / "Organize" / "Uncategorised"
+    art = tmp_path / "library"
+    inbox = art / "inbox" / "unsorted"
     dest = art / "loli"
     inbox.mkdir(parents=True)
     dest.mkdir(parents=True)
