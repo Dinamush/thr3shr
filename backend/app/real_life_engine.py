@@ -338,6 +338,19 @@ class LlamaCppVlmAdapter:
             self.last_raw_text = f"__error__:{err}"
             return {}
 
+    def close(self) -> None:
+        llm = self._llm
+        self._llm = None
+        if llm is None:
+            return
+        closer = getattr(llm, "close", None)
+        if callable(closer):
+            try:
+                closer()
+            except Exception:
+                logger.exception("real_life_vlm_close_failed")
+        del llm
+
 
 class TimmPositionAdapter:
     """Optional porntech/sex-position corroboration via torch/timm."""
@@ -457,6 +470,9 @@ class TimmPositionAdapter:
         except Exception as err:  # noqa: BLE001
             logger.warning("real_life_position_infer_failed err=%s", err)
         return scores
+
+    def close(self) -> None:
+        self._model = None
 
 
 def _extract_json_object(text: str) -> Any:
@@ -714,10 +730,29 @@ def get_real_life_engine() -> RealLifeEngine:
         return _ENGINE
 
 
-def reset_real_life_engine() -> None:
+def reset_real_life_engine() -> list[str]:
+    """Drop VLM / position adapters. Returns ids that were resident."""
     global _ENGINE
     with _ENGINE_LOCK:
+        engine = _ENGINE
         _ENGINE = None
+    dropped: list[str] = []
+    if engine is None:
+        return dropped
+    vlm = getattr(engine, "vlm", None)
+    position = getattr(engine, "position", None)
+    if vlm is not None and getattr(vlm, "_llm", None) is not None:
+        dropped.append("real_life_vlm")
+    if position is not None and getattr(position, "_model", None) is not None:
+        dropped.append("real_life_position")
+    for adapter in (vlm, position):
+        closer = getattr(adapter, "close", None)
+        if callable(closer):
+            try:
+                closer()
+            except Exception:
+                logger.exception("real_life_adapter_close_failed")
+    return dropped
 
 
 def set_real_life_adapters(

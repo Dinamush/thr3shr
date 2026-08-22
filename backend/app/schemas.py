@@ -119,6 +119,11 @@ class ReclassifyResponse(BaseModel):
     message: str = "Reclassify queued"
 
 
+class UnloadModelsResponse(BaseModel):
+    unloaded: list[str] = Field(default_factory=list)
+    message: str = "Models unloaded"
+
+
 class SfwDebugEvalRequest(BaseModel):
     source: str = "safebooru"
     tags: list[str] = Field(default_factory=list)

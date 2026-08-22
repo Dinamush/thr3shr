@@ -147,3 +147,14 @@ def test_wd_batch_matches_single(tmp_path: Path) -> None:
         for tag, score in single.items():
             # Batched CUDA runs can differ slightly from N=1 (cuDNN algorithms).
             assert abs(batch[tag] - score) < 1e-3, tag
+
+
+def test_engine_clear_drops_cached_sessions() -> None:
+    from app.inference_engine import InferenceEngine
+
+    engine = InferenceEngine()
+    engine._sessions["wd_swinv2_v3"] = object()
+    engine._sessions["ml_danbooru"] = object()
+    assert engine.loaded_models() == ["ml_danbooru", "wd_swinv2_v3"]
+    assert engine.clear() == ["ml_danbooru", "wd_swinv2_v3"]
+    assert engine.loaded_models() == []

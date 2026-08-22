@@ -161,6 +161,7 @@ function App() {
     applyingBatch: false,
     migrating: false,
     reclassifying: false,
+    unloadingModels: false,
   });
   const [reclassifyModel, setReclassifyModel] = useState("wd_swinv2_v3");
   const finalTagTimersRef = useRef({});
@@ -371,6 +372,7 @@ function App() {
           pollTimerRef.current = null;
         }
         localStorage.removeItem(ACTIVE_RUN_STORAGE_KEY);
+        api.getProviders().then((info) => setProviderInfo(info)).catch(() => {});
       }
     } catch (err) {
       // Keep polling through transient API/load blips; a hard stop made the
@@ -641,6 +643,22 @@ function App() {
     }
   }
 
+  async function handleUnloadModels() {
+    if (runActive || opsLoading.unloadingModels) return;
+    setOpsLoading((prev) => ({ ...prev, unloadingModels: true }));
+    setError("");
+    try {
+      const result = await api.unloadModels();
+      const providers = await api.getProviders();
+      setProviderInfo(providers);
+      setNotice(result.message || "GPU models unloaded.");
+    } catch (err) {
+      setError(`Failed to unload GPU models: ${err.message}`);
+    } finally {
+      setOpsLoading((prev) => ({ ...prev, unloadingModels: false }));
+    }
+  }
+
   useEffect(() => {
     // Default reclassify to SwinV2 — EVA02 is accurate but ~10–20s/image on GPU.
     setReclassifyModel("wd_swinv2_v3");
@@ -846,6 +864,27 @@ function App() {
             <span>
               Forced CPU: <strong>{String(Boolean(providerInfo.forced_cpu))}</strong>
             </span>
+            <span>
+              Loaded:{" "}
+              <strong>
+                {(providerInfo.loaded_models || []).length
+                  ? (providerInfo.loaded_models || []).join(", ")
+                  : "none"}
+              </strong>
+            </span>
+            <button
+              type="button"
+              className="unload-models-btn"
+              disabled={runActive || opsLoading.unloadingModels}
+              onClick={handleUnloadModels}
+              title={
+                runActive
+                  ? "Cancel the current run before unloading GPU models"
+                  : "Drop cached tagger sessions to free GPU memory"
+              }
+            >
+              {opsLoading.unloadingModels ? "Unloading…" : "Unload GPU models"}
+            </button>
           </div>
         )}
       </header>

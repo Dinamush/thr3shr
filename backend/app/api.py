@@ -33,6 +33,7 @@ from .schemas import (
     SfwDebugEvalResponse,
     StartRunRequest,
     StartRunResponse,
+    UnloadModelsResponse,
     UpdateItemRequest,
 )
 from .services import (
@@ -1670,8 +1671,9 @@ def _execute_run(
             real_life_filter,
         )
 
-        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="infer") as executor:
-            pending: dict[Future[tuple[list[_ImageInferenceResult], float, str]], list[Path]] = {}
+        executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="infer")
+        pending: dict[Future[tuple[list[_ImageInferenceResult], float, str]], list[Path]] = {}
+        try:
             # Keep stills in true WD batches; process GIF/video one-at-a-time so a
             # single media file cannot collapse an entire batch to single mode.
             if experimental_media_enabled or real_life_filter:
@@ -1698,6 +1700,8 @@ def _execute_run(
 
             def _submit_until_capacity() -> None:
                 while len(pending) < max_workers:
+                    if _is_cancel_requested(run_id):
+                        return
                     try:
                         next_batch = next(iterator)
                     except StopIteration:
@@ -1725,7 +1729,14 @@ def _execute_run(
                         future.cancel()
                     break
 
-                done, _ = wait(set(pending.keys()), return_when=FIRST_COMPLETED)
+                # Timeout so cancel_requested is polled even while a batch is in flight.
+                done, _ = wait(
+                    set(pending.keys()),
+                    timeout=0.5,
+                    return_when=FIRST_COMPLETED,
+                )
+                if not done:
+                    continue
                 for future in done:
                     pending.pop(future)
                     if future.cancelled():
@@ -1803,8 +1814,10 @@ def _execute_run(
                                 scan_output.stats.eligible_images,
                                 avg_ms,
                             )
-                _submit_until_capacity()
-
+                    if not cancelled:
+                        _submit_until_capacity()
+        finally:
+            executor.shutdown(wait=not cancelled, cancel_futures=True)
         if cancelled:
             # Keep already-classified rows so the user can still review / migrate
             # the partial queue (cancel = stop classifying, not wipe results).
@@ -2364,11 +2377,60 @@ def get_providers() -> dict[str, object]:
     info = probe_execution_providers()
     info["tagger_model"] = settings.tagger_model
     info["tagging_domain"] = settings.tagging_domain
+    from .inference_engine import peek_loaded_models
+
+    info["loaded_models"] = peek_loaded_models()
     info["note"] = (
         "CUDA usability reflects ORT GPU runtime readiness; "
         "the active tagger model is selected separately in settings."
     )
     return info
+
+
+@router.post("/models/unload", response_model=UnloadModelsResponse)
+def unload_models() -> UnloadModelsResponse:
+    """Drop resident tagger / VLM sessions so GPU VRAM can be reclaimed."""
+    active = fetch_one(
+        """
+        SELECT id FROM runs
+        WHERE status IN ('pending', 'running')
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    )
+    if active:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Cannot unload models while run {active['id']} is still "
+                "pending or running. Cancel it first."
+            ),
+        )
+    from .inference_engine import peek_loaded_models, release_cuda_caches, reset_engine
+    from .real_life_engine import reset_real_life_engine
+
+    unloaded = list(peek_loaded_models())
+    unloaded.extend(reset_engine())
+    unloaded.extend(reset_real_life_engine())
+    # Deduplicate while preserving order.
+    seen: set[str] = set()
+    unique: list[str] = []
+    for name in unloaded:
+        if name in seen:
+            continue
+        seen.add(name)
+        unique.append(name)
+    release_cuda_caches()
+    logger.info("models_unloaded models=%s", unique)
+    if unique:
+        message = (
+            "Unloaded "
+            + ", ".join(unique)
+            + ". VRAM usually returns within a few seconds; restart the API if it stays high."
+        )
+    else:
+        message = "No tagger sessions were resident in GPU memory."
+    return UnloadModelsResponse(unloaded=unique, message=message)
 
 
 @router.get("/real-life/status")

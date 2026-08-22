@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import logging
 import os
 import threading
@@ -396,12 +397,31 @@ class InferenceEngine:
             self._ml_labels = df["name"].tolist()
             return self._ml_labels
 
-    def clear(self) -> None:
+    def loaded_models(self) -> list[str]:
         with self._meta_lock:
-            self._sessions.clear()
-            self._wd_labels.clear()
-            self._ml_labels = None
-            self._wd_target_size.clear()
+            return sorted(self._sessions.keys())
+
+    def clear(self) -> list[str]:
+        """Drop ORT sessions so CUDA can reclaim VRAM. Returns unloaded model ids."""
+        with self._run_lock:
+            with self._meta_lock:
+                names = sorted(self._sessions.keys())
+                sessions = list(self._sessions.values())
+                self._sessions.clear()
+                self._wd_labels.clear()
+                self._ml_labels = None
+                self._wd_target_size.clear()
+        for session in sessions:
+            closer = getattr(session, "close", None)
+            if callable(closer):
+                try:
+                    closer()
+                except Exception:
+                    logger.exception("inference_session_close_failed")
+            del session
+        if names:
+            logger.info("inference_sessions_unloaded models=%s", names)
+        return names
 
 
 def get_engine() -> InferenceEngine:
@@ -412,12 +432,35 @@ def get_engine() -> InferenceEngine:
         return _ENGINE
 
 
-def reset_engine() -> None:
+def peek_loaded_models() -> list[str]:
+    with _ENGINE_LOCK:
+        if _ENGINE is None:
+            return []
+        return _ENGINE.loaded_models()
+
+
+def reset_engine() -> list[str]:
     global _ENGINE
     with _ENGINE_LOCK:
+        names: list[str] = []
         if _ENGINE is not None:
-            _ENGINE.clear()
+            names = _ENGINE.clear()
         _ENGINE = None
+    return names
+
+
+def release_cuda_caches() -> None:
+    """Best-effort VRAM trim after sessions are dropped (ORT has no official flush)."""
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+    except Exception:
+        pass
+    gc.collect()
 
 
 _ENGINE: InferenceEngine | None = None

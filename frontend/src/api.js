@@ -217,7 +217,14 @@ function mockRequest(path, options = {}) {
       likely_device: "cpu",
       cuda_usable: false,
       tagger_model: mockState.settings.tagger_model || "wd_swinv2_v3",
+      loaded_models: [],
       mock_mode: true,
+    });
+  }
+  if (path === "/models/unload" && method === "POST") {
+    return Promise.resolve({
+      unloaded: [],
+      message: "No tagger sessions were resident in GPU memory.",
     });
   }
   if (path === "/debug/sfw-sources" && method === "GET") {
@@ -566,6 +573,11 @@ export const api = {
   },
   getSettings: () => request("/settings"),
   getProviders: () => request("/providers"),
+  unloadModels: () =>
+    request("/models/unload", {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
   getRealLifeStatus: () => request("/real-life/status"),
   previewScan: () => request("/scan/preview"),
   saveSettings: (payload) =>

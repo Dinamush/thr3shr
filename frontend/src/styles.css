@@ -113,6 +113,27 @@ body {
   font-weight: 600;
 }
 
+.unload-models-btn {
+  margin-left: auto;
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.unload-models-btn:hover:not(:disabled) {
+  border-color: var(--ink);
+}
+
+.unload-models-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .panel {
   background: var(--surface);
   border: 1px solid var(--line);
