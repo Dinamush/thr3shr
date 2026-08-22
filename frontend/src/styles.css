@@ -626,6 +626,29 @@ th {
   padding: 8px;
 }
 
+.app-footer {
+  margin-top: 40px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.app-footer p {
+  margin: 0;
+}
+
+.app-footer a {
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.app-footer a:hover {
+  color: var(--ink);
+}
+
 @media (max-width: 760px) {
   .grid {
     grid-template-columns: 1fr;

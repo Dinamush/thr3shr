@@ -1353,6 +1353,27 @@ export default function ClassifierDebugPage() {
           </div>
         </section>
       )}
+
+      <footer className="app-footer" aria-label="Attribution">
+        <p>
+          THR3SHR © 2026 Dinamush · code MIT · creative{" "}
+          <a
+            href="https://creativecommons.org/licenses/by/4.0/"
+            target="_blank"
+            rel="noreferrer"
+          >
+            CC BY 4.0
+          </a>
+          {" · "}
+          <a
+            href="https://github.com/Dinamush/thr3shr/blob/main/ATTRIBUTION.md"
+            target="_blank"
+            rel="noreferrer"
+          >
+            model attributions
+          </a>
+        </p>
+      </footer>
     </div>
   )
 }

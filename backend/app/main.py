@@ -96,4 +96,92 @@ def health_providers() -> dict[str, object]:
     return {"status": "ok", **_get_provider_snapshot()}
 
 
+@app.get("/attribution")
+def attribution() -> dict[str, object]:
+    """Machine-readable ownership and third-party model credits."""
+    return {
+        "project": "THR3SHR",
+        "owner": "Dinamush",
+        "owner_urls": {
+            "github": "https://github.com/Dinamush",
+            "huggingface": "https://huggingface.co/Dinamus",
+        },
+        "licenses": {
+            "software": "MIT",
+            "creative_works": "CC-BY-4.0",
+            "software_url": "https://opensource.org/licenses/MIT",
+            "creative_url": "https://creativecommons.org/licenses/by/4.0/",
+            "notice": "NOTICE",
+            "attribution_doc": "ATTRIBUTION.md",
+            "creative_doc": "CREATIVE_COMMONS.md",
+        },
+        "copyright": "Copyright (c) 2026 Dinamush",
+        "models_not_redistributed": True,
+        "models": [
+            {
+                "setting": "wd_swinv2_v3",
+                "credit": "SmilingWolf",
+                "repo": "SmilingWolf/wd-swinv2-tagger-v3",
+                "license": "Apache-2.0",
+                "url": "https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3",
+            },
+            {
+                "setting": "wd_eva02_large",
+                "credit": "SmilingWolf",
+                "repo": "SmilingWolf/wd-eva02-large-tagger-v3",
+                "license": "Apache-2.0",
+                "url": "https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3",
+            },
+            {
+                "setting": "wd_onnx_mirror",
+                "credit": "deepghs",
+                "repo": "deepghs/wd14_tagger_with_embeddings",
+                "license": "Apache-2.0",
+                "url": "https://huggingface.co/deepghs/wd14_tagger_with_embeddings",
+            },
+            {
+                "setting": "ml_danbooru",
+                "credit": "deepghs",
+                "repo": "deepghs/ml-danbooru-onnx",
+                "license": "MIT",
+                "url": "https://huggingface.co/deepghs/ml-danbooru-onnx",
+            },
+            {
+                "setting": "ml_danbooru_labels",
+                "credit": "deepghs",
+                "repo": "deepghs/imgutils-models",
+                "license": "MIT",
+                "url": "https://huggingface.co/deepghs/imgutils-models",
+            },
+            {
+                "setting": "anime_real_cls",
+                "credit": "deepghs",
+                "repo": "deepghs/anime_real_cls",
+                "license": "OpenRAIL",
+                "url": "https://huggingface.co/deepghs/anime_real_cls",
+            },
+            {
+                "setting": "optional_real_life_vlm",
+                "credit": "bartowski (GGUF); upstream NSFW caption VLM / Qwen2.5-VL lineage",
+                "repo": "bartowski/thesby_Qwen2.5-VL-7B-NSFW-Caption-V3-GGUF",
+                "license": "Apache-2.0",
+                "url": "https://huggingface.co/bartowski/thesby_Qwen2.5-VL-7B-NSFW-Caption-V3-GGUF",
+                "optional": True,
+            },
+            {
+                "setting": "optional_sex_position",
+                "credit": "porntech",
+                "repo": "porntech/sex-position",
+                "license": "MIT",
+                "url": "https://huggingface.co/porntech/sex-position",
+                "optional": True,
+            },
+        ],
+        "repositories": {
+            "github": "https://github.com/Dinamush/thr3shr",
+            "huggingface": "https://huggingface.co/Dinamus/thr3shr",
+        },
+    }
+
+
 app.include_router(router)

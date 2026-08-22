@@ -23,6 +23,8 @@ tags:
 
 Local FastAPI + React workflow that threshes a media dump into destination bins — anime/GIF/video tagging, review, and folder migration (ML-Danbooru / WD taggers).
 
+**© 2026 Dinamush** — software under [MIT](./LICENSE); brand, UI creative materials, and curated docs under [CC BY 4.0](./CREATIVE_COMMONS.md). Third-party model owners are credited in [ATTRIBUTION.md](./ATTRIBUTION.md).
+
 This repo includes:
 
 - Tag vocabulary (`tags.csv`)
@@ -200,6 +202,16 @@ Tagger ONNX files are pulled automatically via `huggingface_hub` on first infere
 | `ml_danbooru` | [deepghs/ml-danbooru-onnx](https://huggingface.co/deepghs/ml-danbooru-onnx) (`ml_caformer_m36_dec-5-97527.onnx`) · tags [deepghs/imgutils-models](https://huggingface.co/deepghs/imgutils-models) (`mldanbooru/mldanbooru_tags.csv`) | ONNX + CSV |
 
 Cache location (typical): `~/.cache/huggingface/hub/`.
+
+## License and attribution
+
+| What | Owner | License |
+|---|---|---|
+| THR3SHR source code | Dinamush | [MIT](./LICENSE) |
+| THR3SHR brand, creative docs, curated taxonomies | Dinamush | [CC BY 4.0](./CREATIVE_COMMONS.md) |
+| WD / ML-Danbooru / style / optional VLM weights | Upstream authors (SmilingWolf, deepghs, bartowski, porntech, …) | See [ATTRIBUTION.md](./ATTRIBUTION.md) |
+
+Model weights are **not** shipped in this repository. Preserve `LICENSE`, `CREATIVE_COMMONS.md`, and `ATTRIBUTION.md` when redistributing.
 
 ## Remotes
 
