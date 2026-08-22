@@ -64,7 +64,7 @@ def _probe_local_videos(settings: AppSettings, model: str, limit: int = 8) -> di
             )
             is_rl, folder, score, evidence = predict_real_life(
                 scores,
-                selected={"real_life", "photo"},
+                selected={"real_life", "photo", *(settings.selected_tags or [])},
             )
             items.append(
                 {

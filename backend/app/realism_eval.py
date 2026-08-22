@@ -111,6 +111,7 @@ def run_realism_eval(
         if text:
             selected.add(text)
     if len(selected) < 3:
+        # Generic competitors only — never seed personal destination prefs.
         selected.update({"SFW", "scenery", "1girl"})
 
     for sample in samples:

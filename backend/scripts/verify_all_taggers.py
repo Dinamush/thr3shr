@@ -186,7 +186,7 @@ def main() -> int:
         if not ok:
             print(f"FAIL model={model}", file=sys.stderr)
 
-    # Optionally restore durable library paths for the user UI (tags preserved).
+    # Optionally restore library paths only (never rewrite selected_tags).
     restore_root = os.environ.get("THR3SHR_RESTORE_ROOT_REPO", "").strip()
     restore_cats = os.environ.get("THR3SHR_RESTORE_CATEGORIES_ROOT", "").strip()
     if restore_root and restore_cats:
@@ -195,7 +195,6 @@ def main() -> int:
             {
                 "root_repo": restore_root,
                 "categories_root": restore_cats,
-                "selected_tags": [],
                 "tagger_model": "wd_swinv2_v3",
                 "confidence_threshold": 0.6,
                 "wd_general_threshold": 0.35,
@@ -203,7 +202,7 @@ def main() -> int:
             }
         )
         req("PUT", "/settings", user_settings)
-        print("\nRestored UI settings from THR3SHR_RESTORE_* env vars", flush=True)
+        print("\nRestored UI paths from THR3SHR_RESTORE_* env vars", flush=True)
     else:
         print(
             "\nSkipped UI path restore (set THR3SHR_RESTORE_ROOT_REPO and "
