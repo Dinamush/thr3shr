@@ -30,7 +30,7 @@ This repo includes:
 - React SPA with sectioned settings, run dashboard, and review table
 - Multi-model inference via `dghs-imgutils` (ML-Danbooru ONNX and WD14 taggers)
 
-ONNX weights are pulled into the Hugging Face cache on first use (`deepghs/ml-danbooru-onnx` and WD14 model repos), not committed as LFS blobs in this tree.
+ONNX weights are **not** stored in this git tree (too large for GitHub). They are downloaded into the Hugging Face Hub cache on first use. See [Model weights](#model-weights) for direct links.
 
 ## What The Web UI Does
 
@@ -189,10 +189,28 @@ cd backend
 ../.venv/bin/python -m pytest tests -q
 ```
 
-## Hugging Face
+## Model weights
 
-This git remote (`origin`) points at:
+Tagger ONNX files are pulled automatically via `huggingface_hub` on first inference. Hosted copies (not in this repo):
 
-https://huggingface.co/Dinamus/thr3shr
+| Setting value | Weights / labels | Size note |
+|---|---|---|
+| `wd_swinv2_v3` (default) | [SmilingWolf/wd-swinv2-tagger-v3](https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3) · mirror [deepghs/wd14_tagger_with_embeddings](https://huggingface.co/deepghs/wd14_tagger_with_embeddings) (`…/model.onnx`) | ~hundreds of MB |
+| `wd_eva02_large` | [SmilingWolf/wd-eva02-large-tagger-v3](https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3) · same deepghs mirror path | larger / slower |
+| `ml_danbooru` | [deepghs/ml-danbooru-onnx](https://huggingface.co/deepghs/ml-danbooru-onnx) (`ml_caformer_m36_dec-5-97527.onnx`) · tags [deepghs/imgutils-models](https://huggingface.co/deepghs/imgutils-models) (`mldanbooru/mldanbooru_tags.csv`) | ONNX + CSV |
 
-Pushing `main` updates that Hub repo. The Gradio `app.py` entry in the YAML front matter is a legacy Space config; the primary workflow documented here is the FastAPI + React app.
+Cache location (typical): `~/.cache/huggingface/hub/`.
+
+## Remotes
+
+| Remote | URL |
+|---|---|
+| `origin` (Hugging Face Hub) | https://huggingface.co/Dinamus/thr3shr |
+| `github` | https://github.com/Dinamush/thr3shr |
+
+```bash
+git push origin main    # Hugging Face
+git push github main    # GitHub
+```
+
+The Gradio `app.py` entry in the YAML front matter is a legacy Space config; the primary workflow documented here is the FastAPI + React app.

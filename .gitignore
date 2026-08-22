@@ -12,3 +12,14 @@ backend/app.db-shm
 backend/.preview_cache/
 backend/scripts/out/
 sample_data/
+
+# Model weights are too large for GitHub — downloaded on first run via Hugging Face Hub
+*.onnx
+*.pt
+*.pth
+*.safetensors
+*.ckpt
+*.bin
+models/
+weights/
+checkpoints/
