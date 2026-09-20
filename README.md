@@ -23,6 +23,8 @@ tags:
 
 Local FastAPI + React workflow that threshes a media dump into destination bins — anime/GIF/video tagging, review, and folder migration (ML-Danbooru / WD taggers).
 
+**Version 1.0.0** — see [CHANGELOG.md](./CHANGELOG.md).
+
 **© 2026 Dinamush** — software under [MIT](./LICENSE); brand, UI creative materials, and curated docs under [CC BY 4.0](./CREATIVE_COMMONS.md). Third-party model owners are credited in [ATTRIBUTION.md](./ATTRIBUTION.md).
 
 This repo includes:
@@ -168,7 +170,7 @@ MAX_INFERENCE_WORKERS=2 ../.venv/bin/uvicorn app.main:app --host 127.0.0.1 --por
 
 ## API Surface (High Level)
 
-- `GET /health`
+- `GET /health` — `{ "status": "ok", "version": "1.0.0" }`
 - `GET /health/providers`
 - `GET /api/providers`
 - `GET/PUT /api/settings` — includes `tagger_model`, `wd_general_threshold`, `selected_tags`, workers, etc.

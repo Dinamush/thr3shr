@@ -9,9 +9,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from . import __version__
+
 logger = logging.getLogger(__name__)
 
-USER_AGENT = "thr3shr-debug/1.0"
+USER_AGENT = f"thr3shr-debug/{__version__}"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEBUG_EVAL_ROOT = REPO_ROOT / "sample_data" / "debug_evals"
 

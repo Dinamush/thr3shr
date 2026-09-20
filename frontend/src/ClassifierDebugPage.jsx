@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react"
 import { api } from "./api"
+import { version as APP_VERSION } from "../package.json"
 
 const DEFAULT_SOURCES = [
   { id: "safebooru", label: "Safebooru", sfw_policy: "rating:safe", max_content_tags: null },
@@ -1356,7 +1357,7 @@ export default function ClassifierDebugPage() {
 
       <footer className="app-footer" aria-label="Attribution">
         <p>
-          THR3SHR © 2026 Dinamush · code MIT · creative{" "}
+          THR3SHR v{APP_VERSION} © 2026 Dinamush · code MIT · creative{" "}
           <a
             href="https://creativecommons.org/licenses/by/4.0/"
             target="_blank"

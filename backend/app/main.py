@@ -7,11 +7,12 @@ from fastapi import FastAPI
 from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
 
+from . import __version__
 from .api import router
 from .providers import preload_onnx_runtime_dlls, probe_execution_providers
 from .storage import init_db
 
-app = FastAPI(title="THR3SHR API", version="0.1.0")
+app = FastAPI(title="THR3SHR API", version=__version__)
 logger = logging.getLogger("thr3shr_api")
 
 app.add_middleware(
@@ -64,6 +65,7 @@ def startup() -> None:
     _configure_logging()
     preload_onnx_runtime_dlls()
     provider_state = _get_provider_snapshot()
+    logger.info("thr3shr_version version=%s", __version__)
     logger.info("onnx_provider_state state=%s", provider_state)
     logger.info("initializing database at startup")
     init_db()
@@ -88,7 +90,7 @@ def startup() -> None:
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "version": __version__}
 
 
 @app.get("/health/providers")
@@ -101,6 +103,7 @@ def attribution() -> dict[str, object]:
     """Machine-readable ownership and third-party model credits."""
     return {
         "project": "THR3SHR",
+        "version": __version__,
         "owner": "Dinamush",
         "owner_urls": {
             "github": "https://github.com/Dinamush",

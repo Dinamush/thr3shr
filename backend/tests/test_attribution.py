@@ -11,6 +11,7 @@ def test_attribution_endpoint_lists_owner_and_models():
     assert resp.status_code == 200
     data = resp.json()
     assert data["project"] == "THR3SHR"
+    assert data["version"] == "1.0.0"
     assert data["owner"] == "Dinamush"
     assert data["licenses"]["software"] == "MIT"
     assert data["licenses"]["creative_works"] == "CC-BY-4.0"
@@ -20,3 +21,12 @@ def test_attribution_endpoint_lists_owner_and_models():
     assert "ml_danbooru" in settings
     assert any(m.get("credit") == "SmilingWolf" for m in data["models"])
     assert any(m.get("credit") == "deepghs" for m in data["models"])
+
+
+def test_health_reports_app_version():
+    client = TestClient(app)
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["version"] == "1.0.0"
