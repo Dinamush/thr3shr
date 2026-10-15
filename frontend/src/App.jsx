@@ -655,6 +655,10 @@ function App() {
     return next;
   }
 
+  function settleItemUpdates(itemIds) {
+    return Promise.allSettled(itemIds.map((id) => itemUpdateQueueRef.current[id]));
+  }
+
   async function updateStatus(itemId, status) {
     setPendingItemIds((prev) => ({ ...prev, [itemId]: true }));
     setError("");
@@ -720,6 +724,7 @@ function App() {
     setError("");
     setNotice("");
     try {
+      await settleItemUpdates(selectedIds);
       const result = await api.batchUpdate(runId, { item_ids: selectedIds, status });
       setSelectedIds([]);
       await refreshItems(runId);
@@ -750,6 +755,7 @@ function App() {
     setLoading(true);
     setOpsLoading((prev) => ({ ...prev, migrating: true }));
     try {
+      await settleItemUpdates(Object.keys(itemUpdateQueueRef.current));
       const result = await api.migrateRun(runId, {
         mode: migrateMode,
         create_missing_folders: true,
