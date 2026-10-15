@@ -41,8 +41,9 @@ ONNX weights are **not** stored in this git tree (too large for GitHub). They ar
 1. **Settings** — paths, tagger model, thresholds, workers; sticky unsaved save bar
 2. **Tag selection** — search chips from `tags.csv` (auto-persisted)
 3. **Preview scan** — eligible image counts before starting a run
-4. **Run dashboard** — status, totals, failed/review counts, progress bar, cancel
-5. **Review table** — preview, primary (or “needs review”), secondary suggestions, **global top-5 tags**, final tag, approve/migrate
+4. **Runs** - reopen an earlier run to review or migrate its results; the last opened run is remembered across reloads
+5. **Run dashboard** — status, totals, failed/review counts, progress bar, cancel
+6. **Review table** — preview, primary (or “needs review”), secondary suggestions, **global top-5 tags**, final tag, approve/migrate
 
 ## Tagger Models
 
