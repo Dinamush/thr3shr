@@ -349,6 +349,11 @@ button.danger {
   align-items: center;
 }
 
+.run-picker select {
+  width: 100%;
+  max-width: 100%;
+}
+
 .reclassify-banner {
   padding: 10px 12px;
   border: 1px solid #c5d4ef;

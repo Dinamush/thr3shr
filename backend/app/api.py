@@ -29,6 +29,7 @@ from .schemas import (
     TagFpEvalRequest,
     TagRecallEvalRequest,
     RunStatusResponse,
+    RunSummary,
     SaveSettingsRequest,
     SfwDebugEvalRequest,
     SfwDebugEvalResponse,
@@ -2770,6 +2771,55 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
         unmatched_folders=[m.folder_name for m in mappings if not m.matched],
         message=f"Run queued; poll /api/runs/{run_id}/status for progress.{mode_note}",
     )
+
+
+@router.get("/runs", response_model=list[RunSummary])
+def list_runs(limit: int = Query(50, ge=1, le=500)) -> list[RunSummary]:
+    """Recent runs, newest first, so finished runs stay reachable for review."""
+    runs = fetch_all(
+        """
+        SELECT id, created_at, status, root_repo, categories_root, tagger_model,
+               tagging_domain, total_images, processed_images, failed_images,
+               started_at, finished_at
+        FROM runs
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    if not runs:
+        return []
+    run_ids = [int(run["id"]) for run in runs]
+    placeholders = ",".join("?" for _ in run_ids)
+    counts: dict[int, dict[str, int]] = {run_id: {} for run_id in run_ids}
+    for row in fetch_all(
+        f"""
+        SELECT run_id, status, COUNT(*) AS count
+        FROM items
+        WHERE run_id IN ({placeholders})
+        GROUP BY run_id, status
+        """,
+        tuple(run_ids),
+    ):
+        counts[int(row["run_id"])][str(row["status"])] = int(row["count"])
+    return [
+        RunSummary(
+            run_id=run["id"],
+            created_at=run.get("created_at"),
+            status=run.get("status") or "pending",
+            root_repo=run.get("root_repo") or "",
+            categories_root=run.get("categories_root") or "",
+            tagger_model=run.get("tagger_model"),
+            tagging_domain=run.get("tagging_domain"),
+            total_images=int(run.get("total_images") or 0),
+            processed_images=int(run.get("processed_images") or 0),
+            failed_images=int(run.get("failed_images") or 0),
+            started_at=run.get("started_at"),
+            finished_at=run.get("finished_at"),
+            item_counts=counts[int(run["id"])],
+        )
+        for run in runs
+    ]
 
 
 @router.get("/runs/{run_id}")

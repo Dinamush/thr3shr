@@ -82,7 +82,10 @@ async function jsonRequest(path, options = {}) {
     if (!response.ok) {
       const detail =
         (maybeJson && (maybeJson.detail || maybeJson.message)) || text || "Request failed";
-      throw new Error(`HTTP ${response.status} ${response.statusText}: ${detail}`);
+      const error = new Error(`HTTP ${response.status} ${response.statusText}: ${detail}`);
+      // Callers branch on the status (e.g. a deleted run returns 404).
+      error.status = response.status;
+      throw error;
     }
     return maybeJson ?? {};
   } catch (err) {
@@ -382,11 +385,36 @@ function mockRequest(path, options = {}) {
       message: "Run queued; poll /api/runs/{run_id}/status for progress.",
     });
   }
+  if (path.split("?")[0] === "/runs" && method === "GET") {
+    const summaries = Object.values(mockState.runs)
+      .sort((a, b) => b.id - a.id)
+      .map((run) => {
+        const visibleItems = run.items.slice(0, Math.max(0, run.processed_images || 0));
+        return {
+          run_id: run.id,
+          created_at: run.started_at || null,
+          status: run.status,
+          root_repo: run.root_repo || "",
+          categories_root: run.categories_root || "",
+          tagger_model: run.tagger_model || null,
+          tagging_domain: mockState.settings.tagging_domain || "drawn",
+          total_images: run.total_images || 0,
+          processed_images: run.processed_images || 0,
+          failed_images: run.failed_images || 0,
+          started_at: run.started_at || null,
+          finished_at: run.finished_at || null,
+          item_counts: Object.fromEntries(
+            mockCounts(visibleItems).map(({ status, count }) => [status, count])
+          ),
+        };
+      });
+    return Promise.resolve(summaries);
+  }
   if (path.match(/^\/runs\/\d+\/status$/) && method === "GET") {
     const runId = Number(path.split("/")[2]);
     const run = mockState.runs[runId];
     if (!run) {
-      return Promise.reject(new Error("Run not found"));
+      return Promise.reject(Object.assign(new Error("Run not found"), { status: 404 }));
     }
     if (run.status === "pending") {
       run.status = "running";
@@ -590,6 +618,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  listRuns: (limit = 50) => request(`/runs?limit=${limit}`),
   getRun: (runId) => request(`/runs/${runId}`),
   getRunStatus: (runId) => request(`/runs/${runId}/status`),
   cancelRun: (runId) =>

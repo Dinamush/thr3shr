@@ -264,6 +264,24 @@ class RunStatusResponse(BaseModel):
     tagger_model: str | None = None
 
 
+class RunSummary(BaseModel):
+    """One row of the run history list (newest first)."""
+
+    run_id: int
+    created_at: str | None = None
+    status: RunLifecycleStatus
+    root_repo: str
+    categories_root: str
+    tagger_model: str | None = None
+    tagging_domain: str | None = None
+    total_images: int = 0
+    processed_images: int = 0
+    failed_images: int = 0
+    started_at: str | None = None
+    finished_at: str | None = None
+    item_counts: dict[str, int] = Field(default_factory=dict)
+
+
 class UpdateItemRequest(BaseModel):
     status: ItemStatus | None = None
     final_tag: str | None = None

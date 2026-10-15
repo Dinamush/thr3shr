@@ -65,7 +65,10 @@ const TAGGER_MODELS = [
 ];
 
 const SFW_CLASSIFY_FOLDERS = ["SFW", "scenery"];
-const ACTIVE_RUN_STORAGE_KEY = "thr3shrActiveRunId";
+// Last run opened in the dashboard. Kept after the run finishes so a reload
+// returns to its review table (key name predates that and stays for upgrades).
+const LAST_RUN_STORAGE_KEY = "thr3shrActiveRunId";
+const STATUS_POLL_INTERVAL_MS = 1500;
 const VIDEO_PREVIEW_EXTS = new Set([
   ".mp4",
   ".m4v",
@@ -126,6 +129,35 @@ function readRoute() {
   return hash.startsWith("/debug") ? "debug" : "home";
 }
 
+function pathTail(path) {
+  const parts = String(path || "").split(/[\\/]+/).filter(Boolean);
+  return parts.slice(-2).join("/") || String(path || "");
+}
+
+function formatRunDate(iso) {
+  if (!iso) return "";
+  // SQLite CURRENT_TIMESTAMP is UTC without a zone marker.
+  const normalized = /[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso.replace(" ", "T")}Z`;
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function runOptionLabel(run) {
+  const progress = run.total_images
+    ? `${run.processed_images}/${run.total_images}`
+    : `${run.processed_images}`;
+  const when = formatRunDate(run.created_at);
+  return [`Run #${run.run_id}`, run.status, `${progress} images`, pathTail(run.root_repo), when]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 function App() {
   const [route, setRoute] = useState(readRoute);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
@@ -134,6 +166,7 @@ function App() {
   );
   const [offlineMode, setOfflineMode] = useState(false);
   const [runId, setRunId] = useState(null);
+  const [runs, setRuns] = useState([]);
   const [runStatus, setRunStatus] = useState(null);
   const [runMeta, setRunMeta] = useState(null);
   const [items, setItems] = useState([]);
@@ -167,6 +200,9 @@ function App() {
   const [reclassifyModel, setReclassifyModel] = useState("wd_swinv2_v3");
   const finalTagTimersRef = useRef({});
   const pollTimerRef = useRef(null);
+  // Bumped whenever polling stops or switches runs; stale responses check it.
+  const pollGenerationRef = useRef(0);
+  const viewedRunIdRef = useRef(null);
   const lastItemsRefreshAtRef = useRef(0);
   const lastItemsProcessedRef = useRef(-1);
   const tagsHydratedRef = useRef(false);
@@ -188,6 +224,15 @@ function App() {
     runStatus && ["pending", "running"].includes(runStatus.status)
   );
 
+  async function refreshRuns() {
+    try {
+      const list = await api.listRuns();
+      setRuns(Array.isArray(list) ? list : []);
+    } catch (err) {
+      console.error("refreshRuns failed", err);
+    }
+  }
+
   async function refreshItems(currentRunId, options = {}) {
     if (!currentRunId) return;
     try {
@@ -197,12 +242,15 @@ function App() {
           timeoutMs: Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 120000,
         }),
       ]);
+      // The user may have opened another run while this request was in flight.
+      if (viewedRunIdRef.current !== currentRunId) return;
       setRunMeta(runInfo);
       setItems(runItems);
       // Clear sticky thumb failures so a fixed preview endpoint can retry.
       setPreviewErrors({});
     } catch (err) {
       console.error("refreshItems failed", err);
+      if (viewedRunIdRef.current !== currentRunId) return;
       setError(`Failed to refresh items: ${err.message}`);
     }
   }
@@ -222,10 +270,11 @@ function App() {
         setOfflineMode(api.isOfflineMode());
       })
       .catch((err) => setError(err.message));
-    const storedRunId = Number(localStorage.getItem(ACTIVE_RUN_STORAGE_KEY) || 0);
+    const storedRunId = Number(localStorage.getItem(LAST_RUN_STORAGE_KEY) || 0);
     if (storedRunId > 0) {
       setRunId(storedRunId);
     }
+    refreshRuns();
     api
       .getProviders()
       .then((info) => setProviderInfo(info))
@@ -308,10 +357,7 @@ function App() {
     return () => {
       Object.values(finalTagTimersRef.current).forEach((timerId) => clearTimeout(timerId));
       finalTagTimersRef.current = {};
-      if (pollTimerRef.current) {
-        clearInterval(pollTimerRef.current);
-        pollTimerRef.current = null;
-      }
+      stopStatusPolling();
     };
   }, []);
 
@@ -337,9 +383,38 @@ function App() {
     };
   }, [items, runMeta]);
 
-  async function pollRunStatus(currentRunId) {
+  function forgetMissingRun(missingRunId) {
+    stopStatusPolling();
+    // Demo mode's mock store knows none of the real runs; keep the remembered
+    // run so reconnecting to the backend reopens it.
+    const offline = api.isOfflineMode();
+    if (!offline && Number(localStorage.getItem(LAST_RUN_STORAGE_KEY) || 0) === missingRunId) {
+      localStorage.removeItem(LAST_RUN_STORAGE_KEY);
+    }
+    viewedRunIdRef.current = null;
+    setRunId(null);
+    setRunStatus(null);
+    setRunMeta(null);
+    setItems([]);
+    setSelectedIds([]);
+    setError((prev) =>
+      String(prev || "").startsWith("Failed to poll run status:") ? "" : prev
+    );
+    setNotice(
+      offline
+        ? `Run #${missingRunId} is not available in demo mode.`
+        : `Run #${missingRunId} no longer exists on the backend.`
+    );
+    refreshRuns();
+  }
+
+  // Returns whether polling should continue for this run.
+  async function pollRunStatus(currentRunId, generation) {
+    const isStale = () =>
+      generation !== pollGenerationRef.current || viewedRunIdRef.current !== currentRunId;
     try {
       const status = await api.getRunStatus(currentRunId);
+      if (isStale()) return false;
       setRunStatus(status);
       setError((prev) =>
         String(prev || "").startsWith("Failed to poll run status:") ? "" : prev
@@ -368,44 +443,73 @@ function App() {
       }
 
       if (terminal) {
-        if (pollTimerRef.current) {
-          clearInterval(pollTimerRef.current);
-          pollTimerRef.current = null;
-        }
-        localStorage.removeItem(ACTIVE_RUN_STORAGE_KEY);
+        refreshRuns();
         api.getProviders().then((info) => setProviderInfo(info)).catch(() => {});
+        return false;
       }
+      return true;
     } catch (err) {
+      if (isStale()) return false;
+      if (err?.status === 404) {
+        forgetMissingRun(currentRunId);
+        return false;
+      }
       // Keep polling through transient API/load blips; a hard stop made the
       // UI look frozen while the backend was still classifying.
       setError(`Failed to poll run status: ${err.message}`);
+      return true;
     }
   }
 
-  function startStatusPolling(currentRunId) {
+  function stopStatusPolling() {
+    pollGenerationRef.current += 1;
     if (pollTimerRef.current) {
-      clearInterval(pollTimerRef.current);
+      clearTimeout(pollTimerRef.current);
       pollTimerRef.current = null;
     }
-    pollRunStatus(currentRunId);
-    pollTimerRef.current = setInterval(() => pollRunStatus(currentRunId), 1500);
+  }
+
+  // Chained timeouts instead of setInterval: a slow item refresh on a large run
+  // must finish before the next poll, or requests pile up on the backend.
+  function startStatusPolling(currentRunId) {
+    stopStatusPolling();
+    const generation = pollGenerationRef.current;
+    const tick = async () => {
+      const keepPolling = await pollRunStatus(currentRunId, generation);
+      if (!keepPolling || generation !== pollGenerationRef.current) return;
+      pollTimerRef.current = setTimeout(tick, STATUS_POLL_INTERVAL_MS);
+    };
+    tick();
   }
 
   useEffect(() => {
+    viewedRunIdRef.current = runId;
     if (!runId) return;
-    localStorage.setItem(ACTIVE_RUN_STORAGE_KEY, String(runId));
+    // Mock run ids would collide with real ones after reconnecting.
+    if (!api.isOfflineMode()) {
+      localStorage.setItem(LAST_RUN_STORAGE_KEY, String(runId));
+    }
     // Drop sticky thumb failures from prior preview bugs / aborted video loads.
     setPreviewErrors({});
     lastItemsRefreshAtRef.current = 0;
     lastItemsProcessedRef.current = -1;
     startStatusPolling(runId);
-    return () => {
-      if (pollTimerRef.current) {
-        clearInterval(pollTimerRef.current);
-        pollTimerRef.current = null;
-      }
-    };
+    return () => stopStatusPolling();
   }, [runId]);
+
+  function openRun(nextRunId) {
+    if (!nextRunId || nextRunId === runId) return;
+    // Retire the old run's in-flight poll before React re-renders.
+    stopStatusPolling();
+    viewedRunIdRef.current = nextRunId;
+    setError("");
+    setNotice("");
+    setRunStatus(null);
+    setRunMeta(null);
+    setItems([]);
+    setSelectedIds([]);
+    setRunId(nextRunId);
+  }
 
   async function handleSaveSettings(e) {
     if (e) e.preventDefault();
@@ -500,7 +604,13 @@ function App() {
         setMigrateMode("move");
       }
       setOfflineMode(api.isOfflineMode());
+      stopStatusPolling();
+      viewedRunIdRef.current = result.run_id;
+      setSelectedIds([]);
+      setItems([]);
+      setRunMeta(null);
       setRunId(result.run_id);
+      refreshRuns();
       setPreviewErrors({});
       setRunStatus({
         run_id: result.run_id,
@@ -1397,6 +1507,30 @@ function App() {
           </div>
         ) : null}
       </section>
+
+      {runs.length > 0 && (
+        <section className="panel run-history" aria-labelledby="run-history-heading">
+          <h2 id="run-history-heading">Runs</h2>
+          <span className="kicker">Reopen an earlier run to review or migrate its results.</span>
+          <label className="run-picker">
+            Open run
+            <select
+              value={runId ?? ""}
+              onChange={(e) => openRun(Number(e.target.value))}
+            >
+              {runId == null && <option value="">Select a run…</option>}
+              {runId != null && !runs.some((run) => run.run_id === runId) && (
+                <option value={runId}>Run #{runId}</option>
+              )}
+              {runs.map((run) => (
+                <option key={run.run_id} value={run.run_id}>
+                  {runOptionLabel(run)}
+                </option>
+              ))}
+            </select>
+          </label>
+        </section>
+      )}
 
       {runId && runStatus && (
         <section className="panel">

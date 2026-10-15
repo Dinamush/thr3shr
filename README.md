@@ -177,6 +177,7 @@ MAX_INFERENCE_WORKERS=2 ../.venv/bin/uvicorn app.main:app --host 127.0.0.1 --por
 - `GET /api/tags`
 - `GET /api/scan/preview` — discovery stats without inference
 - `POST /api/runs/start`
+- `GET /api/runs` - recent runs, newest first, with per-status item counts
 - `GET /api/runs/{run_id}/status` — includes `tagger_model`, progress telemetry
 - `POST /api/runs/{run_id}/cancel`
 - `GET /api/runs/{run_id}/items` — includes `global_top_tags`, secondary suggestions
