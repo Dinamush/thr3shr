@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -8,6 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 from . import __version__
 from .api import router
@@ -23,14 +25,36 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     yield
 
 
+# The API reads and moves local files without authentication, so only the
+# local UI may call it. Any web page could otherwise read settings and paths or
+# start a move-migration through the browser (CORS "*"), or reach it through
+# DNS rebinding (checked by Host). Override with comma-separated lists.
+DEFAULT_CORS_ORIGINS = (
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
+)
+DEFAULT_ALLOWED_HOSTS = ("127.0.0.1", "localhost")
+
+
+def _env_list(name: str, default: tuple[str, ...]) -> list[str]:
+    values = [part.strip() for part in os.getenv(name, "").split(",") if part.strip()]
+    return values or list(default)
+
+
 app = FastAPI(title="THR3SHR API", version=__version__, lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_env_list("THR3SHR_CORS_ORIGINS", DEFAULT_CORS_ORIGINS),
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=_env_list("THR3SHR_ALLOWED_HOSTS", DEFAULT_ALLOWED_HOSTS),
 )
 
 

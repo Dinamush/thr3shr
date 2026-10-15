@@ -96,6 +96,15 @@ Health check:
 curl http://127.0.0.1:8000/health
 ```
 
+The API reads and moves local files without authentication, so it only answers the local UI.
+By default it accepts browser calls from the Vite dev and preview servers (`http://localhost:5173`, `http://127.0.0.1:5173`, and the same on port `4173`) and requests addressed to `127.0.0.1` or `localhost`.
+To reach it from another origin or host name (for example another machine on your LAN), set comma-separated lists before starting uvicorn:
+
+```bash
+THR3SHR_CORS_ORIGINS="http://nas.lan:5173" THR3SHR_ALLOWED_HOSTS="nas.lan,127.0.0.1,localhost" \
+  ../.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
 ### 3) Start frontend Web UI (port 5173)
 
 ```bash
@@ -109,6 +118,7 @@ Open `http://localhost:5173`.
 ## Frontend Offline Mode
 
 The frontend falls back to local mock mode when the backend is unreachable. Preview/migration are mock-only in that mode.
+When the backend comes back, a banner offers to reconnect.
 
 ## Review Workflow
 
