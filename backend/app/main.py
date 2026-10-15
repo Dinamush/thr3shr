@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi import Request
@@ -12,8 +14,16 @@ from .api import router
 from .providers import preload_onnx_runtime_dlls, probe_execution_providers
 from .storage import init_db
 
-app = FastAPI(title="THR3SHR API", version=__version__)
 logger = logging.getLogger("thr3shr_api")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    startup()
+    yield
+
+
+app = FastAPI(title="THR3SHR API", version=__version__, lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -60,7 +70,6 @@ async def log_requests(request: Request, call_next):
     return response
 
 
-@app.on_event("startup")
 def startup() -> None:
     _configure_logging()
     preload_onnx_runtime_dlls()

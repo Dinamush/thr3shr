@@ -77,6 +77,21 @@ def init_db() -> None:
                 migrated_to TEXT,
                 FOREIGN KEY(run_id) REFERENCES runs(id)
             );
+
+            -- Every run view filters items by run_id; without this index each
+            -- status poll and list refresh scans the whole multi-GB table.
+            CREATE INDEX IF NOT EXISTS idx_items_run_id ON items(run_id);
+
+            -- Global top-5 tags per item, kept apart from items: a column after
+            -- full_scores_json would force SQLite to walk that blob's overflow
+            -- pages on every list read.
+            CREATE TABLE IF NOT EXISTS item_global_tops (
+                item_id INTEGER PRIMARY KEY,
+                run_id INTEGER NOT NULL,
+                tops_json TEXT NOT NULL DEFAULT '[]'
+            );
+            CREATE INDEX IF NOT EXISTS idx_item_global_tops_run_id
+                ON item_global_tops(run_id);
             """
             )
             _ensure_settings_columns(conn)

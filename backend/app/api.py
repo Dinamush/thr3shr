@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import time
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, Response
@@ -73,7 +74,7 @@ from .doujin_works import (
 )
 from .hybrid_ml import merge_ml_allowlist_scores, should_run_hybrid_ml
 from .providers import probe_execution_providers
-from .storage import execute, fetch_all, fetch_one, from_json, to_json
+from .storage import execute, execute_many, fetch_all, fetch_one, from_json, to_json, transaction
 
 router = APIRouter(prefix="/api")
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -155,10 +156,18 @@ def _maybe_hybrid_ml_rescue(
             experimental_style_detector_enabled=experimental_style_detector_enabled,
             hybrid_real_life=False,
         )
-        note = "Hybrid ML allowlist rescue."
+        changed = (
+            rescued.needs_review != result.needs_review
+            or rescued.primary_tag != result.primary_tag
+        )
+        note = (
+            "Hybrid ML allowlist rescue."
+            if changed
+            else "Hybrid ML allowlist re-check found no better match."
+        )
         if rescued.reason:
             rescued.reason = f"{rescued.reason} {note}"
-        elif rescued.needs_review != result.needs_review or rescued.primary_tag != result.primary_tag:
+        elif changed:
             rescued.reason = note
         return rescued
     except Exception:
@@ -950,7 +959,8 @@ def _settings_from_db() -> AppSettings:
     return AppSettings(
         root_repo=row["root_repo"],
         categories_root=row["categories_root"],
-        confidence_threshold=float(row["confidence_threshold"]),
+        # Clamp rows saved before the 0..1 bound existed so settings still load.
+        confidence_threshold=max(0.0, min(1.0, float(row["confidence_threshold"]))),
         default_migrate_mode=row["default_migrate_mode"],
         scan_recursive=bool(row.get("scan_recursive", 1)),
         experimental_media_enabled=bool(row.get("experimental_media_enabled", 0)),
@@ -966,7 +976,11 @@ def _settings_from_db() -> AppSettings:
         inference_batch_size=int(row.get("inference_batch_size") or 4),
         force_cpu_inference=bool(row.get("force_cpu_inference", 0)),
         tagger_model=tagger_model,  # type: ignore[arg-type]
-        wd_general_threshold=float(row.get("wd_general_threshold") or 0.35),
+        wd_general_threshold=(
+            0.35
+            if row.get("wd_general_threshold") is None
+            else float(row["wd_general_threshold"])
+        ),
     )
 
 
@@ -993,13 +1007,65 @@ def _apply_runtime_inference_env(settings: AppSettings) -> None:
         reset_engine()
 
 
+def _scores_from_json(raw: str | None) -> dict[str, float]:
+    parsed = from_json(raw or "{}", default={})
+    if not isinstance(parsed, dict):
+        return {}
+    scores: dict[str, float] = {}
+    for key, value in parsed.items():
+        try:
+            scores[str(key)] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return scores
+
+
+def _store_global_tops(item_id: int, run_id: int, scores: dict[str, float]) -> None:
+    execute(
+        "INSERT OR REPLACE INTO item_global_tops (item_id, run_id, tops_json) VALUES (?, ?, ?)",
+        (item_id, run_id, to_json(global_top_tags(scores))),
+    )
+
+
+def _backfill_global_tops(run_id: int) -> None:
+    """Fill item_global_tops for rows written before the table existed.
+
+    Reads full_scores_json only for items that still lack a tops row, so a
+    legacy run pays the blob read once and later list refreshes stay slim.
+    """
+    rows = fetch_all(
+        """
+        SELECT i.id, i.full_scores_json
+        FROM items i
+        LEFT JOIN item_global_tops t ON t.item_id = i.id
+        WHERE i.run_id = ? AND t.item_id IS NULL
+        """,
+        (run_id,),
+    )
+    if not rows:
+        return
+    execute_many(
+        "INSERT OR IGNORE INTO item_global_tops (item_id, run_id, tops_json) VALUES (?, ?, ?)",
+        [
+            (
+                row["id"],
+                run_id,
+                to_json(global_top_tags(_scores_from_json(row.get("full_scores_json")))),
+            )
+            for row in rows
+        ],
+    )
+
+
 def _item_from_row(row: dict, include_full_scores: bool = False) -> ClassifiedItem:
     # List views must not touch full_scores_json — it dominates app.db I/O.
     scores: dict[str, float] = {}
     if include_full_scores:
-        parsed = from_json(row.get("full_scores_json") or "{}", default={})
-        if isinstance(parsed, dict):
-            scores = {str(k): float(v) for k, v in parsed.items()}
+        scores = _scores_from_json(row.get("full_scores_json"))
+        global_tops = global_top_tags(scores) if scores else []
+    else:
+        stored_tops = from_json(row.get("global_top_json") or "[]", default=[])
+        global_tops = stored_tops if isinstance(stored_tops, list) else []
     return ClassifiedItem(
         id=row["id"],
         run_id=row["run_id"],
@@ -1008,7 +1074,7 @@ def _item_from_row(row: dict, include_full_scores: bool = False) -> ClassifiedIt
         primary_tag=row["primary_tag"],
         primary_score=row["primary_score"],
         secondary_suggestions=from_json(row.get("secondary_json") or "[]", default=[]),
-        global_top_tags=global_top_tags(scores) if scores else [],
+        global_top_tags=global_tops,
         full_scores=scores if include_full_scores else None,
         suggested_destination=row["suggested_destination"],
         final_tag=row["final_tag"],
@@ -1026,6 +1092,19 @@ _ITEMS_LIST_COLUMNS = (
     "secondary_json, suggested_destination, final_tag, final_destination, "
     "status, needs_review, review_reason, migrated_to"
 )
+# Same columns qualified for the items (i) LEFT JOIN item_global_tops (t) read.
+_ITEMS_LIST_SELECT = ", ".join(f"i.{col.strip()}" for col in _ITEMS_LIST_COLUMNS.split(","))
+_ITEMS_FROM_WITH_TOPS = (
+    "FROM items i LEFT JOIN item_global_tops t ON t.item_id = i.id"
+)
+
+
+def _fetch_item_for_response(item_id: int) -> dict | None:
+    return fetch_one(
+        f"SELECT {_ITEMS_LIST_SELECT}, t.tops_json AS global_top_json "
+        f"{_ITEMS_FROM_WITH_TOPS} WHERE i.id = ?",
+        (item_id,),
+    )
 
 
 def estimate_run_eta(
@@ -1304,7 +1383,7 @@ def _execute_doujin_run(
                         else None
                     )
                     status = "approved" if not result.needs_review else "proposed"
-                    execute(
+                    item_id = execute(
                         """
                         INSERT INTO items (
                             run_id, file_path, relative_path, primary_tag, primary_score,
@@ -1328,6 +1407,7 @@ def _execute_doujin_run(
                             result.reason,
                         ),
                     )
+                    _store_global_tops(item_id, run_id, result.scores)
                     if result.inference_failed:
                         failed += 1
                     _update_run_progress(run_id, processed, failed)
@@ -1493,7 +1573,7 @@ def _execute_real_life_tag_run(
                     except Exception as err:  # noqa: BLE001
                         logger.exception("real_life_tag_item_failed path=%s", path)
                         failed += 1
-                        execute(
+                        item_id = execute(
                             """
                             INSERT INTO items (
                                 run_id, file_path, relative_path, primary_tag, primary_score,
@@ -1503,6 +1583,7 @@ def _execute_real_life_tag_run(
                             """,
                             (run_id, str(path), relative, f"inference_failed:{err}"),
                         )
+                        _store_global_tops(item_id, run_id, {})
                         processed += 1
                         _update_run_progress(run_id, processed, failed)
                         continue
@@ -1512,7 +1593,7 @@ def _execute_real_life_tag_run(
                     if primary and not dest:
                         dest = str(real_life_destination(categories_root, primary))
                     status_value = "proposed"
-                    execute(
+                    item_id = execute(
                         """
                         INSERT INTO items (
                             run_id, file_path, relative_path, primary_tag, primary_score,
@@ -1536,6 +1617,7 @@ def _execute_real_life_tag_run(
                             result.reason,
                         ),
                     )
+                    _store_global_tops(item_id, run_id, result.scores)
                     if result.inference_failed:
                         failed += 1
                     processed += 1
@@ -1779,7 +1861,7 @@ def _execute_run(
                         status = "approved" if not result.needs_review else "proposed"
                         if real_life_filter and is_real_life_hit:
                             status = "approved"
-                        execute(
+                        item_id = execute(
                             """
                             INSERT INTO items (
                                 run_id, file_path, relative_path, primary_tag, primary_score, secondary_json,
@@ -1802,6 +1884,7 @@ def _execute_run(
                                 result.reason,
                             ),
                         )
+                        _store_global_tops(item_id, run_id, result.scores)
                         processed += 1
                         if result.inference_failed:
                             failed += 1
@@ -2132,36 +2215,47 @@ def _execute_reclassify(
                         else:
                             new_final_tag = result.primary_tag
                             new_final_destination = suggested_destination
-                        execute(
-                            """
-                            UPDATE items
-                            SET primary_tag = ?,
-                                primary_score = ?,
-                                secondary_json = ?,
-                                full_scores_json = ?,
-                                suggested_destination = ?,
-                                final_tag = ?,
-                                final_destination = ?,
-                                status = ?,
-                                needs_review = ?,
-                                review_reason = ?
-                            WHERE id = ? AND run_id = ? AND status = 'proposed' AND needs_review = 1
-                            """,
-                            (
-                                result.primary_tag,
-                                result.primary_score,
-                                to_json(result.secondary),
-                                to_json(result.scores),
-                                suggested_destination,
-                                new_final_tag,
-                                new_final_destination,
-                                new_status,
-                                1 if result.needs_review else 0,
-                                review_reason,
-                                row["id"],
-                                run_id,
-                            ),
-                        )
+                        with transaction() as conn:
+                            cur = conn.execute(
+                                """
+                                UPDATE items
+                                SET primary_tag = ?,
+                                    primary_score = ?,
+                                    secondary_json = ?,
+                                    full_scores_json = ?,
+                                    suggested_destination = ?,
+                                    final_tag = ?,
+                                    final_destination = ?,
+                                    status = ?,
+                                    needs_review = ?,
+                                    review_reason = ?
+                                WHERE id = ? AND run_id = ? AND status = 'proposed' AND needs_review = 1
+                                """,
+                                (
+                                    result.primary_tag,
+                                    result.primary_score,
+                                    to_json(result.secondary),
+                                    to_json(result.scores),
+                                    suggested_destination,
+                                    new_final_tag,
+                                    new_final_destination,
+                                    new_status,
+                                    1 if result.needs_review else 0,
+                                    review_reason,
+                                    row["id"],
+                                    run_id,
+                                ),
+                            )
+                            # Tops follow the stored scores; skip when a concurrent
+                            # review already moved the row out of 'proposed'.
+                            if cur.rowcount:
+                                conn.execute(
+                                    """
+                                    INSERT OR REPLACE INTO item_global_tops (item_id, run_id, tops_json)
+                                    VALUES (?, ?, ?)
+                                    """,
+                                    (row["id"], run_id, to_json(global_top_tags(result.scores))),
+                                )
                         processed += 1
                         if result.inference_failed:
                             # Count refreshed below for accuracy across workers.
@@ -2827,17 +2921,23 @@ def get_run_items(
     include_scores: bool = Query(False),
 ) -> list[ClassifiedItem]:
     # Never SELECT * here: full_scores_json is most of a multi‑GB app.db and
-    # caused disk-read spikes / UI freezes on every refresh.
-    cols = "*" if include_scores else _ITEMS_LIST_COLUMNS
-    query = f"SELECT {cols} FROM items WHERE run_id = ?"
+    # caused disk-read spikes / UI freezes on every refresh. Global tops come
+    # from the slim item_global_tops side table instead.
+    if not include_scores:
+        _backfill_global_tops(run_id)
+    cols = "i.*" if include_scores else _ITEMS_LIST_SELECT
+    query = (
+        f"SELECT {cols}, t.tops_json AS global_top_json "
+        f"{_ITEMS_FROM_WITH_TOPS} WHERE i.run_id = ?"
+    )
     params: list = [run_id]
     if status:
-        query += " AND status = ?"
+        query += " AND i.status = ?"
         params.append(status)
     if needs_review is not None:
-        query += " AND needs_review = ?"
+        query += " AND i.needs_review = ?"
         params.append(1 if needs_review else 0)
-    query += " ORDER BY id ASC"
+    query += " ORDER BY i.id ASC"
     rows = fetch_all(query, tuple(params))
     return [_item_from_row(r, include_full_scores=include_scores) for r in rows]
 
@@ -2923,11 +3023,28 @@ def _resolve_item_assignment(
     return tag, None
 
 
+_MIGRATED_BY_MIGRATE_ONLY = (
+    "Items become migrated only through the migrate action, which records where the file went."
+)
+
+
 @router.patch("/items/{item_id}", response_model=ClassifiedItem)
 def update_item(item_id: int, payload: UpdateItemRequest) -> ClassifiedItem:
+    if payload.status == "migrated":
+        raise HTTPException(status_code=400, detail=_MIGRATED_BY_MIGRATE_ONLY)
     row = fetch_one("SELECT * FROM items WHERE id = ?", (item_id,))
     if not row:
         raise HTTPException(status_code=404, detail="Item not found")
+    if row["status"] == "migrated":
+        # Re-approving a migrated item would copy it a second time on the next
+        # migrate, and retagging it would point the row away from the real file.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Item is already migrated to {row.get('migrated_to') or 'its destination'}; "
+                "its status and final tag can no longer change."
+            ),
+        )
     run = fetch_one("SELECT categories_root FROM runs WHERE id = ?", (row["run_id"],))
     categories_root = Path(run["categories_root"]) if run and run.get("categories_root") else None
     new_status = payload.status if payload.status is not None else row["status"]
@@ -2992,7 +3109,7 @@ def update_item(item_id: int, payload: UpdateItemRequest) -> ClassifiedItem:
             item_id,
         ),
     )
-    updated = fetch_one("SELECT * FROM items WHERE id = ?", (item_id,))
+    updated = _fetch_item_for_response(item_id)
     return _item_from_row(updated)
 
 
@@ -3005,6 +3122,25 @@ def get_item_scores(item_id: int) -> dict:
         "item_id": row["id"],
         "full_scores": from_json(row.get("full_scores_json") or "{}", default={}),
     }
+
+
+def _jpeg_still_response(jpeg: bytes, source: Path) -> Response:
+    # Header values must be latin-1; non-ASCII names (common in media dumps)
+    # use the RFC 5987 form, as Starlette's FileResponse does.
+    filename = f"{source.stem}_thumb.jpg"
+    quoted = quote(filename)
+    if quoted == filename:
+        disposition = f'inline; filename="{filename}"'
+    else:
+        disposition = f"inline; filename*=utf-8''{quoted}"
+    return Response(
+        content=jpeg,
+        media_type="image/jpeg",
+        headers={
+            "Content-Disposition": disposition,
+            "Cache-Control": "private, max-age=86400",
+        },
+    )
 
 
 @router.get("/items/{item_id}/preview", response_model=None)
@@ -3037,7 +3173,16 @@ def get_item_preview(
     suffix = image_path.suffix.lower()
     media_type = SUPPORTED_PREVIEW_SUFFIXES.get(suffix)
     if not media_type:
-        raise HTTPException(status_code=415, detail="Unsupported media type for preview")
+        # The scan also accepts .tiff and extensionless files Pillow can decode.
+        # Browsers cannot render TIFF and need a content type for the rest, so
+        # serve those as a JPEG still; anything Pillow cannot read stays 415.
+        try:
+            jpeg = media_preview_still_jpeg(image_path)
+        except Exception as err:
+            raise HTTPException(
+                status_code=415, detail="Unsupported media type for preview"
+            ) from err
+        return _jpeg_still_response(jpeg, image_path)
 
     # Table thumbs must stay tiny: full MP4/GIF as media elements collapses under
     # parallel loads. Default to a cached JPEG still; ?raw=1 keeps original bytes.
@@ -3056,14 +3201,7 @@ def get_item_preview(
             raise HTTPException(
                 status_code=500, detail=f"Unable to build media thumbnail: {err}"
             ) from err
-        return Response(
-            content=jpeg,
-            media_type="image/jpeg",
-            headers={
-                "Content-Disposition": f'inline; filename="{image_path.stem}_thumb.jpg"',
-                "Cache-Control": "private, max-age=86400",
-            },
-        )
+        return _jpeg_still_response(jpeg, image_path)
 
     # Must be inline so <img>/<video> can render; "attachment" + filename makes
     # browsers refuse to display the bytes in media elements.
@@ -3077,6 +3215,8 @@ def get_item_preview(
 
 @router.post("/runs/{run_id}/batch")
 def batch_update(run_id: int, payload: BatchUpdateRequest) -> dict:
+    if payload.status == "migrated":
+        raise HTTPException(status_code=400, detail=_MIGRATED_BY_MIGRATE_ONLY)
     if not payload.item_ids:
         return {"updated": 0, "skipped": 0}
     run = fetch_one("SELECT categories_root FROM runs WHERE id = ?", (run_id,))
@@ -3085,7 +3225,7 @@ def batch_update(run_id: int, payload: BatchUpdateRequest) -> dict:
     skipped = 0
     for item_id in payload.item_ids:
         row = fetch_one("SELECT * FROM items WHERE id = ? AND run_id = ?", (item_id, run_id))
-        if not row:
+        if not row or row["status"] == "migrated":
             skipped += 1
             continue
         new_status = payload.status if payload.status is not None else row["status"]
