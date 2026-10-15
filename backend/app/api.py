@@ -2482,9 +2482,7 @@ def get_providers() -> dict[str, object]:
     return info
 
 
-@router.post("/models/unload", response_model=UnloadModelsResponse)
-def unload_models() -> UnloadModelsResponse:
-    """Drop resident tagger / VLM sessions so GPU VRAM can be reclaimed."""
+def _reject_if_run_active(action: str) -> None:
     active = fetch_one(
         """
         SELECT id FROM runs
@@ -2497,10 +2495,16 @@ def unload_models() -> UnloadModelsResponse:
         raise HTTPException(
             status_code=409,
             detail=(
-                f"Cannot unload models while run {active['id']} is still "
-                "pending or running. Cancel it first."
+                f"Cannot {action} while run {active['id']} is still pending or running. "
+                "Wait for it to finish or cancel it first."
             ),
         )
+
+
+@router.post("/models/unload", response_model=UnloadModelsResponse)
+def unload_models() -> UnloadModelsResponse:
+    """Drop resident tagger / VLM sessions so GPU VRAM can be reclaimed."""
+    _reject_if_run_active("unload models")
     from .inference_engine import peek_loaded_models, release_cuda_caches, reset_engine
     from .real_life_engine import reset_real_life_engine
 
@@ -2546,6 +2550,7 @@ def get_real_life_status() -> dict[str, object]:
 @router.post("/runs/start", response_model=StartRunResponse)
 def start_run(payload: StartRunRequest) -> StartRunResponse:
     logger.info("run_start_requested mode=%s", payload.run_mode)
+    _reject_if_run_active("start a new run")
     current = _settings_from_db()
     _apply_runtime_inference_env(current)
     resolved = resolve_settings(
@@ -2868,6 +2873,7 @@ def reclassify_run(run_id: int, payload: ReclassifyRequest) -> ReclassifyRespons
     # runs may still be cancelled with proposed items left to retry.
     if status not in {"completed", "failed", "cancelled"}:
         raise HTTPException(status_code=400, detail=f"Run status '{status}' cannot be reclassified.")
+    _reject_if_run_active("reclassify")
 
     eligible = _eligible_reclassify_rows(run_id, payload.item_ids)
     if not eligible:

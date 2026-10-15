@@ -269,6 +269,10 @@ function App() {
   const runActive = Boolean(
     runStatus && ["pending", "running"].includes(runStatus.status)
   );
+  const otherActiveRun = runs.find(
+    (run) => run.run_id !== runId && ["pending", "running"].includes(run.status)
+  );
+  const anyRunActive = runActive || Boolean(otherActiveRun);
 
   async function refreshRuns() {
     try {
@@ -591,6 +595,12 @@ function App() {
     return () => stopStatusPolling();
   }, [runId]);
 
+  useEffect(() => {
+    if (!otherActiveRun) return;
+    const timer = setInterval(refreshRuns, STATUS_POLL_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [otherActiveRun?.run_id]);
+
   function openRun(nextRunId) {
     if (!nextRunId || nextRunId === runId) return;
     // Retire the old run's in-flight poll before React re-renders.
@@ -894,7 +904,7 @@ function App() {
   }
 
   async function handleUnloadModels() {
-    if (runActive || opsLoading.unloadingModels) return;
+    if (anyRunActive || opsLoading.unloadingModels) return;
     setOpsLoading((prev) => ({ ...prev, unloadingModels: true }));
     setError("");
     try {
@@ -915,7 +925,7 @@ function App() {
   }, [runStatus?.tagger_model, settings.tagger_model]);
 
   async function handleReclassifyNeedsReview() {
-    if (!runId || runActive) return;
+    if (!runId || anyRunActive) return;
     setOpsLoading((prev) => ({ ...prev, reclassifying: true }));
     setError("");
     try {
@@ -1109,11 +1119,11 @@ function App() {
             <button
               type="button"
               className="unload-models-btn"
-              disabled={runActive || opsLoading.unloadingModels}
+              disabled={anyRunActive || opsLoading.unloadingModels}
               onClick={handleUnloadModels}
               title={
-                runActive
-                  ? "Cancel the current run before unloading GPU models"
+                anyRunActive
+                  ? "Cancel the active run before unloading GPU models"
                   : "Drop cached tagger sessions to free GPU memory"
               }
             >
@@ -1581,7 +1591,7 @@ function App() {
         <div className="actions run-actions">
           <button
             type="button"
-            disabled={loading || opsLoading.startingRun || runActive}
+            disabled={loading || opsLoading.startingRun || anyRunActive}
             onClick={() => handleStartRun("classify")}
           >
             {opsLoading.startingRun
@@ -1597,7 +1607,7 @@ function App() {
             disabled={
               loading ||
               opsLoading.startingRun ||
-              runActive ||
+              anyRunActive ||
               settings.tagging_domain === "real_life"
             }
             onClick={() => handleStartRun("real_life_filter")}
@@ -1611,7 +1621,7 @@ function App() {
             disabled={
               loading ||
               opsLoading.startingRun ||
-              runActive ||
+              anyRunActive ||
               settings.tagging_domain === "real_life"
             }
             onClick={() => handleStartRun("doujin_works")}
@@ -1619,6 +1629,19 @@ function App() {
             {opsLoading.startingRun ? "Starting…" : "Start Doujin works"}
           </button>
         </div>
+        {otherActiveRun && (
+          <p className="help run-blocked" role="status">
+            Run #{otherActiveRun.run_id} is still {otherActiveRun.status}. Wait for it to
+            finish or cancel it before starting another run.{" "}
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => openRun(otherActiveRun.run_id)}
+            >
+              Open run #{otherActiveRun.run_id}
+            </button>
+          </p>
+        )}
         <p className="help">
           {settings.tagging_domain === "real_life" ? (
             <>
@@ -1772,7 +1795,9 @@ function App() {
                 </label>
                 <button
                   type="button"
-                  disabled={opsLoading.reclassifying || selectedTags.length === 0}
+                  disabled={
+                    opsLoading.reclassifying || selectedTags.length === 0 || anyRunActive
+                  }
                   onClick={handleReclassifyNeedsReview}
                   aria-label="Reclassify needs review items"
                 >

@@ -802,3 +802,11 @@ tr.row-rejected td {
   padding-top: 12px;
   border-top: 1px solid var(--line);
 }
+
+.run-blocked {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
