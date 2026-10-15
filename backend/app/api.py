@@ -2677,25 +2677,35 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
 
     tagging_domain = "real_life" if real_life_tag else "drawn"
     try:
-        run_id = execute(
-            """
-            INSERT INTO runs (
-                root_repo, categories_root, confidence_threshold, status,
-                total_images, processed_images, failed_images, cancel_requested,
-                tagger_model, tagging_domain
-            ) VALUES (?, ?, ?, 'pending', 0, 0, 0, 0, ?, ?)
-            """,
-            (
-                str(root_repo),
-                str(categories_root),
-                resolved.confidence_threshold,
-                tagger_model,
-                tagging_domain,
-            ),
-        )
+        with transaction() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO runs (
+                    root_repo, categories_root, confidence_threshold, status,
+                    total_images, processed_images, failed_images, cancel_requested,
+                    tagger_model, tagging_domain
+                )
+                SELECT ?, ?, ?, 'pending', 0, 0, 0, 0, ?, ?
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM runs WHERE status IN ('pending', 'running')
+                )
+                """,
+                (
+                    str(root_repo),
+                    str(categories_root),
+                    resolved.confidence_threshold,
+                    tagger_model,
+                    tagging_domain,
+                ),
+            )
+            inserted = cur.rowcount == 1
+            run_id = cur.lastrowid
     except Exception:
         logger.exception("failed to create run row")
         raise HTTPException(status_code=500, detail="Failed to queue run")
+    if not inserted:
+        _reject_if_run_active("start a new run")
+        raise HTTPException(status_code=409, detail="Another run became active. Try again.")
 
     if doujin_works:
         worker = threading.Thread(
@@ -2918,20 +2928,24 @@ def reclassify_run(run_id: int, payload: ReclassifyRequest) -> ReclassifyRespons
         raise HTTPException(status_code=500, detail="Failed to prepare reclassify")
 
     # Claim the run before spawning the worker so a second reclassify cannot race in.
-    execute(
-        """
-        UPDATE runs
-        SET status = 'running',
-            last_error = NULL,
-            cancel_requested = 0,
-            finished_at = NULL,
-            tagger_model = ?
-        WHERE id = ? AND status IN ('completed', 'failed', 'cancelled')
-        """,
-        (payload.tagger_model, run_id),
-    )
-    claimed = fetch_one("SELECT status FROM runs WHERE id = ?", (run_id,))
-    if not claimed or claimed.get("status") != "running":
+    with transaction() as conn:
+        claimed = conn.execute(
+            """
+            UPDATE runs
+            SET status = 'running',
+                last_error = NULL,
+                cancel_requested = 0,
+                finished_at = NULL,
+                tagger_model = ?
+            WHERE id = ? AND status IN ('completed', 'failed', 'cancelled')
+              AND NOT EXISTS (
+                  SELECT 1 FROM runs WHERE status IN ('pending', 'running')
+              )
+            """,
+            (payload.tagger_model, run_id),
+        ).rowcount
+    if not claimed:
+        _reject_if_run_active("reclassify")
         raise HTTPException(
             status_code=400,
             detail="Cannot reclassify while a run is still pending or running.",

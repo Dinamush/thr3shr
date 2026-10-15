@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -84,3 +86,26 @@ def test_startup_fails_runs_orphaned_by_a_previous_backend(monkeypatch, tmp_path
         allowed = client.post("/api/runs/start", json=body)
         assert allowed.status_code == 200
         assert allowed.json()["run_id"] != orphan_id
+
+
+def test_overlapping_starts_create_exactly_one_run(monkeypatch, tmp_path: Path):
+    body = _start_body(monkeypatch, tmp_path)
+    both_past_early_check = threading.Barrier(2, timeout=10)
+    mapping = FolderMapping(
+        folder_name="1girl", normalized_name="1girl", matched_tag="1girl", matched=True
+    )
+
+    def discover_after_both_checked(*_a, **_k):
+        both_past_early_check.wait()
+        return [mapping]
+
+    monkeypatch.setattr("app.api.discover_tag_folders", discover_after_both_checked)
+    monkeypatch.setattr("app.api._execute_run", lambda **_k: None)
+
+    with TestClient(app) as client:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            responses = list(
+                pool.map(lambda _: client.post("/api/runs/start", json=body), range(2))
+            )
+        assert sorted(r.status_code for r in responses) == [200, 409]
+        assert len(client.get("/api/runs").json()) == 1
