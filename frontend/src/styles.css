@@ -271,6 +271,13 @@ button:disabled {
   cursor: not-allowed;
 }
 
+input:disabled,
+select:disabled {
+  background: var(--surface-2);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
 button.secondary {
   background: #e8edf7;
   color: var(--ink);
@@ -663,4 +670,80 @@ th {
     flex-direction: column;
     align-items: stretch;
   }
+}
+
+.review-table {
+  min-width: 980px;
+}
+
+.select-col {
+  width: 44px;
+  text-align: center;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.status-badge.status-proposed {
+  background: var(--warn-bg);
+  border-color: #f0d49c;
+  color: var(--warn);
+}
+
+.status-badge.status-reviewed {
+  background: #eef2ff;
+  border-color: #c7d2fe;
+  color: #3730a3;
+}
+
+.status-badge.status-approved {
+  background: #e8f6ec;
+  border-color: #b7dfc3;
+  color: var(--ok);
+}
+
+.status-badge.status-rejected {
+  background: var(--danger-bg);
+  border-color: #f5b7b7;
+  color: var(--danger);
+}
+
+.status-badge.status-migrated {
+  background: var(--accent-soft);
+  border-color: #b7c6e3;
+  color: var(--accent);
+}
+
+.migrated-path {
+  min-width: 120px;
+  max-width: 180px;
+  overflow-wrap: anywhere;
+}
+
+tr.row-migrated td {
+  background: var(--surface-2);
+}
+
+tr.row-rejected td {
+  color: var(--muted);
+}
+
+.final-tag-input {
+  width: 100%;
+  min-width: 140px;
+}
+
+.row-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }

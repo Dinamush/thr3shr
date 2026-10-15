@@ -60,6 +60,26 @@ function persistMockState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(mockState));
 }
 
+// FastAPI validation errors (422) carry a list of {loc, msg}; show them as
+// "field: message" instead of "[object Object]".
+function formatErrorDetail(detail) {
+  if (!detail) return "";
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") return String(entry);
+        const field = Array.isArray(entry.loc)
+          ? entry.loc.filter((part) => part !== "body").join(".")
+          : "";
+        return field ? `${field}: ${entry.msg}` : String(entry.msg || "");
+      })
+      .filter(Boolean)
+      .join("; ");
+  }
+  return typeof detail === "object" ? JSON.stringify(detail) : String(detail);
+}
+
 async function jsonRequest(path, options = {}) {
   const controller = new AbortController();
   const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : REQUEST_TIMEOUT_MS;
@@ -81,7 +101,9 @@ async function jsonRequest(path, options = {}) {
     })() : null;
     if (!response.ok) {
       const detail =
-        (maybeJson && (maybeJson.detail || maybeJson.message)) || text || "Request failed";
+        formatErrorDetail(maybeJson && (maybeJson.detail || maybeJson.message)) ||
+        text ||
+        "Request failed";
       const error = new Error(`HTTP ${response.status} ${response.statusText}: ${detail}`);
       // Callers branch on the status (e.g. a deleted run returns 404).
       error.status = response.status;

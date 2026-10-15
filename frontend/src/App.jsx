@@ -186,19 +186,19 @@ function App() {
   const [scoreDebugByItem, setScoreDebugByItem] = useState({});
   const [scoreLoadingByItem, setScoreLoadingByItem] = useState({});
   const [finalTagDrafts, setFinalTagDrafts] = useState({});
+  const [pendingItemIds, setPendingItemIds] = useState({});
   const [scanPreview, setScanPreview] = useState(null);
   const [scanPreviewLoading, setScanPreviewLoading] = useState(false);
   const [opsLoading, setOpsLoading] = useState({
     saving: false,
     startingRun: false,
-    updatingStatus: false,
     applyingBatch: false,
     migrating: false,
     reclassifying: false,
     unloadingModels: false,
   });
   const [reclassifyModel, setReclassifyModel] = useState("wd_swinv2_v3");
-  const finalTagTimersRef = useRef({});
+  const itemUpdateQueueRef = useRef({});
   const pollTimerRef = useRef(null);
   // Bumped whenever polling stops or switches runs; stale responses check it.
   const pollGenerationRef = useRef(0);
@@ -354,11 +354,7 @@ function App() {
   }, [settings.tagging_domain, offlineMode]);
 
   useEffect(() => {
-    return () => {
-      Object.values(finalTagTimersRef.current).forEach((timerId) => clearTimeout(timerId));
-      finalTagTimersRef.current = {};
-      stopStatusPolling();
-    };
+    return () => stopStatusPolling();
   }, []);
 
   const stats = useMemo(() => {
@@ -409,6 +405,24 @@ function App() {
   }
 
   // Returns whether polling should continue for this run.
+  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const selectableIds = useMemo(
+    () => items.filter((item) => item.status !== "migrated").map((item) => item.id),
+    [items]
+  );
+  const allSelectableSelected =
+    selectableIds.length > 0 && selectableIds.every((id) => selectedIdSet.has(id));
+  const someSelectableSelected = selectableIds.some((id) => selectedIdSet.has(id));
+
+  // Rows that just migrated (or left the list) drop out of the selection.
+  useEffect(() => {
+    const allowed = new Set(selectableIds);
+    setSelectedIds((prev) => {
+      const next = prev.filter((id) => allowed.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [selectableIds]);
+
   async function pollRunStatus(currentRunId, generation) {
     const isStale = () =>
       generation !== pollGenerationRef.current || viewedRunIdRef.current !== currentRunId;
@@ -630,56 +644,94 @@ function App() {
     }
   }
 
+  // Updates to one item run in order: blurring the Final tag field commits the
+  // tag just before the Approve click lands, and the approve must not race it.
+  function enqueueItemUpdate(itemId, payload) {
+    const previous = itemUpdateQueueRef.current[itemId] || Promise.resolve();
+    const next = previous
+      .catch(() => {})
+      .then(() => api.updateItem(itemId, payload));
+    itemUpdateQueueRef.current[itemId] = next;
+    return next;
+  }
+
   async function updateStatus(itemId, status) {
-    setOpsLoading((prev) => ({ ...prev, updatingStatus: true }));
+    setPendingItemIds((prev) => ({ ...prev, [itemId]: true }));
     setError("");
     try {
-      await api.updateItem(itemId, { status });
+      await enqueueItemUpdate(itemId, { status });
       await refreshItems(runId);
     } catch (err) {
       console.error("updateStatus failed", err);
       setError(`Failed to update status: ${err.message}`);
     } finally {
-      setOpsLoading((prev) => ({ ...prev, updatingStatus: false }));
+      setPendingItemIds((prev) => {
+        const { [itemId]: _done, ...rest } = prev;
+        return rest;
+      });
     }
   }
 
-  function queueFinalTagUpdate(itemId, finalTag) {
-    setFinalTagDrafts((prev) => ({ ...prev, [itemId]: finalTag }));
-    if (finalTagTimersRef.current[itemId]) {
-      clearTimeout(finalTagTimersRef.current[itemId]);
+  function setFinalTagDraft(itemId, value) {
+    setFinalTagDrafts((prev) => ({ ...prev, [itemId]: value }));
+  }
+
+  function dropFinalTagDraft(itemId) {
+    setFinalTagDrafts((prev) => {
+      const { [itemId]: _dropped, ...rest } = prev;
+      return rest;
+    });
+  }
+
+  // Commit on blur / Enter rather than per keystroke: a pause mid-word used to
+  // save (and approve into) a partial folder name such as "scen".
+  async function commitFinalTag(item) {
+    const draft = finalTagDrafts[item.id];
+    if (draft === undefined) return;
+    const nextTag = draft.trim();
+    if (!nextTag || nextTag === (item.final_tag || "")) {
+      dropFinalTagDraft(item.id);
+      return;
     }
-    finalTagTimersRef.current[itemId] = setTimeout(async () => {
-      setError("");
-      try {
-        await api.updateItem(itemId, { final_tag: finalTag, status: "reviewed" });
-        await refreshItems(runId);
-      } catch (err) {
-        console.error("queueFinalTagUpdate failed", err);
-        setError(`Failed to update final tag: ${err.message}`);
-      }
-    }, 350);
+    // Retagging keeps an approved item approved (now aimed at the new folder);
+    // only untouched proposals move to reviewed.
+    const payload = { final_tag: nextTag };
+    if (item.status === "proposed") payload.status = "reviewed";
+    setError("");
+    try {
+      await enqueueItemUpdate(item.id, payload);
+      await refreshItems(runId);
+      dropFinalTagDraft(item.id);
+    } catch (err) {
+      console.error("commitFinalTag failed", err);
+      setError(`Failed to update final tag: ${err.message}`);
+    }
   }
 
   async function applyBatch(status) {
     if (selectedIds.length === 0) return;
     if (status === "rejected") {
       const confirmed = window.confirm(
-        "Reject selected items? They stay on disk and are skipped by migrate/reclassify."
+        `Reject ${selectedIds.length} selected item(s)? They stay on disk and are skipped by migrate/reclassify.`
       );
       if (!confirmed) return;
     }
     setOpsLoading((prev) => ({ ...prev, applyingBatch: true }));
     setError("");
+    setNotice("");
     try {
       const result = await api.batchUpdate(runId, { item_ids: selectedIds, status });
       setSelectedIds([]);
-      setNotice(
-        result.skipped > 0
-          ? `Updated ${result.updated} item(s); skipped ${result.skipped} (already migrated, missing destination, or sensitive tag needing explicit confirmation).`
-          : ""
-      );
       await refreshItems(runId);
+      const skipped = Number(result?.skipped || 0);
+      if (skipped > 0) {
+        setNotice(
+          `${Number(result?.updated || 0)} item(s) ${status}; ${skipped} skipped ` +
+            (status === "approved"
+              ? "(already migrated, no destination tag yet, or a sensitive tag that has to be typed as the Final tag first)."
+              : "(already migrated).")
+        );
+      }
     } catch (err) {
       console.error("applyBatch failed", err);
       setError(`Batch update failed: ${err.message}`);
@@ -689,18 +741,14 @@ function App() {
   }
 
   async function migrateApproved() {
-    setLoading(true);
-    setOpsLoading((prev) => ({ ...prev, migrating: true }));
     setError("");
     setNotice("");
     const confirmed = window.confirm(
-      `Migrate approved items using ${migrateMode}? This can move/copy many files.`
+      `Migrate ${stats.approved} approved item(s) using ${migrateMode}? This can move/copy many files.`
     );
-    if (!confirmed) {
-      setLoading(false);
-      setOpsLoading((prev) => ({ ...prev, migrating: false }));
-      return;
-    }
+    if (!confirmed) return;
+    setLoading(true);
+    setOpsLoading((prev) => ({ ...prev, migrating: true }));
     try {
       const result = await api.migrateRun(runId, {
         mode: migrateMode,
@@ -1620,7 +1668,7 @@ function App() {
             ["completed", "failed", "cancelled"].includes(runStatus.status) && (
               <div className="actions reclassify-banner" role="region" aria-label="Reclassify needs review">
                 <span>
-                  {stats.reviewNeeded} item{stats.reviewNeeded === 1 ? "" : "s"} need review — retry with
+                  {stats.reviewNeeded} item{stats.reviewNeeded === 1 ? " needs" : "s need"} review — retry with
                   another model (approved/rejected/migrated stay untouched). SwinV2 is much faster than
                   EVA02.
                 </span>
@@ -1673,32 +1721,62 @@ function App() {
           <div className="actions">
             <button
               type="button"
-              disabled={opsLoading.applyingBatch}
+              disabled={opsLoading.applyingBatch || selectedIds.length === 0}
               onClick={() => applyBatch("approved")}
             >
-              Approve selected
+              Approve selected{selectedIds.length ? ` (${selectedIds.length})` : ""}
             </button>
             <button
               type="button"
               className="secondary"
-              disabled={opsLoading.applyingBatch}
+              disabled={opsLoading.applyingBatch || selectedIds.length === 0}
               onClick={() => applyBatch("rejected")}
             >
-              Reject selected
+              Reject selected{selectedIds.length ? ` (${selectedIds.length})` : ""}
             </button>
-            <select value={migrateMode} onChange={(e) => setMigrateMode(e.target.value)}>
-              <option value="copy">copy</option>
-              <option value="move">move</option>
-            </select>
-            <button type="button" disabled={opsLoading.migrating} onClick={migrateApproved}>
-              {opsLoading.migrating ? "Migrating…" : "Migrate approved"}
+            <label className="migrate-mode">
+              <span className="sr-only">Migrate mode</span>
+              <select
+                value={migrateMode}
+                onChange={(e) => setMigrateMode(e.target.value)}
+                disabled={opsLoading.migrating}
+              >
+                <option value="copy">copy</option>
+                <option value="move">move</option>
+              </select>
+            </label>
+            <button
+              type="button"
+              disabled={opsLoading.migrating || runActive || stats.approved === 0}
+              title={
+                runActive
+                  ? "Wait for the run to finish (or cancel it) before migrating"
+                  : stats.approved === 0
+                    ? "Approve items first"
+                    : undefined
+              }
+              onClick={migrateApproved}
+            >
+              {opsLoading.migrating ? "Migrating…" : `Migrate approved (${stats.approved})`}
             </button>
           </div>
 
-          <table>
+          <div className="table-wrap">
+          <table className="review-table">
             <thead>
               <tr>
-                <th>Select</th>
+                <th scope="col" className="select-col">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all items that are not migrated yet"
+                    checked={allSelectableSelected}
+                    ref={(el) => {
+                      if (el) el.indeterminate = someSelectableSelected && !allSelectableSelected;
+                    }}
+                    disabled={selectableIds.length === 0}
+                    onChange={(e) => setSelectedIds(e.target.checked ? selectableIds : [])}
+                  />
+                </th>
                 <th>Work / media</th>
                 <th>Primary</th>
                 <th>Category tags</th>
@@ -1710,18 +1788,35 @@ function App() {
               </tr>
             </thead>
             <tbody>
-              {items.map((item) => (
-                <tr key={item.id} className={item.needs_review ? "needs-review" : ""}>
-                  <td>
+              {items.map((item) => {
+                const isMigrated = item.status === "migrated";
+                const rowBusy = Boolean(pendingItemIds[item.id]);
+                const itemLabel = item.relative_path || item.file_path;
+                return (
+                <tr
+                  key={item.id}
+                  className={[
+                    item.needs_review ? "needs-review" : "",
+                    `row-${item.status}`,
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                >
+                  <td className="select-col">
                     <input
                       type="checkbox"
-                      checked={selectedIds.includes(item.id)}
+                      aria-label={`Select ${itemLabel}`}
+                      checked={selectedIdSet.has(item.id)}
+                      disabled={isMigrated}
                       onChange={(e) => {
-                        if (e.target.checked) {
-                          setSelectedIds([...selectedIds, item.id]);
-                        } else {
-                          setSelectedIds(selectedIds.filter((id) => id !== item.id));
-                        }
+                        const { checked } = e.target;
+                        setSelectedIds((prev) =>
+                          checked
+                            ? prev.includes(item.id)
+                              ? prev
+                              : [...prev, item.id]
+                            : prev.filter((id) => id !== item.id)
+                        );
                       }}
                     />
                   </td>
@@ -1804,16 +1899,42 @@ function App() {
                           ))}
                     </div>
                   </td>
-                  <td>{item.status}</td>
+                  <td>
+                    <span className={`status-badge status-${item.status}`}>{item.status}</span>
+                    {isMigrated && item.migrated_to ? (
+                      <div className="help migrated-path" title={item.migrated_to}>
+                        {"→\u00a0"}
+                        {pathTail(item.migrated_to)}
+                      </div>
+                    ) : null}
+                  </td>
                   <td>
                     <input
+                      className="final-tag-input"
+                      aria-label={`Final tag for ${itemLabel}`}
+                      list="final-tag-options"
                       value={finalTagDrafts[item.id] ?? (item.final_tag || "")}
-                      disabled={item.status === "migrated"}
-                      onChange={(e) => queueFinalTagUpdate(item.id, e.target.value)}
+                      placeholder={isMigrated ? "" : "Destination tag"}
+                      disabled={isMigrated}
+                      onChange={(e) => setFinalTagDraft(item.id, e.target.value)}
+                      onBlur={() => commitFinalTag(item)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          e.currentTarget.blur();
+                        } else if (e.key === "Escape") {
+                          dropFinalTagDraft(item.id);
+                        }
+                      }}
                     />
                   </td>
                   <td>
-                    <button type="button" className="secondary" onClick={() => toggleScoreDebug(item.id)}>
+                    <button
+                      type="button"
+                      className="secondary"
+                      aria-expanded={Boolean(expandedScoreRows[item.id])}
+                      onClick={() => toggleScoreDebug(item.id)}
+                    >
                       {expandedScoreRows[item.id] ? "Hide JSON" : "Show JSON"}
                     </button>
                     {expandedScoreRows[item.id] && (
@@ -1825,37 +1946,47 @@ function App() {
                     )}
                   </td>
                   <td>
-                    <div className="actions">
-                      <button
-                        type="button"
-                        disabled={opsLoading.updatingStatus || item.status === "migrated"}
-                        onClick={() => updateStatus(item.id, "approved")}
-                      >
-                        Approve
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary"
-                        disabled={opsLoading.updatingStatus || item.status === "migrated"}
-                        onClick={() => updateStatus(item.id, "rejected")}
-                      >
-                        Reject
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary"
-                        disabled={opsLoading.updatingStatus || item.status === "migrated"}
-                        onClick={() => updateStatus(item.id, "reviewed")}
-                      >
-                        Reviewed
-                      </button>
-                    </div>
+                    {isMigrated ? (
+                      <span className="muted">Done</span>
+                    ) : (
+                      <div className="row-actions">
+                        <button
+                          type="button"
+                          disabled={rowBusy || item.status === "approved"}
+                          onClick={() => updateStatus(item.id, "approved")}
+                        >
+                          Approve
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary"
+                          disabled={rowBusy || item.status === "rejected"}
+                          onClick={() => updateStatus(item.id, "rejected")}
+                        >
+                          Reject
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary"
+                          disabled={rowBusy || item.status === "reviewed"}
+                          onClick={() => updateStatus(item.id, "reviewed")}
+                        >
+                          Reviewed
+                        </button>
+                      </div>
+                    )}
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
-          {runMeta && <pre className="debug-json">{JSON.stringify(runMeta.counts, null, 2)}</pre>}
+          </div>
+          <datalist id="final-tag-options">
+            {selectedTags.map((tag) => (
+              <option key={tag} value={tag} />
+            ))}
+          </datalist>
         </section>
       )}
 
