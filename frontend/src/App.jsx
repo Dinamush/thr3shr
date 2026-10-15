@@ -98,6 +98,10 @@ function settingsSnapshot(settings, selectedTags) {
   });
 }
 
+function sameList(a, b) {
+  return a.length === b.length && a.every((value, idx) => value === b[idx]);
+}
+
 function formatTagScore(entry) {
   if (!entry) return "";
   return `${entry.tag} (${Number(entry.score).toFixed(3)})`;
@@ -122,6 +126,44 @@ function formatEtaFinishAt(iso) {
     minute: "2-digit",
     second: "2-digit",
   });
+}
+
+// Number input that can be cleared and retyped. The text the user types is
+// kept as a draft; valid in-range values commit as they are typed (so the
+// unsaved-changes bar reacts), and on blur an empty or out-of-range draft is
+// clamped or reverted instead of being coerced to 0 mid-edit.
+function NumberField({ value, onCommit, min, max, step = 1, integer = false, ...inputProps }) {
+  const [draft, setDraft] = useState(null);
+  const normalize = (raw) => {
+    const parsed = Number(raw);
+    if (String(raw).trim() === "" || !Number.isFinite(parsed)) return null;
+    return integer ? Math.round(parsed) : parsed;
+  };
+  return (
+    <input
+      {...inputProps}
+      type="number"
+      min={min}
+      max={max}
+      step={step}
+      value={draft ?? String(value ?? "")}
+      onChange={(e) => {
+        const text = e.target.value;
+        setDraft(text);
+        const next = normalize(text);
+        if (next !== null && next >= min && next <= max && next !== value) onCommit(next);
+      }}
+      onBlur={() => {
+        if (draft === null) return;
+        const next = normalize(draft);
+        if (next !== null) {
+          const clamped = Math.min(max, Math.max(min, next));
+          if (clamped !== value) onCommit(clamped);
+        }
+        setDraft(null);
+      }}
+    />
+  );
 }
 
 function readRoute() {
@@ -165,6 +207,7 @@ function App() {
     settingsSnapshot(DEFAULT_SETTINGS, [])
   );
   const [offlineMode, setOfflineMode] = useState(false);
+  const [backendBack, setBackendBack] = useState(false);
   const [runId, setRunId] = useState(null);
   const [runs, setRuns] = useState([]);
   const [runStatus, setRunStatus] = useState(null);
@@ -206,6 +249,9 @@ function App() {
   const lastItemsRefreshAtRef = useRef(0);
   const lastItemsProcessedRef = useRef(-1);
   const tagsHydratedRef = useRef(false);
+  const savedSettingsRef = useRef(null);
+  const selectedTagsRef = useRef(selectedTags);
+  selectedTagsRef.current = selectedTags;
   const skipNextTagPersistRef = useRef(false);
 
   useEffect(() => {
@@ -255,18 +301,25 @@ function App() {
     }
   }
 
+  // Record what the server now holds; the dirty check compares against it.
+  function rememberSavedSettings(saved, fallbackTags = []) {
+    const merged = { ...DEFAULT_SETTINGS, ...saved };
+    const tags = Array.isArray(saved?.selected_tags) ? saved.selected_tags : fallbackTags;
+    savedSettingsRef.current = { ...merged, selected_tags: tags };
+    setSavedSnapshot(settingsSnapshot(merged, tags));
+    return { merged, tags };
+  }
+
   useEffect(() => {
     api
       .getSettings()
       .then((data) => {
-        const merged = { ...DEFAULT_SETTINGS, ...data };
-        const tags = Array.isArray(data.selected_tags) ? data.selected_tags : [];
+        const { merged, tags } = rememberSavedSettings(data);
         setSettings(merged);
         skipNextTagPersistRef.current = true;
         setSelectedTags(tags);
         tagsHydratedRef.current = true;
         setMigrateMode(data.default_migrate_mode || "copy");
-        setSavedSnapshot(settingsSnapshot(merged, tags));
         setOfflineMode(api.isOfflineMode());
       })
       .catch((err) => setError(err.message));
@@ -290,25 +343,52 @@ function App() {
     }
     if (!Array.isArray(selectedTags)) return;
     const timer = setTimeout(() => {
-      const next = { ...settings, selected_tags: selectedTags };
-      setSettings(next);
+      // Save only the tag list, on top of what the server already has. Other
+      // fields may hold unsaved edits; they belong to the Save button, and a
+      // stale copy of them must not overwrite what the user is typing.
+      const sentTags = selectedTags;
       api
-        .saveSettings(next)
+        .saveSettings({
+          ...(savedSettingsRef.current || DEFAULT_SETTINGS),
+          selected_tags: sentTags,
+        })
         .then((saved) => {
-          const merged = { ...DEFAULT_SETTINGS, ...saved };
-          setSettings(merged);
-          setSavedSnapshot(
-            settingsSnapshot(merged, Array.isArray(saved.selected_tags) ? saved.selected_tags : selectedTags)
-          );
+          const { merged, tags } = rememberSavedSettings(saved, sentTags);
+          setSettings((prev) => ({
+            ...prev,
+            selected_tags: tags,
+            selected_tags_nsfw: merged.selected_tags_nsfw,
+          }));
+          // Adopt the server's canonical names unless the user changed the
+          // selection while this save was in flight.
+          if (selectedTagsRef.current === sentTags && !sameList(tags, sentTags)) {
+            skipNextTagPersistRef.current = true;
+            setSelectedTags(tags);
+          }
         })
         .catch(() => {
-          /* ignore transient save errors while typing */
+          /* ignore transient save errors while typing; the dirty bar stays up */
         });
     }, 400);
     return () => clearTimeout(timer);
-    // Intentionally depend on selectedTags only to avoid save loops from settings edits.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTags]);
+
+  // Demo mode sticks for the page's lifetime; watch for the backend returning
+  // so the user can reconnect instead of working on mock data unawares.
+  useEffect(() => {
+    if (!offlineMode) return undefined;
+    let cancelled = false;
+    const timer = setInterval(async () => {
+      if (await api.probeBackend()) {
+        if (!cancelled) setBackendBack(true);
+        clearInterval(timer);
+      }
+    }, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [offlineMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -532,19 +612,19 @@ function App() {
     setError("");
     try {
       const saved = await api.saveSettings({ ...settings, selected_tags: selectedTags });
-      const merged = { ...DEFAULT_SETTINGS, ...saved };
+      const { merged, tags } = rememberSavedSettings(saved, selectedTags);
       setSettings(merged);
-      const tags = Array.isArray(saved.selected_tags) ? saved.selected_tags : selectedTags;
-      if (Array.isArray(saved.selected_tags)) {
+      if (!sameList(tags, selectedTags)) {
         skipNextTagPersistRef.current = true;
-        setSelectedTags(saved.selected_tags);
+        setSelectedTags(tags);
       }
-      setSavedSnapshot(settingsSnapshot(merged, tags));
       setOfflineMode(api.isOfflineMode());
       const providers = await api.getProviders();
       setProviderInfo(providers);
+      return true;
     } catch (err) {
-      setError(err.message);
+      setError(`Failed to save settings: ${err.message}`);
+      return false;
     } finally {
       setLoading(false);
       setOpsLoading((prev) => ({ ...prev, saving: false }));
@@ -555,8 +635,9 @@ function App() {
     setScanPreviewLoading(true);
     setError("");
     try {
-      if (isDirty) {
-        await handleSaveSettings();
+      if (isDirty && !(await handleSaveSettings())) {
+        setScanPreview(null);
+        return;
       }
       const preview = await api.previewScan();
       setScanPreview(preview);
@@ -573,9 +654,8 @@ function App() {
     setOpsLoading((prev) => ({ ...prev, startingRun: true }));
     setError("");
     try {
-      if (isDirty) {
-        await handleSaveSettings();
-      }
+      // A failed save would otherwise start a run on the old settings.
+      if (isDirty && !(await handleSaveSettings())) return;
       const doujinFolders = [
         "loli",
         "shota",
@@ -885,64 +965,48 @@ function App() {
   async function setSfwClassifyMode(enabled) {
     if (settings.tagging_domain === "real_life") return;
     setError("");
-    skipNextTagPersistRef.current = true;
-    if (enabled) {
-      const parked = selectedTags.filter((t) => !SFW_CLASSIFY_FOLDERS.includes(t));
-      const nextTags = [...SFW_CLASSIFY_FOLDERS];
-      const next = {
-        ...settings,
-        sfw_classify_mode: true,
-        selected_tags: nextTags,
-        selected_tags_nsfw: parked.length ? parked : parkedNsfwTags,
-      };
-      setSelectedTags(nextTags);
-      setSettings(next);
-      try {
-        const saved = await api.saveSettings(next);
-        const merged = { ...DEFAULT_SETTINGS, ...saved };
-        setSettings(merged);
-        setSelectedTags(
-          Array.isArray(saved.selected_tags) ? saved.selected_tags : nextTags
-        );
-        setSavedSnapshot(
-          settingsSnapshot(
-            merged,
-            Array.isArray(saved.selected_tags) ? saved.selected_tags : nextTags
-          )
-        );
-      } catch (err) {
-        setError(`Failed to enable SFW mode: ${err.message}`);
-      }
-      return;
-    }
-
-    const restored =
-      parkedNsfwTags.length > 0
+    const unparked = selectedTags.filter((t) => !SFW_CLASSIFY_FOLDERS.includes(t));
+    const nextTags = enabled
+      ? [...SFW_CLASSIFY_FOLDERS]
+      : parkedNsfwTags.length > 0
         ? parkedNsfwTags
-        : selectedTags.filter((t) => !SFW_CLASSIFY_FOLDERS.includes(t));
-    const next = {
-      ...settings,
-      sfw_classify_mode: false,
-      selected_tags: restored,
-      selected_tags_nsfw: restored,
+        : unparked;
+    const change = {
+      sfw_classify_mode: enabled,
+      selected_tags: nextTags,
+      selected_tags_nsfw: enabled ? (unparked.length ? unparked : parkedNsfwTags) : nextTags,
     };
-    setSelectedTags(restored);
-    setSettings(next);
+    const previous = {
+      sfw_classify_mode: settings.sfw_classify_mode,
+      selected_tags: selectedTags,
+      selected_tags_nsfw: parkedNsfwTags,
+    };
+    skipNextTagPersistRef.current = true;
+    setSelectedTags(nextTags);
+    setSettings((prev) => ({ ...prev, ...change }));
     try {
-      const saved = await api.saveSettings(next);
-      const merged = { ...DEFAULT_SETTINGS, ...saved };
-      setSettings(merged);
-      setSelectedTags(
-        Array.isArray(saved.selected_tags) ? saved.selected_tags : restored
-      );
-      setSavedSnapshot(
-        settingsSnapshot(
-          merged,
-          Array.isArray(saved.selected_tags) ? saved.selected_tags : restored
-        )
-      );
+      // Save only the SFW fields on top of the saved settings; unrelated
+      // unsaved edits stay pending for the Save button.
+      const saved = await api.saveSettings({
+        ...(savedSettingsRef.current || DEFAULT_SETTINGS),
+        ...change,
+      });
+      const { merged, tags } = rememberSavedSettings(saved, nextTags);
+      setSettings((prev) => ({
+        ...prev,
+        sfw_classify_mode: merged.sfw_classify_mode,
+        selected_tags: tags,
+        selected_tags_nsfw: merged.selected_tags_nsfw,
+      }));
+      if (!sameList(tags, nextTags)) {
+        skipNextTagPersistRef.current = true;
+        setSelectedTags(tags);
+      }
     } catch (err) {
-      setError(`Failed to disable SFW mode: ${err.message}`);
+      skipNextTagPersistRef.current = true;
+      setSelectedTags(previous.selected_tags);
+      setSettings((prev) => ({ ...prev, ...previous }));
+      setError(`Failed to ${enabled ? "enable" : "disable"} SFW mode: ${err.message}`);
     }
   }
 
@@ -1060,8 +1124,23 @@ function App() {
       </header>
 
       {offlineMode && (
-        <div className="error">
-          Backend is offline. Running in browser-only demo mode with local mock data.
+        <div className={backendBack ? "notice offline-banner" : "error offline-banner"} role="status">
+          {backendBack ? (
+            <span>
+              The backend is reachable again. Reconnect to leave demo mode and load your real
+              settings and runs.
+            </span>
+          ) : (
+            <span>
+              Backend is offline. Running in browser-only demo mode with local mock data; nothing
+              here touches your files.
+            </span>
+          )}
+          {backendBack ? (
+            <button type="button" onClick={() => window.location.reload()}>
+              Reconnect
+            </button>
+          ) : null}
         </div>
       )}
       {providerInfo?.provider_error && !offlineMode && (
@@ -1125,10 +1204,12 @@ function App() {
               </button>
             </div>
             {scanPreview?.stats && (
-              <div className="scan-preview">
-                Eligible: {scanPreview.stats.eligible_images} · Total files:{" "}
+              <div className="scan-preview" role="status">
+                Eligible: <strong>{scanPreview.stats.eligible_images}</strong> · Total files:{" "}
                 {scanPreview.stats.total_files} · Ignored GIF: {scanPreview.stats.ignored_gif} ·
-                Unsupported: {scanPreview.stats.ignored_unsupported}
+                Unsupported: {scanPreview.stats.ignored_unsupported} · Unreadable:{" "}
+                {scanPreview.stats.failed_to_read}
+                {scanPreview.recursive ? "" : " · top folder only"}
               </div>
             )}
           </fieldset>
@@ -1159,14 +1240,13 @@ function App() {
             <div className="grid">
               <label>
                 Assignment confidence
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  max="1"
+                <NumberField
+                  step={0.01}
+                  min={0}
+                  max={1}
                   value={settings.confidence_threshold}
-                  onChange={(e) =>
-                    setSettings({ ...settings, confidence_threshold: Number(e.target.value) })
+                  onCommit={(next) =>
+                    setSettings((prev) => ({ ...prev, confidence_threshold: next }))
                   }
                 />
                 <span className="help">
@@ -1176,17 +1256,13 @@ function App() {
               {isWdModel && (
                 <label>
                   WD general threshold
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    max="1"
+                  <NumberField
+                    step={0.01}
+                    min={0}
+                    max={1}
                     value={settings.wd_general_threshold}
-                    onChange={(e) =>
-                      setSettings({
-                        ...settings,
-                        wd_general_threshold: Number(e.target.value),
-                      })
+                    onCommit={(next) =>
+                      setSettings((prev) => ({ ...prev, wd_general_threshold: next }))
                     }
                   />
                   <span className="help">
@@ -1202,38 +1278,26 @@ function App() {
             <div className="grid">
               <label>
                 Max inference workers
-                <input
-                  type="number"
-                  min="1"
-                  max="16"
+                <NumberField
+                  min={1}
+                  max={16}
+                  integer
                   value={settings.max_inference_workers ?? 2}
-                  onChange={(e) =>
-                    setSettings({
-                      ...settings,
-                      max_inference_workers: Math.max(
-                        1,
-                        Math.min(16, Number(e.target.value) || 1)
-                      ),
-                    })
+                  onCommit={(next) =>
+                    setSettings((prev) => ({ ...prev, max_inference_workers: next }))
                   }
                 />
                 <span className="help">Keep at 2 for GPU ORT sessions (serialized lock).</span>
               </label>
               <label>
                 Inference batch size
-                <input
-                  type="number"
-                  min="1"
-                  max="64"
+                <NumberField
+                  min={1}
+                  max={64}
+                  integer
                   value={settings.inference_batch_size ?? 8}
-                  onChange={(e) =>
-                    setSettings({
-                      ...settings,
-                      inference_batch_size: Math.max(
-                        1,
-                        Math.min(64, Number(e.target.value) || 8)
-                      ),
-                    })
+                  onCommit={(next) =>
+                    setSettings((prev) => ({ ...prev, inference_batch_size: next }))
                   }
                 />
                 <span className="help">
@@ -1244,125 +1308,136 @@ function App() {
                 <input
                   type="checkbox"
                   checked={Boolean(settings.force_cpu_inference)}
-                  onChange={(e) =>
-                    setSettings({ ...settings, force_cpu_inference: e.target.checked })
-                  }
+                  onChange={(e) => {
+                    const { checked } = e.target;
+                    setSettings((prev) => ({ ...prev, force_cpu_inference: checked }));
+                  }}
                 />
-                Force CPU inference
+                <span>Force CPU inference</span>
               </label>
+            </div>
+          </fieldset>
+
+          <fieldset className="settings-section">
+            <legend>Classification</legend>
+            <div className="check-list">
               <label className="inline-check">
                 <input
                   type="checkbox"
                   checked={Boolean(settings.experimental_media_enabled)}
-                  onChange={(e) =>
-                    setSettings({ ...settings, experimental_media_enabled: e.target.checked })
-                  }
+                  onChange={(e) => {
+                    const { checked } = e.target;
+                    setSettings((prev) => ({ ...prev, experimental_media_enabled: checked }));
+                  }}
                 />
-                Experimental: classify GIF/videos via length-scaled multi-frame sampling
+                <span>Experimental: classify GIF/videos via length-scaled multi-frame sampling</span>
               </label>
               <label className="inline-check">
                 <input
                   type="checkbox"
                   checked={Boolean(settings.experimental_style_detector_enabled)}
-                  onChange={(e) =>
-                    setSettings({
-                      ...settings,
-                      experimental_style_detector_enabled: e.target.checked,
-                    })
-                  }
+                  onChange={(e) => {
+                    const { checked } = e.target;
+                    setSettings((prev) => ({
+                      ...prev,
+                      experimental_style_detector_enabled: checked,
+                    }));
+                  }}
                 />
-                Experimental: real vs anime style gate (dedicated ONNX →{" "}
-                <code>real_life</code>; uncertain → needs review)
+                <span>
+                  Experimental: real vs anime style gate (dedicated ONNX →{" "}
+                  <code>real_life</code>; uncertain → needs review)
+                </span>
               </label>
               <label className="inline-check">
                 <input
                   type="checkbox"
                   checked={Boolean(settings.hybrid_ml_on_review)}
-                  onChange={(e) =>
-                    setSettings({
-                      ...settings,
-                      hybrid_ml_on_review: e.target.checked,
-                    })
-                  }
+                  onChange={(e) => {
+                    const { checked } = e.target;
+                    setSettings((prev) => ({ ...prev, hybrid_ml_on_review: checked }));
+                  }}
                   disabled={settings.tagging_domain === "real_life"}
                 />
-                Hybrid: on needs-review (WD primary), re-run ML-Danbooru and merge
-                allowlisted high-recall tags only (skips Voyeur soft cues)
-              </label>
-              <fieldset className="domain-toggle">
-                <legend>Tagging domain</legend>
-                <label className="inline-check">
-                  <input
-                    type="radio"
-                    name="tagging_domain"
-                    checked={settings.tagging_domain !== "real_life"}
-                    onChange={() =>
-                      setSettings({ ...settings, tagging_domain: "drawn" })
-                    }
-                  />
-                  Animated / drawn (WD + ML-Danbooru taxonomy)
-                </label>
-                <label className="inline-check">
-                  <input
-                    type="radio"
-                    name="tagging_domain"
-                    checked={settings.tagging_domain === "real_life"}
-                    onChange={() =>
-                      setSettings({
-                        ...settings,
-                        tagging_domain: "real_life",
-                        experimental_media_enabled: true,
-                        sfw_classify_mode: false,
-                      })
-                    }
-                  />
-                  Real-life photos / videos (local adult tagger)
-                </label>
-                <span className="help">
-                  Real-life mode uses an isolated taxonomy under{" "}
-                  <code>Real Life/&lt;primary&gt;/</code>. Sensitive tags (BBC /
-                  Ebony / Asian) are suggestions only and need explicit Final-tag
-                  confirmation. Save settings after switching domains.
+                <span>
+                  Hybrid: on needs-review (WD primary), re-run ML-Danbooru and merge allowlisted
+                  high-recall tags only (skips Voyeur soft cues)
                 </span>
-                {settings.tagging_domain === "real_life" && !offlineMode ? (
-                  <div className="scan-preview real-life-status">
-                    {realLifeStatusLoading ? (
-                      <span className="muted">Checking local adult tagger…</span>
-                    ) : realLifeStatus?.engine ? (
-                      <>
-                        <div>
-                          VLM:{" "}
-                          <strong>
-                            {realLifeStatus.engine.vlm?.available ? "ready" : "unavailable"}
-                          </strong>
-                          {realLifeStatus.engine.vlm?.backend
-                            ? ` (${realLifeStatus.engine.vlm.backend})`
-                            : ""}
-                        </div>
-                        <div>
-                          Position classifier:{" "}
-                          <strong>
-                            {realLifeStatus.engine.position?.available
-                              ? "ready"
-                              : "unavailable"}
-                          </strong>
-                        </div>
-                        <div className="help">{realLifeStatus.engine.message}</div>
-                        {realLifeStatus.engine.fallback ? (
-                          <div className="help">
-                            Fallback active: style gate + manual review only until{" "}
-                            <code>llama-cpp-python</code> and the Qwen2.5-VL GGUF +
-                            mmproj are installed.
-                          </div>
-                        ) : null}
-                      </>
-                    ) : (
-                      <span className="muted">Real-life tagger status unavailable.</span>
-                    )}
-                  </div>
-                ) : null}
-              </fieldset>
+              </label>
             </div>
+            <fieldset className="domain-toggle">
+              <legend>Tagging domain</legend>
+              <label className="inline-check">
+                <input
+                  type="radio"
+                  name="tagging_domain"
+                  checked={settings.tagging_domain !== "real_life"}
+                  onChange={() =>
+                    setSettings((prev) => ({ ...prev, tagging_domain: "drawn" }))
+                  }
+                />
+                <span>Animated / drawn (WD + ML-Danbooru taxonomy)</span>
+              </label>
+              <label className="inline-check">
+                <input
+                  type="radio"
+                  name="tagging_domain"
+                  checked={settings.tagging_domain === "real_life"}
+                  onChange={() =>
+                    setSettings({
+                      ...settings,
+                      tagging_domain: "real_life",
+                      experimental_media_enabled: true,
+                      sfw_classify_mode: false,
+                    })
+                  }
+                />
+                <span>Real-life photos / videos (local adult tagger)</span>
+              </label>
+              <span className="help">
+                Real-life mode uses an isolated taxonomy under{" "}
+                <code>Real Life/&lt;primary&gt;/</code>. Sensitive tags (BBC /
+                Ebony / Asian) are suggestions only and need explicit Final-tag
+                confirmation. Save settings after switching domains.
+              </span>
+              {settings.tagging_domain === "real_life" && !offlineMode ? (
+                <div className="scan-preview real-life-status">
+                  {realLifeStatusLoading ? (
+                    <span className="muted">Checking local adult tagger…</span>
+                  ) : realLifeStatus?.engine ? (
+                    <>
+                      <div>
+                        VLM:{" "}
+                        <strong>
+                          {realLifeStatus.engine.vlm?.available ? "ready" : "unavailable"}
+                        </strong>
+                        {realLifeStatus.engine.vlm?.backend
+                          ? ` (${realLifeStatus.engine.vlm.backend})`
+                          : ""}
+                      </div>
+                      <div>
+                        Position classifier:{" "}
+                        <strong>
+                          {realLifeStatus.engine.position?.available
+                            ? "ready"
+                            : "unavailable"}
+                        </strong>
+                      </div>
+                      <div className="help">{realLifeStatus.engine.message}</div>
+                      {realLifeStatus.engine.fallback ? (
+                        <div className="help">
+                          Fallback active: style gate + manual review only until{" "}
+                          <code>llama-cpp-python</code> and the Qwen2.5-VL GGUF +
+                          mmproj are installed.
+                        </div>
+                      ) : null}
+                    </>
+                  ) : (
+                    <span className="muted">Real-life tagger status unavailable.</span>
+                  )}
+                </div>
+              ) : null}
+            </fieldset>
           </fieldset>
 
           <div className="sticky-save">
@@ -1396,43 +1471,60 @@ function App() {
             SFW classify mode (parks NSFW tags; restore when off)
           </label>
         ) : null}
-        <label>
-          {settings.tagging_domain === "real_life"
-            ? "Real-life category search"
-            : "Tag match search (destinations + tags.csv)"}
-          <input
-            value={tagQuery}
-            onChange={(e) => setTagQuery(e.target.value)}
-            list="tag-match-suggestions"
-            autoComplete="off"
-            disabled={sfwClassifyMode}
-            onKeyDown={async (e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                if (sfwClassifyMode) return;
-                setError("");
-                try {
-                  await addTagsFromInput(tagQuery);
-                  setTagQuery("");
-                } catch (err) {
-                  setError(err.message);
+        <div className="tag-search-row">
+          <label>
+            {settings.tagging_domain === "real_life"
+              ? "Real-life category search"
+              : "Tag match search (destinations + tags.csv)"}
+            <input
+              value={tagQuery}
+              onChange={(e) => setTagQuery(e.target.value)}
+              list="tag-match-suggestions"
+              autoComplete="off"
+              disabled={sfwClassifyMode}
+              onKeyDown={async (e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  if (sfwClassifyMode) return;
+                  setError("");
+                  try {
+                    await addTagsFromInput(tagQuery);
+                    setTagQuery("");
+                  } catch (err) {
+                    setError(err.message);
+                  }
                 }
+              }}
+              placeholder={
+                sfwClassifyMode
+                  ? "Tag editing disabled in SFW mode"
+                  : settings.tagging_domain === "real_life"
+                    ? "Type creampie, BBC, hotwife…"
+                    : "Type Voyeur, loli, Pokemon…"
+              }
+            />
+            <datalist id="tag-match-suggestions">
+              {tagOptions.map((tag) => (
+                <option key={tag} value={tag} />
+              ))}
+            </datalist>
+          </label>
+          <button
+            type="button"
+            className="secondary"
+            disabled={sfwClassifyMode}
+            onClick={async () => {
+              setError("");
+              try {
+                await addTagsFromInput(tagQuery);
+              } catch (err) {
+                setError(err.message);
               }
             }}
-            placeholder={
-              sfwClassifyMode
-                ? "Tag editing disabled in SFW mode"
-                : settings.tagging_domain === "real_life"
-                  ? "Type creampie, BBC, hotwife…"
-                  : "Type Voyeur, loli, Pokemon…"
-            }
-          />
-          <datalist id="tag-match-suggestions">
-            {tagOptions.map((tag) => (
-              <option key={tag} value={tag} />
-            ))}
-          </datalist>
-        </label>
+          >
+            Add tag(s)
+          </button>
+        </div>
         {tagQuery.trim() && !sfwClassifyMode && (
           <div className="tag-suggestions">
             {tagOptions.length === 0 ? (
@@ -1455,22 +1547,38 @@ function App() {
             )}
           </div>
         )}
-        <div className="actions">
-          <button
-            type="button"
-            className="secondary"
-            disabled={sfwClassifyMode}
-            onClick={async () => {
-              setError("");
-              try {
-                await addTagsFromInput(tagQuery);
-              } catch (err) {
-                setError(err.message);
-              }
-            }}
-          >
-            Add typed tag(s)
-          </button>
+        <div className={`stats${sfwClassifyMode ? " tags-locked" : ""}`}>
+          {selectedTags.length === 0 ? (
+            <span className="muted">No tags selected</span>
+          ) : (
+            selectedTags.map((tag) => (
+              <span key={tag} className="chip">
+                {tag}
+                <button
+                  type="button"
+                  onClick={() => removeSelectedTag(tag)}
+                  aria-label={`Remove ${tag}`}
+                  disabled={sfwClassifyMode}
+                >
+                  ×
+                </button>
+              </span>
+            ))
+          )}
+        </div>
+        {sfwClassifyMode && parkedNsfwTags.length > 0 ? (
+          <div className="parked-tags">
+            <span className="help">Parked NSFW tags (inactive until SFW mode is off):</span>
+            <div className="stats tags-locked">
+              {parkedNsfwTags.map((tag) => (
+                <span key={`parked-${tag}`} className="chip chip-parked">
+                  {tag}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        <div className="actions run-actions">
           <button
             type="button"
             disabled={loading || opsLoading.startingRun || runActive}
@@ -1529,37 +1637,6 @@ function App() {
             </>
           )}
         </p>
-        <div className={`stats${sfwClassifyMode ? " tags-locked" : ""}`}>
-          {selectedTags.length === 0 ? (
-            <span className="muted">No tags selected</span>
-          ) : (
-            selectedTags.map((tag) => (
-              <span key={tag} className="chip">
-                {tag}
-                <button
-                  type="button"
-                  onClick={() => removeSelectedTag(tag)}
-                  aria-label={`Remove ${tag}`}
-                  disabled={sfwClassifyMode}
-                >
-                  ×
-                </button>
-              </span>
-            ))
-          )}
-        </div>
-        {sfwClassifyMode && parkedNsfwTags.length > 0 ? (
-          <div className="parked-tags">
-            <span className="help">Parked NSFW tags (inactive until SFW mode is off):</span>
-            <div className="stats tags-locked">
-              {parkedNsfwTags.map((tag) => (
-                <span key={`parked-${tag}`} className="chip chip-parked">
-                  {tag}
-                </span>
-              ))}
-            </div>
-          </div>
-        ) : null}
       </section>
 
       {runs.length > 0 && (

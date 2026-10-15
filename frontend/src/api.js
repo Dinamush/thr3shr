@@ -137,7 +137,9 @@ async function request(path, options = {}) {
       message.includes("Load failed") ||
       message.includes("CORS request did not succeed") ||
       message.includes("timeout");
-    if (backendAvailable === null && networkError) {
+    // The first requests at page load run in parallel: whichever fails last
+    // must fall back too, not surface "Failed to fetch" next to the banner.
+    if (backendAvailable !== true && networkError) {
       backendAvailable = false;
       return mockRequest(path, options);
     }
@@ -614,8 +616,25 @@ function mockRequest(path, options = {}) {
   return Promise.reject(new Error(`Unsupported mock route: ${method} ${path}`));
 }
 
+// Health check outside the mock fallback, used to notice the backend coming back.
+async function probeBackend(timeoutMs = 4000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort("timeout"), timeoutMs);
+  try {
+    const response = await fetch(`${API_BASE.replace(/\/api$/, "")}/health`, {
+      signal: controller.signal,
+    });
+    return response.ok;
+  } catch (_) {
+    return false;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 export const api = {
   isOfflineMode: () => backendAvailable === false,
+  probeBackend,
   getTags: (query = "", limit = 50, domain = null) => {
     const params = new URLSearchParams({ query, limit: String(limit) });
     if (domain) params.set("domain", domain);

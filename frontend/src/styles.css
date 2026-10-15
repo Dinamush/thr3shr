@@ -195,9 +195,20 @@ label {
 
 .inline-check {
   flex-direction: row;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.5rem;
   font-weight: 500;
+  line-height: 1.4;
+}
+
+.inline-check > input {
+  flex: none;
+  margin: 3px 0 0;
+}
+
+.check-list {
+  display: grid;
+  gap: 10px;
 }
 
 .help {
@@ -215,6 +226,7 @@ label {
 
 .model-option {
   display: flex;
+  flex-direction: row;
   gap: 10px;
   align-items: flex-start;
   padding: 10px 12px;
@@ -269,6 +281,10 @@ button {
 button:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+input:invalid {
+  border-color: #e08a8a;
 }
 
 input:disabled,
@@ -342,6 +358,7 @@ button.danger {
 
 .checkbox-row {
   display: flex;
+  flex-direction: row;
   align-items: center;
   gap: 8px;
   margin: 8px 0 12px;
@@ -462,10 +479,13 @@ button.danger {
 }
 
 .domain-toggle {
-  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
   padding: 10px 12px;
-  border: 1px solid var(--border, #cbd5e1);
+  border: 1px solid var(--line);
   border-radius: 8px;
+  background: var(--surface);
 }
 
 .domain-toggle legend {
@@ -476,6 +496,16 @@ button.danger {
 .real-life-status {
   margin-top: 8px;
   font-size: 13px;
+}
+
+button.chip {
+  background: #eef2ff;
+  color: #1e3a8a;
+  font-weight: 500;
+}
+
+button.chip:hover:not(:disabled) {
+  background: #dbeafe;
 }
 
 .chip button {
@@ -746,4 +776,29 @@ tr.row-rejected td {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.offline-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.tag-search-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.tag-search-row > label {
+  flex: 1 1 260px;
+}
+
+.run-actions {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
 }
