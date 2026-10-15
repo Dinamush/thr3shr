@@ -56,7 +56,7 @@ Choose in Settings (persisted in SQLite as `tagger_model`):
 
 Related settings:
 
-- `confidence_threshold` (default `0.6`) — assignment gate for selected tags
+- `confidence_threshold` (default `0.6`, range `0..1`) — assignment gate for selected tags
 - `wd_general_threshold` (default `0.35`) — WD14 general-tag cutoff at inference (WD models only)
 - `max_inference_workers` (default `2`) — keep low; ORT session is serialized under a lock
 - `force_cpu_inference` — force CPU path
@@ -180,10 +180,10 @@ MAX_INFERENCE_WORKERS=2 ../.venv/bin/uvicorn app.main:app --host 127.0.0.1 --por
 - `GET /api/runs/{run_id}/status` — includes `tagger_model`, progress telemetry
 - `POST /api/runs/{run_id}/cancel`
 - `GET /api/runs/{run_id}/items` — includes `global_top_tags`, secondary suggestions
-- `PATCH /api/items/{item_id}`
+- `PATCH /api/items/{item_id}` — `409` once an item is migrated; status `migrated` is set only by migrate
 - `GET /api/items/{item_id}/preview`
 - `GET /api/items/{item_id}/scores`
-- `POST /api/runs/{run_id}/batch`
+- `POST /api/runs/{run_id}/batch` — migrated items are skipped and counted in `skipped`
 - `POST /api/runs/{run_id}/migrate`
 
 ## Tests
