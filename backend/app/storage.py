@@ -4,6 +4,7 @@ import json
 import logging
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -100,6 +101,24 @@ def init_db() -> None:
     except sqlite3.DatabaseError:
         logger.exception("failed to initialize database")
         raise
+
+
+def fail_interrupted_runs() -> int:
+    """Close runs whose in-process worker died with the previous backend process."""
+    finished_at = datetime.now(timezone.utc).isoformat()
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            UPDATE runs
+            SET status = 'failed',
+                finished_at = ?,
+                last_error = 'Interrupted: the backend stopped before this run finished.'
+            WHERE status IN ('pending', 'running')
+            """,
+            (finished_at,),
+        )
+        conn.commit()
+        return cur.rowcount
 
 
 def _ensure_settings_columns(conn: sqlite3.Connection) -> None:

@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import __version__
 from .api import router
 from .providers import preload_onnx_runtime_dlls, probe_execution_providers
-from .storage import init_db
+from .storage import fail_interrupted_runs, init_db
 
 logger = logging.getLogger("thr3shr_api")
 
@@ -78,6 +78,9 @@ def startup() -> None:
     logger.info("onnx_provider_state state=%s", provider_state)
     logger.info("initializing database at startup")
     init_db()
+    interrupted = fail_interrupted_runs()
+    if interrupted:
+        logger.warning("interrupted_runs_failed count=%d", interrupted)
     try:
         from .api import _settings_from_db
         from .inference_engine import get_engine

@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.schemas import FolderMapping
-from app.storage import execute
+from app.storage import execute, fetch_one
 
 
 def _seed_active_run() -> int:
@@ -22,7 +22,7 @@ def _seed_active_run() -> int:
     )
 
 
-def test_start_is_refused_while_another_run_is_active(monkeypatch, tmp_path: Path):
+def _start_body(monkeypatch, tmp_path: Path) -> dict:
     root = tmp_path / "root"
     cats = tmp_path / "cats"
     root.mkdir()
@@ -42,15 +42,19 @@ def test_start_is_refused_while_another_run_is_active(monkeypatch, tmp_path: Pat
             "UPDATE runs SET status = 'completed' WHERE id = ?", (run_id,)
         ),
     )
-    active_id = _seed_active_run()
-    body = {
+    return {
         "root_repo": str(root),
         "categories_root": str(cats),
         "confidence_threshold": 0.6,
         "run_mode": "classify",
     }
 
+
+def test_start_is_refused_while_another_run_is_active(monkeypatch, tmp_path: Path):
+    body = _start_body(monkeypatch, tmp_path)
+
     with TestClient(app) as client:
+        active_id = _seed_active_run()
         refused = client.post("/api/runs/start", json=body)
         assert refused.status_code == 409
         detail = refused.json()["detail"]
@@ -63,3 +67,20 @@ def test_start_is_refused_while_another_run_is_active(monkeypatch, tmp_path: Pat
         assert allowed.status_code == 200
         new_id = allowed.json()["run_id"]
         assert new_id != active_id
+
+
+def test_startup_fails_runs_orphaned_by_a_previous_backend(monkeypatch, tmp_path: Path):
+    body = _start_body(monkeypatch, tmp_path)
+    orphan_id = _seed_active_run()
+
+    with TestClient(app) as client:
+        orphan = fetch_one(
+            "SELECT status, finished_at, last_error FROM runs WHERE id = ?", (orphan_id,)
+        )
+        assert orphan["status"] == "failed"
+        assert orphan["finished_at"]
+        assert "interrupted" in orphan["last_error"].lower()
+
+        allowed = client.post("/api/runs/start", json=body)
+        assert allowed.status_code == 200
+        assert allowed.json()["run_id"] != orphan_id
