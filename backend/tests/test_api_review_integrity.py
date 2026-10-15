@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from app import api
 from app.main import app
 from app.storage import execute, fetch_all, fetch_one, to_json
 
@@ -126,6 +128,57 @@ def test_migrated_item_cannot_be_reapproved_or_retagged(tmp_path: Path) -> None:
         assert migrate.json()["total_candidates"] == 0
 
     assert sorted(p.name for p in (cats / "scenery").iterdir()) == ["a.jpg"]
+    row = fetch_one("SELECT status, final_tag FROM items WHERE id = ?", (item_id,))
+    assert row == {"status": "migrated", "final_tag": "scenery"}
+
+
+def test_update_racing_a_migrate_cannot_unlock_the_migrated_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "root"
+    cats = tmp_path / "cats"
+    root.mkdir()
+    source = root / "a.jpg"
+    source.write_bytes(b"aaa")
+    run_id = _seed_run(
+        root,
+        cats,
+        [
+            {
+                "file_path": str(source),
+                "primary_tag": "scenery",
+                "primary_score": 0.9,
+                "final_destination": str(cats / "scenery"),
+                "status": "approved",
+            }
+        ],
+    )
+    item_id = fetch_one("SELECT id FROM items WHERE run_id = ?", (run_id,))["id"]
+    copied = str(cats / "scenery" / "a.jpg")
+    resolve = api._resolve_item_assignment
+
+    def migrate_lands_after_read(*args, **kwargs):
+        execute(
+            "UPDATE items SET status = 'migrated', migrated_to = ? WHERE id = ?",
+            (copied, item_id),
+        )
+        return resolve(*args, **kwargs)
+
+    monkeypatch.setattr(api, "_resolve_item_assignment", migrate_lands_after_read)
+
+    with TestClient(app) as client:
+        single = client.patch(
+            f"/api/items/{item_id}", json={"status": "reviewed", "final_tag": "sky"}
+        )
+        assert single.status_code == 409
+        assert copied in single.json()["detail"]
+
+        execute("UPDATE items SET status = 'approved' WHERE id = ?", (item_id,))
+        batch = client.post(
+            f"/api/runs/{run_id}/batch", json={"item_ids": [item_id], "status": "reviewed"}
+        )
+        assert batch.json() == {"updated": 0, "skipped": 1}
+
     row = fetch_one("SELECT status, final_tag FROM items WHERE id = ?", (item_id,))
     assert row == {"status": "migrated", "final_tag": "scenery"}
 

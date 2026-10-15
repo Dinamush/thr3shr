@@ -562,8 +562,13 @@ function App() {
     setOpsLoading((prev) => ({ ...prev, applyingBatch: true }));
     setError("");
     try {
-      await api.batchUpdate(runId, { item_ids: selectedIds, status });
+      const result = await api.batchUpdate(runId, { item_ids: selectedIds, status });
       setSelectedIds([]);
+      setNotice(
+        result.skipped > 0
+          ? `Updated ${result.updated} item(s); skipped ${result.skipped} (already migrated, missing destination, or sensitive tag needing explicit confirmation).`
+          : ""
+      );
       await refreshItems(runId);
     } catch (err) {
       console.error("applyBatch failed", err);
@@ -1669,6 +1674,7 @@ function App() {
                   <td>
                     <input
                       value={finalTagDrafts[item.id] ?? (item.final_tag || "")}
+                      disabled={item.status === "migrated"}
                       onChange={(e) => queueFinalTagUpdate(item.id, e.target.value)}
                     />
                   </td>
@@ -1688,7 +1694,7 @@ function App() {
                     <div className="actions">
                       <button
                         type="button"
-                        disabled={opsLoading.updatingStatus}
+                        disabled={opsLoading.updatingStatus || item.status === "migrated"}
                         onClick={() => updateStatus(item.id, "approved")}
                       >
                         Approve
@@ -1696,7 +1702,7 @@ function App() {
                       <button
                         type="button"
                         className="secondary"
-                        disabled={opsLoading.updatingStatus}
+                        disabled={opsLoading.updatingStatus || item.status === "migrated"}
                         onClick={() => updateStatus(item.id, "rejected")}
                       >
                         Reject
@@ -1704,7 +1710,7 @@ function App() {
                       <button
                         type="button"
                         className="secondary"
-                        disabled={opsLoading.updatingStatus}
+                        disabled={opsLoading.updatingStatus || item.status === "migrated"}
                         onClick={() => updateStatus(item.id, "reviewed")}
                       >
                         Reviewed

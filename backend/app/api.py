@@ -3028,6 +3028,16 @@ _MIGRATED_BY_MIGRATE_ONLY = (
 )
 
 
+def _migrated_conflict(migrated_to: str | None) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail=(
+            f"Item is already migrated to {migrated_to or 'its destination'}; "
+            "its status and final tag can no longer change."
+        ),
+    )
+
+
 @router.patch("/items/{item_id}", response_model=ClassifiedItem)
 def update_item(item_id: int, payload: UpdateItemRequest) -> ClassifiedItem:
     if payload.status == "migrated":
@@ -3038,13 +3048,7 @@ def update_item(item_id: int, payload: UpdateItemRequest) -> ClassifiedItem:
     if row["status"] == "migrated":
         # Re-approving a migrated item would copy it a second time on the next
         # migrate, and retagging it would point the row away from the real file.
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"Item is already migrated to {row.get('migrated_to') or 'its destination'}; "
-                "its status and final tag can no longer change."
-            ),
-        )
+        raise _migrated_conflict(row.get("migrated_to"))
     run = fetch_one("SELECT categories_root FROM runs WHERE id = ?", (row["run_id"],))
     categories_root = Path(run["categories_root"]) if run and run.get("categories_root") else None
     new_status = payload.status if payload.status is not None else row["status"]
@@ -3094,21 +3098,25 @@ def update_item(item_id: int, payload: UpdateItemRequest) -> ClassifiedItem:
             else row["review_reason"]
         )
 
-    execute(
-        """
-        UPDATE items
-        SET status = ?, final_tag = ?, final_destination = ?, needs_review = ?, review_reason = ?
-        WHERE id = ?
-        """,
-        (
-            new_status,
-            new_final_tag,
-            new_final_destination,
-            new_needs_review,
-            new_review_reason,
-            item_id,
-        ),
-    )
+    with transaction() as conn:
+        changed = conn.execute(
+            """
+            UPDATE items
+            SET status = ?, final_tag = ?, final_destination = ?, needs_review = ?, review_reason = ?
+            WHERE id = ? AND status != 'migrated'
+            """,
+            (
+                new_status,
+                new_final_tag,
+                new_final_destination,
+                new_needs_review,
+                new_review_reason,
+                item_id,
+            ),
+        ).rowcount
+    if not changed:
+        current = fetch_one("SELECT migrated_to FROM items WHERE id = ?", (item_id,))
+        raise _migrated_conflict(current.get("migrated_to") if current else None)
     updated = _fetch_item_for_response(item_id)
     return _item_from_row(updated)
 
@@ -3265,21 +3273,25 @@ def batch_update(run_id: int, payload: BatchUpdateRequest) -> dict:
                 if new_status in {"reviewed", "approved", "migrated"}
                 else row["review_reason"]
             )
-        execute(
-            """
-            UPDATE items
-            SET status = ?, final_tag = ?, final_destination = ?, needs_review = ?, review_reason = ?
-            WHERE id = ?
-            """,
-            (
-                new_status,
-                new_final_tag,
-                new_final_destination,
-                new_needs_review,
-                new_review_reason,
-                item_id,
-            ),
-        )
+        with transaction() as conn:
+            changed = conn.execute(
+                """
+                UPDATE items
+                SET status = ?, final_tag = ?, final_destination = ?, needs_review = ?, review_reason = ?
+                WHERE id = ? AND status != 'migrated'
+                """,
+                (
+                    new_status,
+                    new_final_tag,
+                    new_final_destination,
+                    new_needs_review,
+                    new_review_reason,
+                    item_id,
+                ),
+            ).rowcount
+        if not changed:
+            skipped += 1
+            continue
         updated += 1
     return {"updated": updated, "skipped": skipped}
 
