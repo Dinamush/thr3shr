@@ -1,19 +1,37 @@
 from __future__ import annotations
 
-from pathlib import Path
+import threading
+import time
+from collections.abc import Iterator
 
 import pytest
 
 from app.storage import execute, init_db
 
+# Run/reclassify workers are daemon threads that outlive the request that
+# started them. A test that returns early must not leave one writing after
+# DB_PATH is restored: it would land in the next test's DB or the real app.db.
+_WORKER_JOIN_DEADLINE_S = 60.0
+
+
+def _join_new_threads(before: set[threading.Thread]) -> None:
+    deadline = time.monotonic() + _WORKER_JOIN_DEADLINE_S
+    for thread in threading.enumerate():
+        if thread in before or thread is threading.current_thread():
+            continue
+        thread.join(timeout=max(0.0, deadline - time.monotonic()))
+
 
 @pytest.fixture(autouse=True)
-def _isolated_app_db(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+def _isolated_app_db(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[None]:
     """Keep API/integration tests from clobbering the developer's app.db.
 
     Uses a dedicated temp directory (not the test's tmp_path) so scan/filesystem
     tests are not polluted by the SQLite file.
     """
+    threads_before = set(threading.enumerate())
     db_dir = tmp_path_factory.mktemp("app_db")
     db_path = db_dir / "test_app.db"
     monkeypatch.setattr("app.storage.DB_PATH", db_path)
@@ -30,3 +48,6 @@ def _isolated_app_db(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pyte
         WHERE id = 1
         """
     )
+    yield
+    # Teardown runs before monkeypatch restores DB_PATH.
+    _join_new_threads(threads_before)
