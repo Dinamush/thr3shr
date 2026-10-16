@@ -177,7 +177,7 @@ MAX_INFERENCE_WORKERS=2 ../.venv/bin/uvicorn app.main:app --host 127.0.0.1 --por
 - `GET/PUT /api/settings` — includes `tagger_model`, `wd_general_threshold`, `selected_tags`, workers, etc.
 - `GET /api/tags`
 - `GET /api/scan/preview` — discovery stats without inference
-- `POST /api/runs/start`
+- `POST /api/runs/start` - `409` while another run is pending or running (one active run at a time); runs left pending or running by a backend stop are marked `failed` at startup
 - `GET /api/runs` - recent runs, newest first, with per-status item counts
 - `GET /api/runs/{run_id}/status` — includes `tagger_model`, progress telemetry
 - `POST /api/runs/{run_id}/cancel`
