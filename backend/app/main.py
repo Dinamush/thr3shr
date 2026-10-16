@@ -53,7 +53,7 @@ cors_origins = _env_list("THR3SHR_CORS_ORIGINS", DEFAULT_CORS_ORIGINS)
 
 @app.middleware("http")
 async def reject_cross_site_writes(request: Request, call_next):
-    if request.method in UNSAFE_METHODS:
+    if request.method in UNSAFE_METHODS and "*" not in cors_origins:
         origin = request.headers.get("origin")
         if origin is not None:
             cross_site = origin not in cors_origins

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from app import main
 from app.main import DEFAULT_ALLOWED_HOSTS, DEFAULT_CORS_ORIGINS, _env_list, app
 from app.storage import execute
 
@@ -114,3 +115,20 @@ def test_env_lists_override_defaults(monkeypatch) -> None:
         "http://nas.lan:5173",
         "http://10.0.0.5:5173",
     ]
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"Origin": "https://lan-ui.example"},
+        {"Sec-Fetch-Site": "cross-site"},
+    ],
+)
+def test_wildcard_cors_origins_allow_any_write(tmp_path: Path, monkeypatch, headers) -> None:
+    monkeypatch.setattr(main, "cors_origins", ["*"])
+    run_id, src, moved = _seed_approved_move(tmp_path)
+    with TestClient(app) as client:
+        resp = _simple_move_post(client, run_id, headers)
+    assert resp.status_code == 200
+    assert not src.exists()
+    assert moved.read_bytes() == b"aaa"
