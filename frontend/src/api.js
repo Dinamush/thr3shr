@@ -60,6 +60,26 @@ function persistMockState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(mockState));
 }
 
+// FastAPI validation errors (422) carry a list of {loc, msg}; show them as
+// "field: message" instead of "[object Object]".
+function formatErrorDetail(detail) {
+  if (!detail) return "";
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") return String(entry);
+        const field = Array.isArray(entry.loc)
+          ? entry.loc.filter((part) => part !== "body").join(".")
+          : "";
+        return field ? `${field}: ${entry.msg}` : String(entry.msg || "");
+      })
+      .filter(Boolean)
+      .join("; ");
+  }
+  return typeof detail === "object" ? JSON.stringify(detail) : String(detail);
+}
+
 async function jsonRequest(path, options = {}) {
   const controller = new AbortController();
   const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : REQUEST_TIMEOUT_MS;
@@ -81,8 +101,13 @@ async function jsonRequest(path, options = {}) {
     })() : null;
     if (!response.ok) {
       const detail =
-        (maybeJson && (maybeJson.detail || maybeJson.message)) || text || "Request failed";
-      throw new Error(`HTTP ${response.status} ${response.statusText}: ${detail}`);
+        formatErrorDetail(maybeJson && (maybeJson.detail || maybeJson.message)) ||
+        text ||
+        "Request failed";
+      const error = new Error(`HTTP ${response.status} ${response.statusText}: ${detail}`);
+      // Callers branch on the status (e.g. a deleted run returns 404).
+      error.status = response.status;
+      throw error;
     }
     return maybeJson ?? {};
   } catch (err) {
@@ -112,7 +137,9 @@ async function request(path, options = {}) {
       message.includes("Load failed") ||
       message.includes("CORS request did not succeed") ||
       message.includes("timeout");
-    if (backendAvailable === null && networkError) {
+    // The first requests at page load run in parallel: whichever fails last
+    // must fall back too, not surface "Failed to fetch" next to the banner.
+    if (backendAvailable !== true && networkError) {
       backendAvailable = false;
       return mockRequest(path, options);
     }
@@ -382,11 +409,36 @@ function mockRequest(path, options = {}) {
       message: "Run queued; poll /api/runs/{run_id}/status for progress.",
     });
   }
+  if (path.split("?")[0] === "/runs" && method === "GET") {
+    const summaries = Object.values(mockState.runs)
+      .sort((a, b) => b.id - a.id)
+      .map((run) => {
+        const visibleItems = run.items.slice(0, Math.max(0, run.processed_images || 0));
+        return {
+          run_id: run.id,
+          created_at: run.started_at || null,
+          status: run.status,
+          root_repo: run.root_repo || "",
+          categories_root: run.categories_root || "",
+          tagger_model: run.tagger_model || null,
+          tagging_domain: mockState.settings.tagging_domain || "drawn",
+          total_images: run.total_images || 0,
+          processed_images: run.processed_images || 0,
+          failed_images: run.failed_images || 0,
+          started_at: run.started_at || null,
+          finished_at: run.finished_at || null,
+          item_counts: Object.fromEntries(
+            mockCounts(visibleItems).map(({ status, count }) => [status, count])
+          ),
+        };
+      });
+    return Promise.resolve(summaries);
+  }
   if (path.match(/^\/runs\/\d+\/status$/) && method === "GET") {
     const runId = Number(path.split("/")[2]);
     const run = mockState.runs[runId];
     if (!run) {
-      return Promise.reject(new Error("Run not found"));
+      return Promise.reject(Object.assign(new Error("Run not found"), { status: 404 }));
     }
     if (run.status === "pending") {
       run.status = "running";
@@ -564,8 +616,25 @@ function mockRequest(path, options = {}) {
   return Promise.reject(new Error(`Unsupported mock route: ${method} ${path}`));
 }
 
+// Health check outside the mock fallback, used to notice the backend coming back.
+async function probeBackend(timeoutMs = 4000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort("timeout"), timeoutMs);
+  try {
+    const response = await fetch(`${API_BASE.replace(/\/api$/, "")}/health`, {
+      signal: controller.signal,
+    });
+    return response.ok;
+  } catch (_) {
+    return false;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 export const api = {
   isOfflineMode: () => backendAvailable === false,
+  probeBackend,
   getTags: (query = "", limit = 50, domain = null) => {
     const params = new URLSearchParams({ query, limit: String(limit) });
     if (domain) params.set("domain", domain);
@@ -590,6 +659,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  listRuns: (limit = 50) => request(`/runs?limit=${limit}`),
   getRun: (runId) => request(`/runs/${runId}`),
   getRunStatus: (runId) => request(`/runs/${runId}/status`),
   cancelRun: (runId) =>

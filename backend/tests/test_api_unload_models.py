@@ -20,15 +20,15 @@ def test_unload_models_clears_loaded_list():
 
 
 def test_unload_models_rejects_while_run_is_active():
-    execute(
-        """
-        INSERT INTO runs (
-            created_at, root_repo, categories_root, confidence_threshold,
-            status, total_images, processed_images, failed_images
-        ) VALUES ('2026-08-16T00:00:00+00:00', 'x', 'y', 0.45, 'running', 10, 1, 0)
-        """
-    )
     with TestClient(app) as client:
+        execute(
+            """
+            INSERT INTO runs (
+                created_at, root_repo, categories_root, confidence_threshold,
+                status, total_images, processed_images, failed_images
+            ) VALUES ('2026-08-16T00:00:00+00:00', 'x', 'y', 0.45, 'running', 10, 1, 0)
+            """
+        )
         resp = client.post("/api/models/unload")
         assert resp.status_code == 409
         assert "running" in resp.json()["detail"].lower()

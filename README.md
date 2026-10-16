@@ -41,8 +41,9 @@ ONNX weights are **not** stored in this git tree (too large for GitHub). They ar
 1. **Settings** — paths, tagger model, thresholds, workers; sticky unsaved save bar
 2. **Tag selection** — search chips from `tags.csv` (auto-persisted)
 3. **Preview scan** — eligible image counts before starting a run
-4. **Run dashboard** — status, totals, failed/review counts, progress bar, cancel
-5. **Review table** — preview, primary (or “needs review”), secondary suggestions, **global top-5 tags**, final tag, approve/migrate
+4. **Runs** - reopen an earlier run to review or migrate its results; the last opened run is remembered across reloads
+5. **Run dashboard** — status, totals, failed/review counts, progress bar, cancel
+6. **Review table** — preview, primary (or “needs review”), secondary suggestions, **global top-5 tags**, final tag, approve/migrate
 
 ## Tagger Models
 
@@ -56,7 +57,7 @@ Choose in Settings (persisted in SQLite as `tagger_model`):
 
 Related settings:
 
-- `confidence_threshold` (default `0.6`) — assignment gate for selected tags
+- `confidence_threshold` (default `0.6`, range `0..1`) — assignment gate for selected tags
 - `wd_general_threshold` (default `0.35`) — WD14 general-tag cutoff at inference (WD models only)
 - `max_inference_workers` (default `2`) — keep low; ORT session is serialized under a lock
 - `force_cpu_inference` — force CPU path
@@ -95,6 +96,17 @@ Health check:
 curl http://127.0.0.1:8000/health
 ```
 
+The API reads and moves local files without authentication, so it only answers the local UI.
+By default it accepts browser calls from the Vite dev and preview servers (`http://localhost:5173`, `http://127.0.0.1:5173`, and the same on port `4173`) and requests addressed to `127.0.0.1` or `localhost`.
+Browser writes (`POST`, `PUT`, `PATCH`, `DELETE`) from any other origin are refused with `403`; scripts and `curl`, which send no `Origin`, are unaffected.
+Both Vite ports are strict, so a port already in use fails loudly instead of moving the UI to an origin the API does not trust.
+To serve the UI on a custom port, or reach the API from another origin or host name (for example another machine on your LAN), set comma-separated lists before starting uvicorn; `THR3SHR_CORS_ORIGINS` covers both read and write access:
+
+```bash
+THR3SHR_CORS_ORIGINS="http://nas.lan:5173" THR3SHR_ALLOWED_HOSTS="nas.lan,127.0.0.1,localhost" \
+  ../.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
 ### 3) Start frontend Web UI (port 5173)
 
 ```bash
@@ -108,6 +120,7 @@ Open `http://localhost:5173`.
 ## Frontend Offline Mode
 
 The frontend falls back to local mock mode when the backend is unreachable. Preview/migration are mock-only in that mode.
+When the backend comes back, a banner offers to reconnect.
 
 ## Review Workflow
 
@@ -176,14 +189,15 @@ MAX_INFERENCE_WORKERS=2 ../.venv/bin/uvicorn app.main:app --host 127.0.0.1 --por
 - `GET/PUT /api/settings` — includes `tagger_model`, `wd_general_threshold`, `selected_tags`, workers, etc.
 - `GET /api/tags`
 - `GET /api/scan/preview` — discovery stats without inference
-- `POST /api/runs/start`
+- `POST /api/runs/start` - `409` while another run is pending or running (one active run at a time); runs left pending or running by a backend stop are marked `failed` at startup
+- `GET /api/runs` - recent runs, newest first, with per-status item counts
 - `GET /api/runs/{run_id}/status` — includes `tagger_model`, progress telemetry
 - `POST /api/runs/{run_id}/cancel`
 - `GET /api/runs/{run_id}/items` — includes `global_top_tags`, secondary suggestions
-- `PATCH /api/items/{item_id}`
+- `PATCH /api/items/{item_id}` — `409` once an item is migrated; status `migrated` is set only by migrate
 - `GET /api/items/{item_id}/preview`
 - `GET /api/items/{item_id}/scores`
-- `POST /api/runs/{run_id}/batch`
+- `POST /api/runs/{run_id}/batch` — migrated items are skipped and counted in `skipped`
 - `POST /api/runs/{run_id}/migrate`
 
 ## Tests

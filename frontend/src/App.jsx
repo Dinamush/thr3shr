@@ -65,7 +65,10 @@ const TAGGER_MODELS = [
 ];
 
 const SFW_CLASSIFY_FOLDERS = ["SFW", "scenery"];
-const ACTIVE_RUN_STORAGE_KEY = "thr3shrActiveRunId";
+// Last run opened in the dashboard. Kept after the run finishes so a reload
+// returns to its review table (key name predates that and stays for upgrades).
+const LAST_RUN_STORAGE_KEY = "thr3shrActiveRunId";
+const STATUS_POLL_INTERVAL_MS = 1500;
 const VIDEO_PREVIEW_EXTS = new Set([
   ".mp4",
   ".m4v",
@@ -95,6 +98,10 @@ function settingsSnapshot(settings, selectedTags) {
   });
 }
 
+function sameList(a, b) {
+  return a.length === b.length && a.every((value, idx) => value === b[idx]);
+}
+
 function formatTagScore(entry) {
   if (!entry) return "";
   return `${entry.tag} (${Number(entry.score).toFixed(3)})`;
@@ -121,9 +128,76 @@ function formatEtaFinishAt(iso) {
   });
 }
 
+// Number input that can be cleared and retyped. The text the user types is
+// kept as a draft; valid in-range values commit as they are typed (so the
+// unsaved-changes bar reacts), and on blur an empty or out-of-range draft is
+// clamped or reverted instead of being coerced to 0 mid-edit.
+function NumberField({ value, onCommit, min, max, step = 1, integer = false, ...inputProps }) {
+  const [draft, setDraft] = useState(null);
+  const normalize = (raw) => {
+    const parsed = Number(raw);
+    if (String(raw).trim() === "" || !Number.isFinite(parsed)) return null;
+    return integer ? Math.round(parsed) : parsed;
+  };
+  return (
+    <input
+      {...inputProps}
+      type="number"
+      min={min}
+      max={max}
+      step={step}
+      value={draft ?? String(value ?? "")}
+      onChange={(e) => {
+        const text = e.target.value;
+        setDraft(text);
+        const next = normalize(text);
+        if (next !== null && next >= min && next <= max && next !== value) onCommit(next);
+      }}
+      onBlur={() => {
+        if (draft === null) return;
+        const next = normalize(draft);
+        if (next !== null) {
+          const clamped = Math.min(max, Math.max(min, next));
+          if (clamped !== value) onCommit(clamped);
+        }
+        setDraft(null);
+      }}
+    />
+  );
+}
+
 function readRoute() {
   const hash = window.location.hash.replace(/^#/, "") || "/";
   return hash.startsWith("/debug") ? "debug" : "home";
+}
+
+function pathTail(path) {
+  const parts = String(path || "").split(/[\\/]+/).filter(Boolean);
+  return parts.slice(-2).join("/") || String(path || "");
+}
+
+function formatRunDate(iso) {
+  if (!iso) return "";
+  // SQLite CURRENT_TIMESTAMP is UTC without a zone marker.
+  const normalized = /[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso.replace(" ", "T")}Z`;
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function runOptionLabel(run) {
+  const progress = run.total_images
+    ? `${run.processed_images}/${run.total_images}`
+    : `${run.processed_images}`;
+  const when = formatRunDate(run.created_at);
+  return [`Run #${run.run_id}`, run.status, `${progress} images`, pathTail(run.root_repo), when]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 function App() {
@@ -133,7 +207,9 @@ function App() {
     settingsSnapshot(DEFAULT_SETTINGS, [])
   );
   const [offlineMode, setOfflineMode] = useState(false);
+  const [backendBack, setBackendBack] = useState(false);
   const [runId, setRunId] = useState(null);
+  const [runs, setRuns] = useState([]);
   const [runStatus, setRunStatus] = useState(null);
   const [runMeta, setRunMeta] = useState(null);
   const [items, setItems] = useState([]);
@@ -153,23 +229,29 @@ function App() {
   const [scoreDebugByItem, setScoreDebugByItem] = useState({});
   const [scoreLoadingByItem, setScoreLoadingByItem] = useState({});
   const [finalTagDrafts, setFinalTagDrafts] = useState({});
+  const [pendingItemIds, setPendingItemIds] = useState({});
   const [scanPreview, setScanPreview] = useState(null);
   const [scanPreviewLoading, setScanPreviewLoading] = useState(false);
   const [opsLoading, setOpsLoading] = useState({
     saving: false,
     startingRun: false,
-    updatingStatus: false,
     applyingBatch: false,
     migrating: false,
     reclassifying: false,
     unloadingModels: false,
   });
   const [reclassifyModel, setReclassifyModel] = useState("wd_swinv2_v3");
-  const finalTagTimersRef = useRef({});
+  const itemUpdateQueueRef = useRef({});
   const pollTimerRef = useRef(null);
+  // Bumped whenever polling stops or switches runs; stale responses check it.
+  const pollGenerationRef = useRef(0);
+  const viewedRunIdRef = useRef(null);
   const lastItemsRefreshAtRef = useRef(0);
   const lastItemsProcessedRef = useRef(-1);
   const tagsHydratedRef = useRef(false);
+  const savedSettingsRef = useRef(null);
+  const selectedTagsRef = useRef(selectedTags);
+  selectedTagsRef.current = selectedTags;
   const skipNextTagPersistRef = useRef(false);
 
   useEffect(() => {
@@ -187,6 +269,19 @@ function App() {
   const runActive = Boolean(
     runStatus && ["pending", "running"].includes(runStatus.status)
   );
+  const otherActiveRun = runs.find(
+    (run) => run.run_id !== runId && ["pending", "running"].includes(run.status)
+  );
+  const anyRunActive = runActive || Boolean(otherActiveRun);
+
+  async function refreshRuns() {
+    try {
+      const list = await api.listRuns();
+      setRuns(Array.isArray(list) ? list : []);
+    } catch (err) {
+      console.error("refreshRuns failed", err);
+    }
+  }
 
   async function refreshItems(currentRunId, options = {}) {
     if (!currentRunId) return;
@@ -197,35 +292,46 @@ function App() {
           timeoutMs: Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 120000,
         }),
       ]);
+      // The user may have opened another run while this request was in flight.
+      if (viewedRunIdRef.current !== currentRunId) return;
       setRunMeta(runInfo);
       setItems(runItems);
       // Clear sticky thumb failures so a fixed preview endpoint can retry.
       setPreviewErrors({});
     } catch (err) {
       console.error("refreshItems failed", err);
+      if (viewedRunIdRef.current !== currentRunId) return;
       setError(`Failed to refresh items: ${err.message}`);
     }
+  }
+
+  // Record what the server now holds; the dirty check compares against it.
+  function rememberSavedSettings(saved, fallbackTags = []) {
+    const merged = { ...DEFAULT_SETTINGS, ...saved };
+    const tags = Array.isArray(saved?.selected_tags) ? saved.selected_tags : fallbackTags;
+    savedSettingsRef.current = { ...merged, selected_tags: tags };
+    setSavedSnapshot(settingsSnapshot(merged, tags));
+    return { merged, tags };
   }
 
   useEffect(() => {
     api
       .getSettings()
       .then((data) => {
-        const merged = { ...DEFAULT_SETTINGS, ...data };
-        const tags = Array.isArray(data.selected_tags) ? data.selected_tags : [];
+        const { merged, tags } = rememberSavedSettings(data);
         setSettings(merged);
         skipNextTagPersistRef.current = true;
         setSelectedTags(tags);
         tagsHydratedRef.current = true;
         setMigrateMode(data.default_migrate_mode || "copy");
-        setSavedSnapshot(settingsSnapshot(merged, tags));
         setOfflineMode(api.isOfflineMode());
       })
       .catch((err) => setError(err.message));
-    const storedRunId = Number(localStorage.getItem(ACTIVE_RUN_STORAGE_KEY) || 0);
+    const storedRunId = Number(localStorage.getItem(LAST_RUN_STORAGE_KEY) || 0);
     if (storedRunId > 0) {
       setRunId(storedRunId);
     }
+    refreshRuns();
     api
       .getProviders()
       .then((info) => setProviderInfo(info))
@@ -241,25 +347,52 @@ function App() {
     }
     if (!Array.isArray(selectedTags)) return;
     const timer = setTimeout(() => {
-      const next = { ...settings, selected_tags: selectedTags };
-      setSettings(next);
+      // Save only the tag list, on top of what the server already has. Other
+      // fields may hold unsaved edits; they belong to the Save button, and a
+      // stale copy of them must not overwrite what the user is typing.
+      const sentTags = selectedTags;
       api
-        .saveSettings(next)
+        .saveSettings({
+          ...(savedSettingsRef.current || DEFAULT_SETTINGS),
+          selected_tags: sentTags,
+        })
         .then((saved) => {
-          const merged = { ...DEFAULT_SETTINGS, ...saved };
-          setSettings(merged);
-          setSavedSnapshot(
-            settingsSnapshot(merged, Array.isArray(saved.selected_tags) ? saved.selected_tags : selectedTags)
-          );
+          const { merged, tags } = rememberSavedSettings(saved, sentTags);
+          setSettings((prev) => ({
+            ...prev,
+            selected_tags: tags,
+            selected_tags_nsfw: merged.selected_tags_nsfw,
+          }));
+          // Adopt the server's canonical names unless the user changed the
+          // selection while this save was in flight.
+          if (selectedTagsRef.current === sentTags && !sameList(tags, sentTags)) {
+            skipNextTagPersistRef.current = true;
+            setSelectedTags(tags);
+          }
         })
         .catch(() => {
-          /* ignore transient save errors while typing */
+          /* ignore transient save errors while typing; the dirty bar stays up */
         });
     }, 400);
     return () => clearTimeout(timer);
-    // Intentionally depend on selectedTags only to avoid save loops from settings edits.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTags]);
+
+  // Demo mode sticks for the page's lifetime; watch for the backend returning
+  // so the user can reconnect instead of working on mock data unawares.
+  useEffect(() => {
+    if (!offlineMode) return undefined;
+    let cancelled = false;
+    const timer = setInterval(async () => {
+      if (await api.probeBackend()) {
+        if (!cancelled) setBackendBack(true);
+        clearInterval(timer);
+      }
+    }, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [offlineMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -305,14 +438,7 @@ function App() {
   }, [settings.tagging_domain, offlineMode]);
 
   useEffect(() => {
-    return () => {
-      Object.values(finalTagTimersRef.current).forEach((timerId) => clearTimeout(timerId));
-      finalTagTimersRef.current = {};
-      if (pollTimerRef.current) {
-        clearInterval(pollTimerRef.current);
-        pollTimerRef.current = null;
-      }
-    };
+    return () => stopStatusPolling();
   }, []);
 
   const stats = useMemo(() => {
@@ -337,9 +463,56 @@ function App() {
     };
   }, [items, runMeta]);
 
-  async function pollRunStatus(currentRunId) {
+  function forgetMissingRun(missingRunId) {
+    stopStatusPolling();
+    // Demo mode's mock store knows none of the real runs; keep the remembered
+    // run so reconnecting to the backend reopens it.
+    const offline = api.isOfflineMode();
+    if (!offline && Number(localStorage.getItem(LAST_RUN_STORAGE_KEY) || 0) === missingRunId) {
+      localStorage.removeItem(LAST_RUN_STORAGE_KEY);
+    }
+    viewedRunIdRef.current = null;
+    setRunId(null);
+    setRunStatus(null);
+    setRunMeta(null);
+    setItems([]);
+    setSelectedIds([]);
+    setError((prev) =>
+      String(prev || "").startsWith("Failed to poll run status:") ? "" : prev
+    );
+    setNotice(
+      offline
+        ? `Run #${missingRunId} is not available in demo mode.`
+        : `Run #${missingRunId} no longer exists on the backend.`
+    );
+    refreshRuns();
+  }
+
+  // Returns whether polling should continue for this run.
+  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const selectableIds = useMemo(
+    () => items.filter((item) => item.status !== "migrated").map((item) => item.id),
+    [items]
+  );
+  const allSelectableSelected =
+    selectableIds.length > 0 && selectableIds.every((id) => selectedIdSet.has(id));
+  const someSelectableSelected = selectableIds.some((id) => selectedIdSet.has(id));
+
+  // Rows that just migrated (or left the list) drop out of the selection.
+  useEffect(() => {
+    const allowed = new Set(selectableIds);
+    setSelectedIds((prev) => {
+      const next = prev.filter((id) => allowed.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [selectableIds]);
+
+  async function pollRunStatus(currentRunId, generation) {
+    const isStale = () =>
+      generation !== pollGenerationRef.current || viewedRunIdRef.current !== currentRunId;
     try {
       const status = await api.getRunStatus(currentRunId);
+      if (isStale()) return false;
       setRunStatus(status);
       setError((prev) =>
         String(prev || "").startsWith("Failed to poll run status:") ? "" : prev
@@ -368,44 +541,79 @@ function App() {
       }
 
       if (terminal) {
-        if (pollTimerRef.current) {
-          clearInterval(pollTimerRef.current);
-          pollTimerRef.current = null;
-        }
-        localStorage.removeItem(ACTIVE_RUN_STORAGE_KEY);
+        refreshRuns();
         api.getProviders().then((info) => setProviderInfo(info)).catch(() => {});
+        return false;
       }
+      return true;
     } catch (err) {
+      if (isStale()) return false;
+      if (err?.status === 404) {
+        forgetMissingRun(currentRunId);
+        return false;
+      }
       // Keep polling through transient API/load blips; a hard stop made the
       // UI look frozen while the backend was still classifying.
       setError(`Failed to poll run status: ${err.message}`);
+      return true;
     }
   }
 
-  function startStatusPolling(currentRunId) {
+  function stopStatusPolling() {
+    pollGenerationRef.current += 1;
     if (pollTimerRef.current) {
-      clearInterval(pollTimerRef.current);
+      clearTimeout(pollTimerRef.current);
       pollTimerRef.current = null;
     }
-    pollRunStatus(currentRunId);
-    pollTimerRef.current = setInterval(() => pollRunStatus(currentRunId), 1500);
+  }
+
+  // Chained timeouts instead of setInterval: a slow item refresh on a large run
+  // must finish before the next poll, or requests pile up on the backend.
+  function startStatusPolling(currentRunId) {
+    stopStatusPolling();
+    const generation = pollGenerationRef.current;
+    const tick = async () => {
+      const keepPolling = await pollRunStatus(currentRunId, generation);
+      if (!keepPolling || generation !== pollGenerationRef.current) return;
+      pollTimerRef.current = setTimeout(tick, STATUS_POLL_INTERVAL_MS);
+    };
+    tick();
   }
 
   useEffect(() => {
+    viewedRunIdRef.current = runId;
     if (!runId) return;
-    localStorage.setItem(ACTIVE_RUN_STORAGE_KEY, String(runId));
+    // Mock run ids would collide with real ones after reconnecting.
+    if (!api.isOfflineMode()) {
+      localStorage.setItem(LAST_RUN_STORAGE_KEY, String(runId));
+    }
     // Drop sticky thumb failures from prior preview bugs / aborted video loads.
     setPreviewErrors({});
     lastItemsRefreshAtRef.current = 0;
     lastItemsProcessedRef.current = -1;
     startStatusPolling(runId);
-    return () => {
-      if (pollTimerRef.current) {
-        clearInterval(pollTimerRef.current);
-        pollTimerRef.current = null;
-      }
-    };
+    return () => stopStatusPolling();
   }, [runId]);
+
+  useEffect(() => {
+    if (!otherActiveRun) return;
+    const timer = setInterval(refreshRuns, STATUS_POLL_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [otherActiveRun?.run_id]);
+
+  function openRun(nextRunId) {
+    if (!nextRunId || nextRunId === runId) return;
+    // Retire the old run's in-flight poll before React re-renders.
+    stopStatusPolling();
+    viewedRunIdRef.current = nextRunId;
+    setError("");
+    setNotice("");
+    setRunStatus(null);
+    setRunMeta(null);
+    setItems([]);
+    setSelectedIds([]);
+    setRunId(nextRunId);
+  }
 
   async function handleSaveSettings(e) {
     if (e) e.preventDefault();
@@ -414,19 +622,19 @@ function App() {
     setError("");
     try {
       const saved = await api.saveSettings({ ...settings, selected_tags: selectedTags });
-      const merged = { ...DEFAULT_SETTINGS, ...saved };
+      const { merged, tags } = rememberSavedSettings(saved, selectedTags);
       setSettings(merged);
-      const tags = Array.isArray(saved.selected_tags) ? saved.selected_tags : selectedTags;
-      if (Array.isArray(saved.selected_tags)) {
+      if (!sameList(tags, selectedTags)) {
         skipNextTagPersistRef.current = true;
-        setSelectedTags(saved.selected_tags);
+        setSelectedTags(tags);
       }
-      setSavedSnapshot(settingsSnapshot(merged, tags));
       setOfflineMode(api.isOfflineMode());
       const providers = await api.getProviders();
       setProviderInfo(providers);
+      return true;
     } catch (err) {
-      setError(err.message);
+      setError(`Failed to save settings: ${err.message}`);
+      return false;
     } finally {
       setLoading(false);
       setOpsLoading((prev) => ({ ...prev, saving: false }));
@@ -437,8 +645,9 @@ function App() {
     setScanPreviewLoading(true);
     setError("");
     try {
-      if (isDirty) {
-        await handleSaveSettings();
+      if (isDirty && !(await handleSaveSettings())) {
+        setScanPreview(null);
+        return;
       }
       const preview = await api.previewScan();
       setScanPreview(preview);
@@ -455,9 +664,8 @@ function App() {
     setOpsLoading((prev) => ({ ...prev, startingRun: true }));
     setError("");
     try {
-      if (isDirty) {
-        await handleSaveSettings();
-      }
+      // A failed save would otherwise start a run on the old settings.
+      if (isDirty && !(await handleSaveSettings())) return;
       const doujinFolders = [
         "loli",
         "shota",
@@ -500,7 +708,13 @@ function App() {
         setMigrateMode("move");
       }
       setOfflineMode(api.isOfflineMode());
+      stopStatusPolling();
+      viewedRunIdRef.current = result.run_id;
+      setSelectedIds([]);
+      setItems([]);
+      setRunMeta(null);
       setRunId(result.run_id);
+      refreshRuns();
       setPreviewErrors({});
       setRunStatus({
         run_id: result.run_id,
@@ -520,51 +734,99 @@ function App() {
     }
   }
 
+  // Updates to one item run in order: blurring the Final tag field commits the
+  // tag just before the Approve click lands, and the approve must not race it.
+  function enqueueItemUpdate(itemId, payload) {
+    const previous = itemUpdateQueueRef.current[itemId] || Promise.resolve();
+    const next = previous
+      .catch(() => {})
+      .then(() => api.updateItem(itemId, payload));
+    itemUpdateQueueRef.current[itemId] = next;
+    return next;
+  }
+
+  function settleItemUpdates(itemIds) {
+    return Promise.allSettled(itemIds.map((id) => itemUpdateQueueRef.current[id]));
+  }
+
   async function updateStatus(itemId, status) {
-    setOpsLoading((prev) => ({ ...prev, updatingStatus: true }));
+    setPendingItemIds((prev) => ({ ...prev, [itemId]: true }));
     setError("");
     try {
-      await api.updateItem(itemId, { status });
+      await enqueueItemUpdate(itemId, { status });
       await refreshItems(runId);
     } catch (err) {
       console.error("updateStatus failed", err);
       setError(`Failed to update status: ${err.message}`);
     } finally {
-      setOpsLoading((prev) => ({ ...prev, updatingStatus: false }));
+      setPendingItemIds((prev) => {
+        const { [itemId]: _done, ...rest } = prev;
+        return rest;
+      });
     }
   }
 
-  function queueFinalTagUpdate(itemId, finalTag) {
-    setFinalTagDrafts((prev) => ({ ...prev, [itemId]: finalTag }));
-    if (finalTagTimersRef.current[itemId]) {
-      clearTimeout(finalTagTimersRef.current[itemId]);
+  function setFinalTagDraft(itemId, value) {
+    setFinalTagDrafts((prev) => ({ ...prev, [itemId]: value }));
+  }
+
+  function dropFinalTagDraft(itemId) {
+    setFinalTagDrafts((prev) => {
+      const { [itemId]: _dropped, ...rest } = prev;
+      return rest;
+    });
+  }
+
+  // Commit on blur / Enter rather than per keystroke: a pause mid-word used to
+  // save (and approve into) a partial folder name such as "scen".
+  async function commitFinalTag(item) {
+    const draft = finalTagDrafts[item.id];
+    if (draft === undefined) return;
+    const nextTag = draft.trim();
+    if (!nextTag || nextTag === (item.final_tag || "")) {
+      dropFinalTagDraft(item.id);
+      return;
     }
-    finalTagTimersRef.current[itemId] = setTimeout(async () => {
-      setError("");
-      try {
-        await api.updateItem(itemId, { final_tag: finalTag, status: "reviewed" });
-        await refreshItems(runId);
-      } catch (err) {
-        console.error("queueFinalTagUpdate failed", err);
-        setError(`Failed to update final tag: ${err.message}`);
-      }
-    }, 350);
+    // Retagging keeps an approved item approved (now aimed at the new folder);
+    // only untouched proposals move to reviewed.
+    const payload = { final_tag: nextTag };
+    if (item.status === "proposed") payload.status = "reviewed";
+    setError("");
+    try {
+      await enqueueItemUpdate(item.id, payload);
+      await refreshItems(runId);
+      dropFinalTagDraft(item.id);
+    } catch (err) {
+      console.error("commitFinalTag failed", err);
+      setError(`Failed to update final tag: ${err.message}`);
+    }
   }
 
   async function applyBatch(status) {
     if (selectedIds.length === 0) return;
     if (status === "rejected") {
       const confirmed = window.confirm(
-        "Reject selected items? They stay on disk and are skipped by migrate/reclassify."
+        `Reject ${selectedIds.length} selected item(s)? They stay on disk and are skipped by migrate/reclassify.`
       );
       if (!confirmed) return;
     }
     setOpsLoading((prev) => ({ ...prev, applyingBatch: true }));
     setError("");
+    setNotice("");
     try {
-      await api.batchUpdate(runId, { item_ids: selectedIds, status });
+      await settleItemUpdates(selectedIds);
+      const result = await api.batchUpdate(runId, { item_ids: selectedIds, status });
       setSelectedIds([]);
       await refreshItems(runId);
+      const skipped = Number(result?.skipped || 0);
+      if (skipped > 0) {
+        setNotice(
+          `${Number(result?.updated || 0)} item(s) ${status}; ${skipped} skipped ` +
+            (status === "approved"
+              ? "(already migrated, no destination tag yet, or a sensitive tag that has to be typed as the Final tag first)."
+              : "(already migrated).")
+        );
+      }
     } catch (err) {
       console.error("applyBatch failed", err);
       setError(`Batch update failed: ${err.message}`);
@@ -574,19 +836,16 @@ function App() {
   }
 
   async function migrateApproved() {
-    setLoading(true);
-    setOpsLoading((prev) => ({ ...prev, migrating: true }));
     setError("");
     setNotice("");
     const confirmed = window.confirm(
-      `Migrate approved items using ${migrateMode}? This can move/copy many files.`
+      `Migrate ${stats.approved} approved item(s) using ${migrateMode}? This can move/copy many files.`
     );
-    if (!confirmed) {
-      setLoading(false);
-      setOpsLoading((prev) => ({ ...prev, migrating: false }));
-      return;
-    }
+    if (!confirmed) return;
+    setLoading(true);
+    setOpsLoading((prev) => ({ ...prev, migrating: true }));
     try {
+      await settleItemUpdates(Object.keys(itemUpdateQueueRef.current));
       const result = await api.migrateRun(runId, {
         mode: migrateMode,
         create_missing_folders: true,
@@ -645,7 +904,7 @@ function App() {
   }
 
   async function handleUnloadModels() {
-    if (runActive || opsLoading.unloadingModels) return;
+    if (anyRunActive || opsLoading.unloadingModels) return;
     setOpsLoading((prev) => ({ ...prev, unloadingModels: true }));
     setError("");
     try {
@@ -666,7 +925,7 @@ function App() {
   }, [runStatus?.tagger_model, settings.tagger_model]);
 
   async function handleReclassifyNeedsReview() {
-    if (!runId || runActive) return;
+    if (!runId || anyRunActive) return;
     setOpsLoading((prev) => ({ ...prev, reclassifying: true }));
     setError("");
     try {
@@ -716,64 +975,48 @@ function App() {
   async function setSfwClassifyMode(enabled) {
     if (settings.tagging_domain === "real_life") return;
     setError("");
-    skipNextTagPersistRef.current = true;
-    if (enabled) {
-      const parked = selectedTags.filter((t) => !SFW_CLASSIFY_FOLDERS.includes(t));
-      const nextTags = [...SFW_CLASSIFY_FOLDERS];
-      const next = {
-        ...settings,
-        sfw_classify_mode: true,
-        selected_tags: nextTags,
-        selected_tags_nsfw: parked.length ? parked : parkedNsfwTags,
-      };
-      setSelectedTags(nextTags);
-      setSettings(next);
-      try {
-        const saved = await api.saveSettings(next);
-        const merged = { ...DEFAULT_SETTINGS, ...saved };
-        setSettings(merged);
-        setSelectedTags(
-          Array.isArray(saved.selected_tags) ? saved.selected_tags : nextTags
-        );
-        setSavedSnapshot(
-          settingsSnapshot(
-            merged,
-            Array.isArray(saved.selected_tags) ? saved.selected_tags : nextTags
-          )
-        );
-      } catch (err) {
-        setError(`Failed to enable SFW mode: ${err.message}`);
-      }
-      return;
-    }
-
-    const restored =
-      parkedNsfwTags.length > 0
+    const unparked = selectedTags.filter((t) => !SFW_CLASSIFY_FOLDERS.includes(t));
+    const nextTags = enabled
+      ? [...SFW_CLASSIFY_FOLDERS]
+      : parkedNsfwTags.length > 0
         ? parkedNsfwTags
-        : selectedTags.filter((t) => !SFW_CLASSIFY_FOLDERS.includes(t));
-    const next = {
-      ...settings,
-      sfw_classify_mode: false,
-      selected_tags: restored,
-      selected_tags_nsfw: restored,
+        : unparked;
+    const change = {
+      sfw_classify_mode: enabled,
+      selected_tags: nextTags,
+      selected_tags_nsfw: enabled ? (unparked.length ? unparked : parkedNsfwTags) : nextTags,
     };
-    setSelectedTags(restored);
-    setSettings(next);
+    const previous = {
+      sfw_classify_mode: settings.sfw_classify_mode,
+      selected_tags: selectedTags,
+      selected_tags_nsfw: parkedNsfwTags,
+    };
+    skipNextTagPersistRef.current = true;
+    setSelectedTags(nextTags);
+    setSettings((prev) => ({ ...prev, ...change }));
     try {
-      const saved = await api.saveSettings(next);
-      const merged = { ...DEFAULT_SETTINGS, ...saved };
-      setSettings(merged);
-      setSelectedTags(
-        Array.isArray(saved.selected_tags) ? saved.selected_tags : restored
-      );
-      setSavedSnapshot(
-        settingsSnapshot(
-          merged,
-          Array.isArray(saved.selected_tags) ? saved.selected_tags : restored
-        )
-      );
+      // Save only the SFW fields on top of the saved settings; unrelated
+      // unsaved edits stay pending for the Save button.
+      const saved = await api.saveSettings({
+        ...(savedSettingsRef.current || DEFAULT_SETTINGS),
+        ...change,
+      });
+      const { merged, tags } = rememberSavedSettings(saved, nextTags);
+      setSettings((prev) => ({
+        ...prev,
+        sfw_classify_mode: merged.sfw_classify_mode,
+        selected_tags: tags,
+        selected_tags_nsfw: merged.selected_tags_nsfw,
+      }));
+      if (!sameList(tags, nextTags)) {
+        skipNextTagPersistRef.current = true;
+        setSelectedTags(tags);
+      }
     } catch (err) {
-      setError(`Failed to disable SFW mode: ${err.message}`);
+      skipNextTagPersistRef.current = true;
+      setSelectedTags(previous.selected_tags);
+      setSettings((prev) => ({ ...prev, ...previous }));
+      setError(`Failed to ${enabled ? "enable" : "disable"} SFW mode: ${err.message}`);
     }
   }
 
@@ -876,11 +1119,11 @@ function App() {
             <button
               type="button"
               className="unload-models-btn"
-              disabled={runActive || opsLoading.unloadingModels}
+              disabled={anyRunActive || opsLoading.unloadingModels}
               onClick={handleUnloadModels}
               title={
-                runActive
-                  ? "Cancel the current run before unloading GPU models"
+                anyRunActive
+                  ? "Cancel the active run before unloading GPU models"
                   : "Drop cached tagger sessions to free GPU memory"
               }
             >
@@ -891,8 +1134,23 @@ function App() {
       </header>
 
       {offlineMode && (
-        <div className="error">
-          Backend is offline. Running in browser-only demo mode with local mock data.
+        <div className={backendBack ? "notice offline-banner" : "error offline-banner"} role="status">
+          {backendBack ? (
+            <span>
+              The backend is reachable again. Reconnect to leave demo mode and load your real
+              settings and runs.
+            </span>
+          ) : (
+            <span>
+              Backend is offline. Running in browser-only demo mode with local mock data; nothing
+              here touches your files.
+            </span>
+          )}
+          {backendBack ? (
+            <button type="button" onClick={() => window.location.reload()}>
+              Reconnect
+            </button>
+          ) : null}
         </div>
       )}
       {providerInfo?.provider_error && !offlineMode && (
@@ -956,10 +1214,12 @@ function App() {
               </button>
             </div>
             {scanPreview?.stats && (
-              <div className="scan-preview">
-                Eligible: {scanPreview.stats.eligible_images} · Total files:{" "}
+              <div className="scan-preview" role="status">
+                Eligible: <strong>{scanPreview.stats.eligible_images}</strong> · Total files:{" "}
                 {scanPreview.stats.total_files} · Ignored GIF: {scanPreview.stats.ignored_gif} ·
-                Unsupported: {scanPreview.stats.ignored_unsupported}
+                Unsupported: {scanPreview.stats.ignored_unsupported} · Unreadable:{" "}
+                {scanPreview.stats.failed_to_read}
+                {scanPreview.recursive ? "" : " · top folder only"}
               </div>
             )}
           </fieldset>
@@ -990,14 +1250,13 @@ function App() {
             <div className="grid">
               <label>
                 Assignment confidence
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  max="1"
+                <NumberField
+                  step={0.01}
+                  min={0}
+                  max={1}
                   value={settings.confidence_threshold}
-                  onChange={(e) =>
-                    setSettings({ ...settings, confidence_threshold: Number(e.target.value) })
+                  onCommit={(next) =>
+                    setSettings((prev) => ({ ...prev, confidence_threshold: next }))
                   }
                 />
                 <span className="help">
@@ -1007,17 +1266,13 @@ function App() {
               {isWdModel && (
                 <label>
                   WD general threshold
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    max="1"
+                  <NumberField
+                    step={0.01}
+                    min={0}
+                    max={1}
                     value={settings.wd_general_threshold}
-                    onChange={(e) =>
-                      setSettings({
-                        ...settings,
-                        wd_general_threshold: Number(e.target.value),
-                      })
+                    onCommit={(next) =>
+                      setSettings((prev) => ({ ...prev, wd_general_threshold: next }))
                     }
                   />
                   <span className="help">
@@ -1033,38 +1288,26 @@ function App() {
             <div className="grid">
               <label>
                 Max inference workers
-                <input
-                  type="number"
-                  min="1"
-                  max="16"
+                <NumberField
+                  min={1}
+                  max={16}
+                  integer
                   value={settings.max_inference_workers ?? 2}
-                  onChange={(e) =>
-                    setSettings({
-                      ...settings,
-                      max_inference_workers: Math.max(
-                        1,
-                        Math.min(16, Number(e.target.value) || 1)
-                      ),
-                    })
+                  onCommit={(next) =>
+                    setSettings((prev) => ({ ...prev, max_inference_workers: next }))
                   }
                 />
                 <span className="help">Keep at 2 for GPU ORT sessions (serialized lock).</span>
               </label>
               <label>
                 Inference batch size
-                <input
-                  type="number"
-                  min="1"
-                  max="64"
+                <NumberField
+                  min={1}
+                  max={64}
+                  integer
                   value={settings.inference_batch_size ?? 8}
-                  onChange={(e) =>
-                    setSettings({
-                      ...settings,
-                      inference_batch_size: Math.max(
-                        1,
-                        Math.min(64, Number(e.target.value) || 8)
-                      ),
-                    })
+                  onCommit={(next) =>
+                    setSettings((prev) => ({ ...prev, inference_batch_size: next }))
                   }
                 />
                 <span className="help">
@@ -1075,125 +1318,136 @@ function App() {
                 <input
                   type="checkbox"
                   checked={Boolean(settings.force_cpu_inference)}
-                  onChange={(e) =>
-                    setSettings({ ...settings, force_cpu_inference: e.target.checked })
-                  }
+                  onChange={(e) => {
+                    const { checked } = e.target;
+                    setSettings((prev) => ({ ...prev, force_cpu_inference: checked }));
+                  }}
                 />
-                Force CPU inference
+                <span>Force CPU inference</span>
               </label>
+            </div>
+          </fieldset>
+
+          <fieldset className="settings-section">
+            <legend>Classification</legend>
+            <div className="check-list">
               <label className="inline-check">
                 <input
                   type="checkbox"
                   checked={Boolean(settings.experimental_media_enabled)}
-                  onChange={(e) =>
-                    setSettings({ ...settings, experimental_media_enabled: e.target.checked })
-                  }
+                  onChange={(e) => {
+                    const { checked } = e.target;
+                    setSettings((prev) => ({ ...prev, experimental_media_enabled: checked }));
+                  }}
                 />
-                Experimental: classify GIF/videos via length-scaled multi-frame sampling
+                <span>Experimental: classify GIF/videos via length-scaled multi-frame sampling</span>
               </label>
               <label className="inline-check">
                 <input
                   type="checkbox"
                   checked={Boolean(settings.experimental_style_detector_enabled)}
-                  onChange={(e) =>
-                    setSettings({
-                      ...settings,
-                      experimental_style_detector_enabled: e.target.checked,
-                    })
-                  }
+                  onChange={(e) => {
+                    const { checked } = e.target;
+                    setSettings((prev) => ({
+                      ...prev,
+                      experimental_style_detector_enabled: checked,
+                    }));
+                  }}
                 />
-                Experimental: real vs anime style gate (dedicated ONNX →{" "}
-                <code>real_life</code>; uncertain → needs review)
+                <span>
+                  Experimental: real vs anime style gate (dedicated ONNX →{" "}
+                  <code>real_life</code>; uncertain → needs review)
+                </span>
               </label>
               <label className="inline-check">
                 <input
                   type="checkbox"
                   checked={Boolean(settings.hybrid_ml_on_review)}
-                  onChange={(e) =>
-                    setSettings({
-                      ...settings,
-                      hybrid_ml_on_review: e.target.checked,
-                    })
-                  }
+                  onChange={(e) => {
+                    const { checked } = e.target;
+                    setSettings((prev) => ({ ...prev, hybrid_ml_on_review: checked }));
+                  }}
                   disabled={settings.tagging_domain === "real_life"}
                 />
-                Hybrid: on needs-review (WD primary), re-run ML-Danbooru and merge
-                allowlisted high-recall tags only (skips Voyeur soft cues)
-              </label>
-              <fieldset className="domain-toggle">
-                <legend>Tagging domain</legend>
-                <label className="inline-check">
-                  <input
-                    type="radio"
-                    name="tagging_domain"
-                    checked={settings.tagging_domain !== "real_life"}
-                    onChange={() =>
-                      setSettings({ ...settings, tagging_domain: "drawn" })
-                    }
-                  />
-                  Animated / drawn (WD + ML-Danbooru taxonomy)
-                </label>
-                <label className="inline-check">
-                  <input
-                    type="radio"
-                    name="tagging_domain"
-                    checked={settings.tagging_domain === "real_life"}
-                    onChange={() =>
-                      setSettings({
-                        ...settings,
-                        tagging_domain: "real_life",
-                        experimental_media_enabled: true,
-                        sfw_classify_mode: false,
-                      })
-                    }
-                  />
-                  Real-life photos / videos (local adult tagger)
-                </label>
-                <span className="help">
-                  Real-life mode uses an isolated taxonomy under{" "}
-                  <code>Real Life/&lt;primary&gt;/</code>. Sensitive tags (BBC /
-                  Ebony / Asian) are suggestions only and need explicit Final-tag
-                  confirmation. Save settings after switching domains.
+                <span>
+                  Hybrid: on needs-review (WD primary), re-run ML-Danbooru and merge allowlisted
+                  high-recall tags only (skips Voyeur soft cues)
                 </span>
-                {settings.tagging_domain === "real_life" && !offlineMode ? (
-                  <div className="scan-preview real-life-status">
-                    {realLifeStatusLoading ? (
-                      <span className="muted">Checking local adult tagger…</span>
-                    ) : realLifeStatus?.engine ? (
-                      <>
-                        <div>
-                          VLM:{" "}
-                          <strong>
-                            {realLifeStatus.engine.vlm?.available ? "ready" : "unavailable"}
-                          </strong>
-                          {realLifeStatus.engine.vlm?.backend
-                            ? ` (${realLifeStatus.engine.vlm.backend})`
-                            : ""}
-                        </div>
-                        <div>
-                          Position classifier:{" "}
-                          <strong>
-                            {realLifeStatus.engine.position?.available
-                              ? "ready"
-                              : "unavailable"}
-                          </strong>
-                        </div>
-                        <div className="help">{realLifeStatus.engine.message}</div>
-                        {realLifeStatus.engine.fallback ? (
-                          <div className="help">
-                            Fallback active: style gate + manual review only until{" "}
-                            <code>llama-cpp-python</code> and the Qwen2.5-VL GGUF +
-                            mmproj are installed.
-                          </div>
-                        ) : null}
-                      </>
-                    ) : (
-                      <span className="muted">Real-life tagger status unavailable.</span>
-                    )}
-                  </div>
-                ) : null}
-              </fieldset>
+              </label>
             </div>
+            <fieldset className="domain-toggle">
+              <legend>Tagging domain</legend>
+              <label className="inline-check">
+                <input
+                  type="radio"
+                  name="tagging_domain"
+                  checked={settings.tagging_domain !== "real_life"}
+                  onChange={() =>
+                    setSettings((prev) => ({ ...prev, tagging_domain: "drawn" }))
+                  }
+                />
+                <span>Animated / drawn (WD + ML-Danbooru taxonomy)</span>
+              </label>
+              <label className="inline-check">
+                <input
+                  type="radio"
+                  name="tagging_domain"
+                  checked={settings.tagging_domain === "real_life"}
+                  onChange={() =>
+                    setSettings({
+                      ...settings,
+                      tagging_domain: "real_life",
+                      experimental_media_enabled: true,
+                      sfw_classify_mode: false,
+                    })
+                  }
+                />
+                <span>Real-life photos / videos (local adult tagger)</span>
+              </label>
+              <span className="help">
+                Real-life mode uses an isolated taxonomy under{" "}
+                <code>Real Life/&lt;primary&gt;/</code>. Sensitive tags (BBC /
+                Ebony / Asian) are suggestions only and need explicit Final-tag
+                confirmation. Save settings after switching domains.
+              </span>
+              {settings.tagging_domain === "real_life" && !offlineMode ? (
+                <div className="scan-preview real-life-status">
+                  {realLifeStatusLoading ? (
+                    <span className="muted">Checking local adult tagger…</span>
+                  ) : realLifeStatus?.engine ? (
+                    <>
+                      <div>
+                        VLM:{" "}
+                        <strong>
+                          {realLifeStatus.engine.vlm?.available ? "ready" : "unavailable"}
+                        </strong>
+                        {realLifeStatus.engine.vlm?.backend
+                          ? ` (${realLifeStatus.engine.vlm.backend})`
+                          : ""}
+                      </div>
+                      <div>
+                        Position classifier:{" "}
+                        <strong>
+                          {realLifeStatus.engine.position?.available
+                            ? "ready"
+                            : "unavailable"}
+                        </strong>
+                      </div>
+                      <div className="help">{realLifeStatus.engine.message}</div>
+                      {realLifeStatus.engine.fallback ? (
+                        <div className="help">
+                          Fallback active: style gate + manual review only until{" "}
+                          <code>llama-cpp-python</code> and the Qwen2.5-VL GGUF +
+                          mmproj are installed.
+                        </div>
+                      ) : null}
+                    </>
+                  ) : (
+                    <span className="muted">Real-life tagger status unavailable.</span>
+                  )}
+                </div>
+              ) : null}
+            </fieldset>
           </fieldset>
 
           <div className="sticky-save">
@@ -1227,43 +1481,60 @@ function App() {
             SFW classify mode (parks NSFW tags; restore when off)
           </label>
         ) : null}
-        <label>
-          {settings.tagging_domain === "real_life"
-            ? "Real-life category search"
-            : "Tag match search (destinations + tags.csv)"}
-          <input
-            value={tagQuery}
-            onChange={(e) => setTagQuery(e.target.value)}
-            list="tag-match-suggestions"
-            autoComplete="off"
-            disabled={sfwClassifyMode}
-            onKeyDown={async (e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                if (sfwClassifyMode) return;
-                setError("");
-                try {
-                  await addTagsFromInput(tagQuery);
-                  setTagQuery("");
-                } catch (err) {
-                  setError(err.message);
+        <div className="tag-search-row">
+          <label>
+            {settings.tagging_domain === "real_life"
+              ? "Real-life category search"
+              : "Tag match search (destinations + tags.csv)"}
+            <input
+              value={tagQuery}
+              onChange={(e) => setTagQuery(e.target.value)}
+              list="tag-match-suggestions"
+              autoComplete="off"
+              disabled={sfwClassifyMode}
+              onKeyDown={async (e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  if (sfwClassifyMode) return;
+                  setError("");
+                  try {
+                    await addTagsFromInput(tagQuery);
+                    setTagQuery("");
+                  } catch (err) {
+                    setError(err.message);
+                  }
                 }
+              }}
+              placeholder={
+                sfwClassifyMode
+                  ? "Tag editing disabled in SFW mode"
+                  : settings.tagging_domain === "real_life"
+                    ? "Type creampie, BBC, hotwife…"
+                    : "Type Voyeur, loli, Pokemon…"
+              }
+            />
+            <datalist id="tag-match-suggestions">
+              {tagOptions.map((tag) => (
+                <option key={tag} value={tag} />
+              ))}
+            </datalist>
+          </label>
+          <button
+            type="button"
+            className="secondary"
+            disabled={sfwClassifyMode}
+            onClick={async () => {
+              setError("");
+              try {
+                await addTagsFromInput(tagQuery);
+              } catch (err) {
+                setError(err.message);
               }
             }}
-            placeholder={
-              sfwClassifyMode
-                ? "Tag editing disabled in SFW mode"
-                : settings.tagging_domain === "real_life"
-                  ? "Type creampie, BBC, hotwife…"
-                  : "Type Voyeur, loli, Pokemon…"
-            }
-          />
-          <datalist id="tag-match-suggestions">
-            {tagOptions.map((tag) => (
-              <option key={tag} value={tag} />
-            ))}
-          </datalist>
-        </label>
+          >
+            Add tag(s)
+          </button>
+        </div>
         {tagQuery.trim() && !sfwClassifyMode && (
           <div className="tag-suggestions">
             {tagOptions.length === 0 ? (
@@ -1286,80 +1557,6 @@ function App() {
             )}
           </div>
         )}
-        <div className="actions">
-          <button
-            type="button"
-            className="secondary"
-            disabled={sfwClassifyMode}
-            onClick={async () => {
-              setError("");
-              try {
-                await addTagsFromInput(tagQuery);
-              } catch (err) {
-                setError(err.message);
-              }
-            }}
-          >
-            Add typed tag(s)
-          </button>
-          <button
-            type="button"
-            disabled={loading || opsLoading.startingRun || runActive}
-            onClick={() => handleStartRun("classify")}
-          >
-            {opsLoading.startingRun
-              ? "Starting…"
-              : settings.tagging_domain === "real_life"
-                ? "Start real-life tagging"
-                : "Start run"}
-          </button>
-          <button
-            type="button"
-            className="secondary"
-            title="Scan root (including GIF/video). Keep only confident real_life hits — nothing else."
-            disabled={
-              loading ||
-              opsLoading.startingRun ||
-              runActive ||
-              settings.tagging_domain === "real_life"
-            }
-            onClick={() => handleStartRun("real_life_filter")}
-          >
-            {opsLoading.startingRun ? "Starting…" : "Filter real-life only"}
-          </button>
-          <button
-            type="button"
-            className="secondary"
-            title="Treat each child folder or top-level .cbz as one work. Sample pages → WD → primary + category tags. Migrate moves into Doujins/<tag>/ with junctions."
-            disabled={
-              loading ||
-              opsLoading.startingRun ||
-              runActive ||
-              settings.tagging_domain === "real_life"
-            }
-            onClick={() => handleStartRun("doujin_works")}
-          >
-            {opsLoading.startingRun ? "Starting…" : "Start Doujin works"}
-          </button>
-        </div>
-        <p className="help">
-          {settings.tagging_domain === "real_life" ? (
-            <>
-              Real-life tagging: style gate → local adult VLM (+ optional position
-              classifier) → isolated categories under <code>Real Life/</code>. All
-              items start in needs-review. Sensitive tags require typing them into
-              Final tag before approve.
-            </>
-          ) : (
-            <>
-              Filter real-life only: style-first hybrid (skip WD on clear anime), capped GIF/video
-              frames, stills stay batched. Only blended <code>real_life</code> hits are kept.
-              Doujin works: one review row per title folder/cbz; favourites loli / shota / milf /
-              fertilization / monster_girl / incest / bestiality / Pokemon / NTR / tentacles /
-              furry / android; approve then migrate (move + tag junctions).
-            </>
-          )}
-        </p>
         <div className={`stats${sfwClassifyMode ? " tags-locked" : ""}`}>
           {selectedTags.length === 0 ? (
             <span className="muted">No tags selected</span>
@@ -1391,7 +1588,103 @@ function App() {
             </div>
           </div>
         ) : null}
+        <div className="actions run-actions">
+          <button
+            type="button"
+            disabled={loading || opsLoading.startingRun || anyRunActive}
+            onClick={() => handleStartRun("classify")}
+          >
+            {opsLoading.startingRun
+              ? "Starting…"
+              : settings.tagging_domain === "real_life"
+                ? "Start real-life tagging"
+                : "Start run"}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            title="Scan root (including GIF/video). Keep only confident real_life hits — nothing else."
+            disabled={
+              loading ||
+              opsLoading.startingRun ||
+              anyRunActive ||
+              settings.tagging_domain === "real_life"
+            }
+            onClick={() => handleStartRun("real_life_filter")}
+          >
+            {opsLoading.startingRun ? "Starting…" : "Filter real-life only"}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            title="Treat each child folder or top-level .cbz as one work. Sample pages → WD → primary + category tags. Migrate moves into Doujins/<tag>/ with junctions."
+            disabled={
+              loading ||
+              opsLoading.startingRun ||
+              anyRunActive ||
+              settings.tagging_domain === "real_life"
+            }
+            onClick={() => handleStartRun("doujin_works")}
+          >
+            {opsLoading.startingRun ? "Starting…" : "Start Doujin works"}
+          </button>
+        </div>
+        {otherActiveRun && (
+          <p className="help run-blocked" role="status">
+            Run #{otherActiveRun.run_id} is still {otherActiveRun.status}. Wait for it to
+            finish or cancel it before starting another run.{" "}
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => openRun(otherActiveRun.run_id)}
+            >
+              Open run #{otherActiveRun.run_id}
+            </button>
+          </p>
+        )}
+        <p className="help">
+          {settings.tagging_domain === "real_life" ? (
+            <>
+              Real-life tagging: style gate → local adult VLM (+ optional position
+              classifier) → isolated categories under <code>Real Life/</code>. All
+              items start in needs-review. Sensitive tags require typing them into
+              Final tag before approve.
+            </>
+          ) : (
+            <>
+              Filter real-life only: style-first hybrid (skip WD on clear anime), capped GIF/video
+              frames, stills stay batched. Only blended <code>real_life</code> hits are kept.
+              Doujin works: one review row per title folder/cbz; favourites loli / shota / milf /
+              fertilization / monster_girl / incest / bestiality / Pokemon / NTR / tentacles /
+              furry / android; approve then migrate (move + tag junctions).
+            </>
+          )}
+        </p>
       </section>
+
+      {runs.length > 0 && (
+        <section className="panel run-history" aria-labelledby="run-history-heading">
+          <h2 id="run-history-heading">Runs</h2>
+          <span className="kicker">Reopen an earlier run to review or migrate its results.</span>
+          <label className="run-picker">
+            Open run
+            <select
+              value={runId ?? ""}
+              onChange={(e) => openRun(Number(e.target.value))}
+            >
+              {runId == null && <option value="">Select a run…</option>}
+              {runId != null && !runs.some((run) => run.run_id === runId) && (
+                <option value={runId}>Run #{runId}</option>
+              )}
+              {runs.map((run) => (
+                <option key={run.run_id} value={run.run_id}>
+                  {runOptionLabel(run)}
+                </option>
+              ))}
+            </select>
+          </label>
+        </section>
+      )}
 
       {runId && runStatus && (
         <section className="panel">
@@ -1481,7 +1774,7 @@ function App() {
             ["completed", "failed", "cancelled"].includes(runStatus.status) && (
               <div className="actions reclassify-banner" role="region" aria-label="Reclassify needs review">
                 <span>
-                  {stats.reviewNeeded} item{stats.reviewNeeded === 1 ? "" : "s"} need review — retry with
+                  {stats.reviewNeeded} item{stats.reviewNeeded === 1 ? " needs" : "s need"} review — retry with
                   another model (approved/rejected/migrated stay untouched). SwinV2 is much faster than
                   EVA02.
                 </span>
@@ -1502,7 +1795,9 @@ function App() {
                 </label>
                 <button
                   type="button"
-                  disabled={opsLoading.reclassifying || selectedTags.length === 0}
+                  disabled={
+                    opsLoading.reclassifying || selectedTags.length === 0 || anyRunActive
+                  }
                   onClick={handleReclassifyNeedsReview}
                   aria-label="Reclassify needs review items"
                 >
@@ -1534,32 +1829,62 @@ function App() {
           <div className="actions">
             <button
               type="button"
-              disabled={opsLoading.applyingBatch}
+              disabled={opsLoading.applyingBatch || selectedIds.length === 0}
               onClick={() => applyBatch("approved")}
             >
-              Approve selected
+              Approve selected{selectedIds.length ? ` (${selectedIds.length})` : ""}
             </button>
             <button
               type="button"
               className="secondary"
-              disabled={opsLoading.applyingBatch}
+              disabled={opsLoading.applyingBatch || selectedIds.length === 0}
               onClick={() => applyBatch("rejected")}
             >
-              Reject selected
+              Reject selected{selectedIds.length ? ` (${selectedIds.length})` : ""}
             </button>
-            <select value={migrateMode} onChange={(e) => setMigrateMode(e.target.value)}>
-              <option value="copy">copy</option>
-              <option value="move">move</option>
-            </select>
-            <button type="button" disabled={opsLoading.migrating} onClick={migrateApproved}>
-              {opsLoading.migrating ? "Migrating…" : "Migrate approved"}
+            <label className="migrate-mode">
+              <span className="sr-only">Migrate mode</span>
+              <select
+                value={migrateMode}
+                onChange={(e) => setMigrateMode(e.target.value)}
+                disabled={opsLoading.migrating}
+              >
+                <option value="copy">copy</option>
+                <option value="move">move</option>
+              </select>
+            </label>
+            <button
+              type="button"
+              disabled={opsLoading.migrating || runActive || stats.approved === 0}
+              title={
+                runActive
+                  ? "Wait for the run to finish (or cancel it) before migrating"
+                  : stats.approved === 0
+                    ? "Approve items first"
+                    : undefined
+              }
+              onClick={migrateApproved}
+            >
+              {opsLoading.migrating ? "Migrating…" : `Migrate approved (${stats.approved})`}
             </button>
           </div>
 
-          <table>
+          <div className="table-wrap">
+          <table className="review-table">
             <thead>
               <tr>
-                <th>Select</th>
+                <th scope="col" className="select-col">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all items that are not migrated yet"
+                    checked={allSelectableSelected}
+                    ref={(el) => {
+                      if (el) el.indeterminate = someSelectableSelected && !allSelectableSelected;
+                    }}
+                    disabled={selectableIds.length === 0}
+                    onChange={(e) => setSelectedIds(e.target.checked ? selectableIds : [])}
+                  />
+                </th>
                 <th>Work / media</th>
                 <th>Primary</th>
                 <th>Category tags</th>
@@ -1571,18 +1896,35 @@ function App() {
               </tr>
             </thead>
             <tbody>
-              {items.map((item) => (
-                <tr key={item.id} className={item.needs_review ? "needs-review" : ""}>
-                  <td>
+              {items.map((item) => {
+                const isMigrated = item.status === "migrated";
+                const rowBusy = Boolean(pendingItemIds[item.id]);
+                const itemLabel = item.relative_path || item.file_path;
+                return (
+                <tr
+                  key={item.id}
+                  className={[
+                    item.needs_review ? "needs-review" : "",
+                    `row-${item.status}`,
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                >
+                  <td className="select-col">
                     <input
                       type="checkbox"
-                      checked={selectedIds.includes(item.id)}
+                      aria-label={`Select ${itemLabel}`}
+                      checked={selectedIdSet.has(item.id)}
+                      disabled={isMigrated}
                       onChange={(e) => {
-                        if (e.target.checked) {
-                          setSelectedIds([...selectedIds, item.id]);
-                        } else {
-                          setSelectedIds(selectedIds.filter((id) => id !== item.id));
-                        }
+                        const { checked } = e.target;
+                        setSelectedIds((prev) =>
+                          checked
+                            ? prev.includes(item.id)
+                              ? prev
+                              : [...prev, item.id]
+                            : prev.filter((id) => id !== item.id)
+                        );
                       }}
                     />
                   </td>
@@ -1665,15 +2007,42 @@ function App() {
                           ))}
                     </div>
                   </td>
-                  <td>{item.status}</td>
+                  <td>
+                    <span className={`status-badge status-${item.status}`}>{item.status}</span>
+                    {isMigrated && item.migrated_to ? (
+                      <div className="help migrated-path" title={item.migrated_to}>
+                        {"→\u00a0"}
+                        {pathTail(item.migrated_to)}
+                      </div>
+                    ) : null}
+                  </td>
                   <td>
                     <input
+                      className="final-tag-input"
+                      aria-label={`Final tag for ${itemLabel}`}
+                      list="final-tag-options"
                       value={finalTagDrafts[item.id] ?? (item.final_tag || "")}
-                      onChange={(e) => queueFinalTagUpdate(item.id, e.target.value)}
+                      placeholder={isMigrated ? "" : "Destination tag"}
+                      disabled={isMigrated}
+                      onChange={(e) => setFinalTagDraft(item.id, e.target.value)}
+                      onBlur={() => commitFinalTag(item)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          e.currentTarget.blur();
+                        } else if (e.key === "Escape") {
+                          dropFinalTagDraft(item.id);
+                        }
+                      }}
                     />
                   </td>
                   <td>
-                    <button type="button" className="secondary" onClick={() => toggleScoreDebug(item.id)}>
+                    <button
+                      type="button"
+                      className="secondary"
+                      aria-expanded={Boolean(expandedScoreRows[item.id])}
+                      onClick={() => toggleScoreDebug(item.id)}
+                    >
                       {expandedScoreRows[item.id] ? "Hide JSON" : "Show JSON"}
                     </button>
                     {expandedScoreRows[item.id] && (
@@ -1685,37 +2054,47 @@ function App() {
                     )}
                   </td>
                   <td>
-                    <div className="actions">
-                      <button
-                        type="button"
-                        disabled={opsLoading.updatingStatus}
-                        onClick={() => updateStatus(item.id, "approved")}
-                      >
-                        Approve
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary"
-                        disabled={opsLoading.updatingStatus}
-                        onClick={() => updateStatus(item.id, "rejected")}
-                      >
-                        Reject
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary"
-                        disabled={opsLoading.updatingStatus}
-                        onClick={() => updateStatus(item.id, "reviewed")}
-                      >
-                        Reviewed
-                      </button>
-                    </div>
+                    {isMigrated ? (
+                      <span className="muted">Done</span>
+                    ) : (
+                      <div className="row-actions">
+                        <button
+                          type="button"
+                          disabled={rowBusy || item.status === "approved"}
+                          onClick={() => updateStatus(item.id, "approved")}
+                        >
+                          Approve
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary"
+                          disabled={rowBusy || item.status === "rejected"}
+                          onClick={() => updateStatus(item.id, "rejected")}
+                        >
+                          Reject
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary"
+                          disabled={rowBusy || item.status === "reviewed"}
+                          onClick={() => updateStatus(item.id, "reviewed")}
+                        >
+                          Reviewed
+                        </button>
+                      </div>
+                    )}
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
-          {runMeta && <pre className="debug-json">{JSON.stringify(runMeta.counts, null, 2)}</pre>}
+          </div>
+          <datalist id="final-tag-options">
+            {selectedTags.map((tag) => (
+              <option key={tag} value={tag} />
+            ))}
+          </datalist>
         </section>
       )}
 

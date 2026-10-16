@@ -298,8 +298,8 @@ def test_migrate_rejects_running_run(tmp_path: Path) -> None:
     cats = tmp_path / "cats"
     root.mkdir()
     cats.mkdir()
-    run_id = _seed_completed_run(root, cats, [], status="running")
     with TestClient(app) as client:
+        run_id = _seed_completed_run(root, cats, [], status="running")
         resp = client.post(
             f"/api/runs/{run_id}/migrate",
             json={"mode": "copy", "create_missing_folders": True},

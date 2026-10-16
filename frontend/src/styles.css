@@ -195,9 +195,20 @@ label {
 
 .inline-check {
   flex-direction: row;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.5rem;
   font-weight: 500;
+  line-height: 1.4;
+}
+
+.inline-check > input {
+  flex: none;
+  margin: 3px 0 0;
+}
+
+.check-list {
+  display: grid;
+  gap: 10px;
 }
 
 .help {
@@ -215,6 +226,7 @@ label {
 
 .model-option {
   display: flex;
+  flex-direction: row;
   gap: 10px;
   align-items: flex-start;
   padding: 10px 12px;
@@ -268,6 +280,17 @@ button {
 
 button:disabled {
   opacity: 0.55;
+  cursor: not-allowed;
+}
+
+input:invalid {
+  border-color: #e08a8a;
+}
+
+input:disabled,
+select:disabled {
+  background: var(--surface-2);
+  color: var(--muted);
   cursor: not-allowed;
 }
 
@@ -335,6 +358,7 @@ button.danger {
 
 .checkbox-row {
   display: flex;
+  flex-direction: row;
   align-items: center;
   gap: 8px;
   margin: 8px 0 12px;
@@ -347,6 +371,11 @@ button.danger {
   gap: 10px;
   margin: 10px 0;
   align-items: center;
+}
+
+.run-picker select {
+  width: 100%;
+  max-width: 100%;
 }
 
 .reclassify-banner {
@@ -450,10 +479,13 @@ button.danger {
 }
 
 .domain-toggle {
-  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
   padding: 10px 12px;
-  border: 1px solid var(--border, #cbd5e1);
+  border: 1px solid var(--line);
   border-radius: 8px;
+  background: var(--surface);
 }
 
 .domain-toggle legend {
@@ -464,6 +496,16 @@ button.danger {
 .real-life-status {
   margin-top: 8px;
   font-size: 13px;
+}
+
+button.chip {
+  background: #eef2ff;
+  color: #1e3a8a;
+  font-weight: 500;
+}
+
+button.chip:hover:not(:disabled) {
+  background: #dbeafe;
 }
 
 .chip button {
@@ -658,4 +700,113 @@ th {
     flex-direction: column;
     align-items: stretch;
   }
+}
+
+.review-table {
+  min-width: 980px;
+}
+
+.select-col {
+  width: 44px;
+  text-align: center;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.status-badge.status-proposed {
+  background: var(--warn-bg);
+  border-color: #f0d49c;
+  color: var(--warn);
+}
+
+.status-badge.status-reviewed {
+  background: #eef2ff;
+  border-color: #c7d2fe;
+  color: #3730a3;
+}
+
+.status-badge.status-approved {
+  background: #e8f6ec;
+  border-color: #b7dfc3;
+  color: var(--ok);
+}
+
+.status-badge.status-rejected {
+  background: var(--danger-bg);
+  border-color: #f5b7b7;
+  color: var(--danger);
+}
+
+.status-badge.status-migrated {
+  background: var(--accent-soft);
+  border-color: #b7c6e3;
+  color: var(--accent);
+}
+
+.migrated-path {
+  min-width: 120px;
+  max-width: 180px;
+  overflow-wrap: anywhere;
+}
+
+tr.row-migrated td {
+  background: var(--surface-2);
+}
+
+tr.row-rejected td {
+  color: var(--muted);
+}
+
+.final-tag-input {
+  width: 100%;
+  min-width: 140px;
+}
+
+.row-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.offline-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.tag-search-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.tag-search-row > label {
+  flex: 1 1 260px;
+}
+
+.run-actions {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.run-blocked {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
 }

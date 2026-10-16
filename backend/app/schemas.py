@@ -15,7 +15,7 @@ TaggingDomain = Literal["drawn", "real_life"]
 class AppSettings(BaseModel):
     root_repo: str = ""
     categories_root: str = ""
-    confidence_threshold: float = 0.6
+    confidence_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
     default_migrate_mode: MigrateMode = "copy"
     scan_recursive: bool = True
     experimental_media_enabled: bool = False
@@ -63,7 +63,7 @@ class ScanStats(BaseModel):
 class StartRunRequest(BaseModel):
     root_repo: str | None = None
     categories_root: str | None = None
-    confidence_threshold: float | None = None
+    confidence_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     selected_folders: list[str] | None = None
     # classify = normal multi-folder run; real_life_filter = only keep real_life hits;
     # doujin_works = folder/cbz pooling; real_life_tag = adult photo/video taxonomy.
@@ -262,6 +262,24 @@ class RunStatusResponse(BaseModel):
     eta_finish_at: str | None = None
     queue_seed: int | None = None
     tagger_model: str | None = None
+
+
+class RunSummary(BaseModel):
+    """One row of the run history list (newest first)."""
+
+    run_id: int
+    created_at: str | None = None
+    status: RunLifecycleStatus
+    root_repo: str
+    categories_root: str
+    tagger_model: str | None = None
+    tagging_domain: str | None = None
+    total_images: int = 0
+    processed_images: int = 0
+    failed_images: int = 0
+    started_at: str | None = None
+    finished_at: str | None = None
+    item_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class UpdateItemRequest(BaseModel):
