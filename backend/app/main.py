@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import JSONResponse
 
 from . import __version__
 from .api import router
@@ -26,9 +27,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 # The API reads and moves local files without authentication, so only the
-# local UI may call it. Any web page could otherwise read settings and paths or
-# start a move-migration through the browser (CORS "*"), or reach it through
-# DNS rebinding (checked by Host). Override with comma-separated lists.
+# local UI may call it. Any web page could otherwise read settings and paths
+# (CORS), send a simple cross-site POST that starts a move-migration (Origin and
+# Sec-Fetch-Site), or reach it through DNS rebinding (Host). Override with
+# comma-separated lists.
 DEFAULT_CORS_ORIGINS = (
     "http://localhost:5173",
     "http://127.0.0.1:5173",
@@ -43,11 +45,28 @@ def _env_list(name: str, default: tuple[str, ...]) -> list[str]:
     return values or list(default)
 
 
+UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
 app = FastAPI(title="THR3SHR API", version=__version__, lifespan=lifespan)
+cors_origins = _env_list("THR3SHR_CORS_ORIGINS", DEFAULT_CORS_ORIGINS)
+
+
+@app.middleware("http")
+async def reject_cross_site_writes(request: Request, call_next):
+    if request.method in UNSAFE_METHODS:
+        origin = request.headers.get("origin")
+        if origin is not None:
+            cross_site = origin not in cors_origins
+        else:
+            cross_site = request.headers.get("sec-fetch-site") == "cross-site"
+        if cross_site:
+            return JSONResponse(status_code=403, content={"detail": "Cross-site request refused"})
+    return await call_next(request)
+
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_env_list("THR3SHR_CORS_ORIGINS", DEFAULT_CORS_ORIGINS),
+    allow_origins=cors_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

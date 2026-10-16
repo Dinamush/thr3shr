@@ -98,7 +98,9 @@ curl http://127.0.0.1:8000/health
 
 The API reads and moves local files without authentication, so it only answers the local UI.
 By default it accepts browser calls from the Vite dev and preview servers (`http://localhost:5173`, `http://127.0.0.1:5173`, and the same on port `4173`) and requests addressed to `127.0.0.1` or `localhost`.
-To reach it from another origin or host name (for example another machine on your LAN), set comma-separated lists before starting uvicorn:
+Browser writes (`POST`, `PUT`, `PATCH`, `DELETE`) from any other origin are refused with `403`; scripts and `curl`, which send no `Origin`, are unaffected.
+Both Vite ports are strict, so a port already in use fails loudly instead of moving the UI to an origin the API does not trust.
+To serve the UI on a custom port, or reach the API from another origin or host name (for example another machine on your LAN), set comma-separated lists before starting uvicorn; `THR3SHR_CORS_ORIGINS` covers both read and write access:
 
 ```bash
 THR3SHR_CORS_ORIGINS="http://nas.lan:5173" THR3SHR_ALLOWED_HOSTS="nas.lan,127.0.0.1,localhost" \

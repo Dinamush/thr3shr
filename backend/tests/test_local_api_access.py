@@ -2,9 +2,79 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import DEFAULT_ALLOWED_HOSTS, DEFAULT_CORS_ORIGINS, _env_list, app
+from app.storage import execute
+
+
+def _seed_approved_move(tmp_path: Path) -> tuple[int, Path, Path]:
+    root = tmp_path / "root"
+    dest = tmp_path / "cats" / "tag"
+    root.mkdir()
+    src = root / "a.jpg"
+    src.write_bytes(b"aaa")
+    run_id = execute(
+        """
+        INSERT INTO runs (
+            root_repo, categories_root, confidence_threshold, status,
+            total_images, processed_images, failed_images, cancel_requested, tagger_model
+        ) VALUES (?, ?, 0.6, 'completed', 1, 1, 0, 0, 'wd_swinv2_v3')
+        """,
+        (str(root), str(dest.parent)),
+    )
+    execute(
+        """
+        INSERT INTO items (
+            run_id, file_path, relative_path, primary_tag, final_tag, final_destination, status
+        ) VALUES (?, ?, 'a.jpg', 'tag', 'tag', ?, 'approved')
+        """,
+        (run_id, str(src), str(dest)),
+    )
+    return run_id, src, dest / "a.jpg"
+
+
+def _simple_move_post(client: TestClient, run_id: int, headers: dict[str, str]):
+    # No Content-Type: a browser sends this cross-site without a CORS preflight.
+    return client.post(f"/api/runs/{run_id}/migrate", content=b'{"mode":"move"}', headers=headers)
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"Origin": "https://evil.example"},
+        {"Origin": "null"},
+        {"Sec-Fetch-Site": "cross-site"},
+    ],
+)
+def test_cross_site_write_is_refused_before_the_handler(tmp_path: Path, headers) -> None:
+    run_id, src, moved = _seed_approved_move(tmp_path)
+    with TestClient(app) as client:
+        resp = _simple_move_post(client, run_id, headers)
+    assert resp.status_code == 403
+    assert src.read_bytes() == b"aaa"
+    assert not moved.exists()
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"Origin": "http://localhost:5173"},
+        {"Origin": "http://127.0.0.1:4173", "Sec-Fetch-Site": "same-site"},
+        {},
+    ],
+)
+def test_local_ui_and_script_writes_are_allowed(tmp_path: Path, headers) -> None:
+    run_id, src, moved = _seed_approved_move(tmp_path)
+    with TestClient(app) as client:
+        resp = _simple_move_post(client, run_id, headers)
+    assert resp.status_code == 200
+    assert resp.json()["migrated_count"] == 1
+    assert not src.exists()
+    assert moved.read_bytes() == b"aaa"
 
 
 def test_local_ui_origin_gets_cors_access() -> None:
