@@ -177,6 +177,20 @@ def _maybe_hybrid_ml_rescue(
         return result
 
 
+def _run_job(target, *args, **kwargs) -> None:
+    """Thread body for run workers.
+
+    A run decodes thousands of large images; glibc keeps the freed buffers, so
+    the backend would otherwise sit at the run's peak RSS until it restarts.
+    """
+    try:
+        target(*args, **kwargs)
+    finally:
+        from .inference_engine import trim_process_heap
+
+        trim_process_heap()
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -2710,7 +2724,8 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
 
     if doujin_works:
         worker = threading.Thread(
-            target=_execute_doujin_run,
+            target=_run_job,
+            args=(_execute_doujin_run,),
             kwargs={
                 "run_id": run_id,
                 "root_repo": root_repo,
@@ -2725,7 +2740,8 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
         )
     elif real_life_tag:
         worker = threading.Thread(
-            target=_execute_real_life_tag_run,
+            target=_run_job,
+            args=(_execute_real_life_tag_run,),
             kwargs={
                 "run_id": run_id,
                 "root_repo": root_repo,
@@ -2739,7 +2755,8 @@ def start_run(payload: StartRunRequest) -> StartRunResponse:
         )
     else:
         worker = threading.Thread(
-            target=_execute_run,
+            target=_run_job,
+            args=(_execute_run,),
             kwargs={
                 "run_id": run_id,
                 "root_repo": root_repo,
@@ -2953,8 +2970,9 @@ def reclassify_run(run_id: int, payload: ReclassifyRequest) -> ReclassifyRespons
         )
 
     worker = threading.Thread(
-        target=_execute_reclassify,
+        target=_run_job,
         args=(
+            _execute_reclassify,
             run_id,
             root_repo,
             categories_root,

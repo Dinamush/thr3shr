@@ -158,3 +158,52 @@ def test_engine_clear_drops_cached_sessions() -> None:
     assert engine.loaded_models() == ["ml_danbooru", "wd_swinv2_v3"]
     assert engine.clear() == ["ml_danbooru", "wd_swinv2_v3"]
     assert engine.loaded_models() == []
+
+
+def _reference_wd_general_scores(tag_names, general_idx, pred, threshold, raw_general):
+    """The per-tag postprocessing the engine used before precomputing labels."""
+    from app.inference_engine import (
+        WD_REALISM_ALWAYS_TAGS,
+        WD_REALISM_FLOOR,
+        _normalize_scores,
+    )
+
+    labels = list(zip(tag_names, pred.astype(float)))
+    general = {}
+    for i in general_idx:
+        name, score = labels[i]
+        value = float(score)
+        if raw_general or value > threshold:
+            general[name] = value
+        elif name in WD_REALISM_ALWAYS_TAGS and value >= WD_REALISM_FLOOR:
+            general[name] = value
+    return _normalize_scores(general)
+
+
+@pytest.mark.parametrize("raw_general", [False, True])
+def test_wd_general_scores_match_reference(raw_general: bool) -> None:
+    from app.inference_engine import InferenceEngine
+
+    # Rating and character tags, names that normalize to the same key or to
+    # nothing, and the realism tags kept below the threshold.
+    tag_names = ["general", "sensitive", "1girl", "solo", "long hair", "long_hair",
+                 "long-hair", ":)", "^^^", "realistic", "photorealistic", "hatsune_miku",
+                 "sky", "Sky", "outdoors"]
+    rating_idx, char_idx = [0, 1], [11]
+    general_idx = [i for i in range(len(tag_names)) if i not in rating_idx + char_idx]
+    engine = InferenceEngine()
+    engine._wd_labels["SwinV2_v3"] = (tag_names, rating_idx, general_idx, char_idx)
+
+    rng = np.random.default_rng(0)
+    rows = [rng.random(len(tag_names), dtype=np.float32) for _ in range(200)]
+    # Values on the threshold and realism floor in float32 and float64 terms.
+    edge = np.full(len(tag_names), 0.35, dtype=np.float32)
+    edge[9] = np.float32(0.18)
+    edge[10] = np.nextafter(np.float32(0.18), np.float32(0))
+    rows += [edge, np.nextafter(edge, np.float32(1)), np.zeros(len(tag_names), np.float32)]
+
+    for pred in rows:
+        expected = _reference_wd_general_scores(tag_names, general_idx, pred, 0.35, raw_general)
+        actual = engine._wd_general_scores("SwinV2_v3", pred, 0.35, raw_general)
+        assert actual == expected
+        assert list(actual) == list(expected)
