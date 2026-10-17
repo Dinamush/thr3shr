@@ -6,7 +6,7 @@
  * page without a palette-specific rule.  Sections:
  *
  *   1  Base            reset, type, focus, utilities
- *   2  App shell       sidebar, top bar, Appearance menu, run dock, jump bar, toasts
+ *   2  App shell       sidebar, top bar, Appearance picker, run dock, jump bar, toasts
  *   3  Page frame      page heads, panes
  *   4  Forms           fields, switch rows, radio options, segmented controls
  *   5  Buttons
@@ -50,15 +50,15 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-html.theme-ready body,
-html.theme-ready .layout-panel,
-html.theme-ready .app-sidebar,
-html.theme-ready .app-topbar,
-html.theme-ready .run-dock,
-html.theme-ready input,
-html.theme-ready select,
-html.theme-ready textarea,
-html.theme-ready button {
+html.theme-ready:not(.theme-swapping) body,
+html.theme-ready:not(.theme-swapping) .layout-panel,
+html.theme-ready:not(.theme-swapping) .app-sidebar,
+html.theme-ready:not(.theme-swapping) .app-topbar,
+html.theme-ready:not(.theme-swapping) .run-dock,
+html.theme-ready:not(.theme-swapping) input,
+html.theme-ready:not(.theme-swapping) select,
+html.theme-ready:not(.theme-swapping) textarea,
+html.theme-ready:not(.theme-swapping) button {
   transition:
     background-color var(--t-slow) var(--ease),
     border-color var(--t-slow) var(--ease),
@@ -542,8 +542,7 @@ main { flex: 1 0 auto; min-width: 0; }
 .app-footer-name { color: var(--tx2); font-weight: 600; }
 .app-footer-version { font-family: var(--font-mono); font-weight: 400; color: var(--tx3); }
 
-/* ── Appearance menu ── */
-.theme-picker { position: relative; }
+/* ── Appearance: top-bar button, theme picker modal, Settings row ── */
 .theme-picker-toggle {
   display: inline-flex;
   align-items: center;
@@ -565,91 +564,333 @@ main { flex: 1 0 auto; min-width: 0; }
   background: conic-gradient(var(--ac) 0 50%, var(--tx) 50% 100%);
   box-shadow: 0 0 0 1px var(--ln2);
 }
-.theme-picker-panel {
+
+/* The modal layer.  Every animation below is transform or opacity; the
+   reduced-motion tiers in tokens.css make all of it instant. */
+.theme-picker {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-palette);
+  display: grid;
+  place-items: center;
+  padding: var(--s6) var(--s4);
+}
+.theme-picker::before {
+  content: "";
   position: absolute;
-  right: 0;
-  top: calc(100% + 6px);
-  z-index: var(--z-dropdown);
-  width: 320px;
-  max-height: min(580px, calc(100vh - 80px));
-  overflow-y: auto;
-  padding: var(--s2);
+  inset: 0;
+  background: var(--scrim);
+  opacity: 0;
+  transition: opacity var(--t-close) var(--ease-in);
+}
+.theme-picker.is-open::before {
+  opacity: 1;
+  transition: opacity var(--t-open) var(--ease-out);
+}
+/* While a palette is previewed the scrim thins, so the app behind reads as
+   the preview. */
+.theme-picker.is-open.is-previewing::before { opacity: 0.35; }
+body.theme-picker-open { overflow: hidden; }
+
+.theme-picker-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(880px, 100%);
+  max-height: min(760px, calc(100vh - 48px));
   border: 1px solid var(--ln);
-  border-radius: var(--r-lg);
+  border-radius: calc(var(--r-lg) + 4px);
   background: var(--sf);
   box-shadow: var(--shadow-3);
+  overflow: hidden;
+  outline: none;
   opacity: 0;
-  visibility: hidden;
-  transform: translateY(-4px);
+  transform: translateY(10px) scale(0.965);
+  transform-origin: var(--picker-origin, 50% 0%);
   transition:
-    opacity var(--t-fast) var(--ease),
-    transform var(--t-fast) var(--ease),
-    visibility 0s linear var(--t-fast);
+    opacity var(--t-close) var(--ease-in),
+    transform var(--t-close) var(--ease-in);
 }
-.theme-picker[data-open="true"] .theme-picker-panel {
+.theme-picker.is-open .theme-picker-panel {
   opacity: 1;
-  visibility: visible;
   transform: none;
-  transition-delay: 0s;
+  transition:
+    opacity calc(var(--t-open) * 0.6) var(--ease-out),
+    transform var(--t-open) var(--ease-out);
 }
-.theme-picker-panel-group + .theme-picker-panel-group {
-  margin-top: var(--s2);
-  padding-top: var(--s2);
-  border-top: 1px solid var(--ln);
+.theme-picker-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s4) var(--s4) var(--s3) var(--s5);
 }
-.theme-picker-panel-group-label {
+.theme-picker-head-text { flex: 1; min-width: 0; }
+.theme-picker-title { font-size: var(--fs-lg); letter-spacing: -0.01em; }
+.theme-picker-now {
+  margin: 2px 0 0;
+  overflow: hidden;
+  color: var(--tx3);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.theme-picker-now b { color: var(--tx); font-weight: 600; }
+.theme-picker-close {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r);
+  background: transparent;
+  color: var(--tx3);
+  cursor: pointer;
+  transition: background-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.theme-picker-close:hover { background: var(--sf3); color: var(--tx); }
+.theme-picker-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--s2) var(--s5) var(--s5);
+}
+.theme-picker-group + .theme-picker-group { margin-top: var(--s5); }
+.theme-picker-group-label {
   margin: 0;
-  padding: 4px 8px;
+  padding: 0 0 var(--s2);
   color: var(--tx3);
   font-size: var(--fs-xs);
   font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
-.theme-swatches {
+.theme-picker-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 2px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: var(--s3);
 }
-.theme-swatch {
+
+/* One palette.  Cards cascade in on open; the focus/preview ring is its own
+   layer that only fades and settles. */
+.theme-card {
+  position: relative;
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: var(--s2);
-  width: 100%;
-  padding: 6px 8px;
-  border: 1px solid transparent;
-  border-radius: var(--r);
+  min-width: 0;
+  padding: var(--s2) var(--s2) 10px;
+  border: 0;
+  border-radius: calc(var(--r) + 4px);
   background: transparent;
   color: var(--tx);
   font: inherit;
   text-align: left;
   cursor: pointer;
+  outline: none;
+  opacity: 0;
+  transform: translateY(8px);
+  transition:
+    opacity 260ms var(--ease-out) calc(var(--i, 0) * var(--t-stagger)),
+    transform var(--t-open) var(--ease-out) calc(var(--i, 0) * var(--t-stagger)),
+    background-color var(--t-base) var(--ease);
 }
-.theme-swatch:hover { background: var(--sf2); }
-.theme-swatch[aria-pressed="true"] { border-color: var(--ac-line); background: var(--ac-s); }
-.theme-swatch-chips {
-  display: grid;
-  grid-template-columns: repeat(2, 9px);
-  grid-template-rows: repeat(2, 9px);
-  flex: none;
-  border-radius: 4px;
+.theme-picker.is-open .theme-card { opacity: 1; transform: none; }
+@media (hover: hover) {
+  .theme-card:hover { background: var(--sf2); }
+  .theme-picker.is-open .theme-card:hover {
+    transform: translateY(-3px);
+    transition-delay: 0s;
+  }
+  .theme-card:hover .theme-mini,
+  .theme-card:hover .theme-mini-auto { transform: scale(1.015); }
+}
+.theme-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow:
+    0 0 0 2px var(--ac),
+    0 8px 24px color-mix(in srgb, var(--ac) 22%, transparent);
+  opacity: 0;
+  transform: scale(0.97);
+  transition: opacity var(--t-base) var(--ease), transform var(--t-slow) var(--ease-out);
+  pointer-events: none;
+}
+.theme-card.is-active::after { opacity: 1; transform: none; }
+.theme-card:focus-visible::after { opacity: 1; transform: none; }
+.theme-card .theme-mini,
+.theme-card .theme-mini-auto { transition: transform var(--t-open) var(--ease-out); }
+.theme-card.is-active .theme-mini,
+.theme-card.is-active .theme-mini-auto { transform: scale(1.015); }
+.theme-picker.is-open .theme-card.is-pressed {
+  transform: scale(0.97);
+  transition: transform 90ms var(--ease);
+}
+.theme-card-text {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  padding: 0 2px;
+}
+.theme-card-name { flex: none; font-size: var(--fs-md); font-weight: 600; }
+.theme-card-sub {
   overflow: hidden;
-  box-shadow: 0 0 0 1px var(--ln2);
-}
-.theme-swatch-chips span { display: block; }
-.theme-swatch-text { display: flex; flex-direction: column; min-width: 0; }
-.theme-swatch-name { font-weight: 600; font-size: var(--fs-sm); }
-.theme-swatch-sub {
   color: var(--tx3);
   font-size: var(--fs-xs);
   white-space: nowrap;
-  overflow: hidden;
   text-overflow: ellipsis;
 }
-.theme-picker-skin .switch-row { padding: 6px 8px; }
+.theme-card-check {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--ac);
+  color: var(--on-ac);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  opacity: 0;
+  transform: scale(0.4);
+  transition: opacity var(--t-base) var(--ease), transform 360ms var(--ease-pop);
+}
+.theme-card[aria-checked="true"] .theme-card-check { opacity: 1; transform: none; }
+
+.theme-picker-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2) var(--s5);
+  padding: var(--s3) var(--s5);
+  border-top: 1px solid var(--ln);
+  background: var(--sf2);
+}
+.theme-picker-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  color: var(--tx2);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.theme-picker-keys {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s3);
+  margin-left: auto;
+  color: var(--tx3);
+  font-size: var(--fs-xs);
+}
+.theme-picker-keys .app-kbd { margin-right: 4px; }
+
+/* A palette as a miniature of the app shell, drawn in its own tokens. */
+.theme-mini {
+  --mini-r: 6px;
+  position: relative;
+  display: grid;
+  grid-template-columns: 24% 1fr;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  border-radius: var(--mini-r);
+  background: var(--bg);
+  box-shadow: inset 0 0 0 1px var(--ln);
+  color: var(--tx);
+  isolation: isolate;
+}
+.theme-mini[data-square] { --mini-r: 0; }
+.theme-mini i,
+.theme-mini b { display: block; }
+.theme-mini-side {
+  display: flex;
+  flex-direction: column;
+  gap: 5%;
+  padding: 12% 10%;
+  border-right: 1px solid var(--ln);
+  background: var(--sf);
+}
+.theme-mini-side i {
+  height: 6%;
+  min-height: 3px;
+  border-radius: 2px;
+  background: var(--tx3);
+  opacity: 0.55;
+}
+.theme-mini-side i:first-child { width: 70%; margin-bottom: 12%; background: var(--tx); opacity: 0.9; }
+.theme-mini-side i.is-on { background: var(--ac); opacity: 1; }
+.theme-mini-main { display: flex; flex-direction: column; gap: 7%; min-width: 0; padding: 8% 9%; }
+.theme-mini-top { display: flex; align-items: center; gap: 6%; height: 9%; }
+.theme-mini-top i { flex: 1; height: 100%; border-radius: 2px; background: var(--sf3); }
+.theme-mini-top b { height: 100%; aspect-ratio: 1; border-radius: 50%; background: var(--ac); }
+.theme-mini-card {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 9%;
+  padding: 8% 9%;
+  border: 1px solid var(--ln);
+  border-radius: calc(var(--mini-r) * 0.6);
+  background: var(--sf);
+}
+.theme-mini-card i {
+  width: 62%;
+  height: 9%;
+  min-height: 3px;
+  border-radius: 2px;
+  background: var(--tx);
+  opacity: 0.85;
+}
+.theme-mini-card i + i { width: 84%; background: var(--tx3); opacity: 0.7; }
+.theme-mini-row { display: flex; align-items: center; gap: 6%; height: 18%; margin-top: auto; }
+.theme-mini-btn { width: 38%; height: 100%; border-radius: calc(var(--mini-r) * 0.5); background: var(--ac); }
+.theme-mini-pill {
+  width: 24%;
+  height: 70%;
+  border-radius: 99px;
+  background: var(--ok-s);
+  box-shadow: inset 0 0 0 1px var(--ok-line);
+}
+/* Auto: the dark and light palettes it follows, split on the diagonal. */
+.theme-mini-auto {
+  position: relative;
+  display: block;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  border-radius: 6px;
+}
+.theme-mini-auto > .theme-mini { position: absolute; inset: 0; aspect-ratio: auto; }
+.theme-mini-auto > .theme-mini + .theme-mini { clip-path: polygon(62% 0, 100% 0, 100% 100%, 38% 100%); }
+
+/* Settings > Appearance: the current palette and the way into the picker. */
+.theme-setting {
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  padding: var(--s3);
+  border: 1px solid var(--ln);
+  border-radius: var(--r);
+  background: var(--sf2);
+}
+.theme-setting-mini { flex: none; width: 96px; }
+.theme-setting-text { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.theme-setting-label { font-weight: 600; }
+.theme-setting-text .help-text { margin: 0; }
+
+/* Palette swaps cross-fade as a View Transition (theme/appearance.js): a
+   snapshot of the old palette fades into the live new one.  Clicks pass
+   through while it runs. */
+::view-transition { pointer-events: none; }
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 260ms;
+  animation-timing-function: var(--ease);
+}
 
 /* ── Run dock ── */
 .run-dock {
@@ -2186,13 +2427,21 @@ tr.needs-review td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
   .app-jump-trigger-text,
   .app-jump-trigger .app-kbd { display: none; }
   .theme-picker-toggle-label { display: none; }
+  /* The picker becomes a bottom sheet with two columns of palettes. */
+  .theme-picker { place-items: end stretch; padding: 0; }
   .theme-picker-panel {
-    position: fixed;
-    left: var(--s3);
-    right: var(--s3);
-    top: calc(var(--topbar-h) + 4px);
-    width: auto;
+    width: 100%;
+    max-height: 88vh;
+    padding-bottom: env(safe-area-inset-bottom);
+    border-width: 1px 0 0;
+    border-radius: 18px 18px 0 0;
+    transform: translateY(48px);
   }
+  .theme-picker-body { padding: var(--s1) var(--s4) var(--s4); }
+  .theme-picker-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s2); }
+  .theme-card-text { flex-direction: column; gap: 0; }
+  .theme-picker-keys { display: none; }
+  .theme-setting { flex-wrap: wrap; }
 
   .layout-shell { padding: var(--s4) var(--s4) var(--s6); }
   .app-banner-slot { padding: var(--s3) var(--s4) 0; }
@@ -2377,8 +2626,9 @@ tr.needs-review td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
   .review-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
 }
 
-/* Reduced motion: tokens.css zeroes every duration; looping status
-   animations stop and show their resting state instead. */
+/* Reduced motion (the OS setting or the in-app switch): tokens.css zeroes
+   every duration; looping status animations stop and show their resting
+   state instead. */
 @media (prefers-reduced-motion: reduce) {
   .run-dock-dot,
   .status-chip.is-running::before { animation: none !important; }
@@ -2388,7 +2638,21 @@ tr.needs-review td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     width: 100%;
     opacity: 0.45;
   }
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) { animation: none !important; }
 }
+html[data-motion="reduce"] .run-dock-dot,
+html[data-motion="reduce"] .status-chip.is-running::before { animation: none !important; }
+html[data-motion="reduce"] .run-dock-bar.is-indeterminate i,
+html[data-motion="reduce"] .progress-bar.is-indeterminate .progress-fill {
+  animation: none !important;
+  width: 100%;
+  opacity: 0.45;
+}
+html[data-motion="reduce"]::view-transition-group(*),
+html[data-motion="reduce"]::view-transition-old(*),
+html[data-motion="reduce"]::view-transition-new(*) { animation: none !important; }
 
 @media (forced-colors: active) {
   .switch { border: 1px solid ButtonText; }
@@ -2398,7 +2662,9 @@ tr.needs-review td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
   .review-row.is-focused,
   .grid-tile.is-focused,
   .view-toggle button[aria-pressed="true"],
-  .radio-option:has(input:checked) { outline: 2px solid Highlight; }
+  .radio-option:has(input:checked),
+  .theme-card.is-active,
+  .theme-card:focus-visible { outline: 2px solid Highlight; }
 }
 
 @media print {
@@ -2409,6 +2675,7 @@ tr.needs-review td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
   .app-tabbar,
   .mobile-nav-panel,
   .jump,
+  .theme-picker,
   .toasts,
   .skip-link,
   .sticky-save-bar,

@@ -86,4 +86,8 @@ test("jump bar ranks label starts first and hides quiet entries until searched",
   assert.equal(multi[0].target, "set-wd_general_threshold");
 
   assert.deepEqual(rankJumpEntries(entries, "zzzz-no-match"), []);
+
+  // Theme searches open the picker rather than a page.
+  assert.ok(rankJumpEntries(entries, "theme").slice(0, 2).every((e) => e.appearance));
+  assert.ok(rankJumpEntries(entries, "palette")[0].appearance);
 });

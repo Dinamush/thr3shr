@@ -7,10 +7,10 @@
     <meta name="theme-color" content="#f6f5f2" id="meta-theme-color" />
     <title>THR3SHR</title>
     <script>
-      // Apply the saved palette, skin and sidebar state before the body paints
+      // Apply the saved palette, skin, motion and sidebar state before the body paints
       // so a reload never flashes the default.  The palette list itself lives
       // in src/theme/themes.js; an unknown name falls back to the default
-      // palette here and the Appearance menu corrects it on load.
+      // palette here and the Appearance settings correct it on load.
       (function () {
         var root = document.documentElement;
         var theme = null;
@@ -21,6 +21,7 @@
             if (localStorage.getItem("thr3shr-boot-seen") !== "1") root.classList.add("nier-booting");
           }
           if (localStorage.getItem("thr3shr-nav-collapsed") === "1") root.classList.add("nav-collapsed");
+          if (localStorage.getItem("thr3shr-motion") === "reduce") root.dataset.motion = "reduce";
         } catch (e) {
           /* storage blocked: Auto palette, no skin */
         }

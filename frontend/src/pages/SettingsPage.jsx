@@ -2,6 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import NumberField from "../NumberField";
 import { TAGGER_MODELS } from "../lib";
 import { SETTINGS_SECTIONS, searchSettings } from "../shell/nav";
+import { useAppearance } from "../theme/Appearance";
+import { motionReduced } from "../theme/appearance";
+import { ThemeMini } from "../theme/ThemePicker";
 import { PageHead, SwitchRow, useApp } from "../ui";
 import { PreviewScanButton, ScanPreview } from "./RunPage";
 
@@ -78,6 +81,54 @@ function RealLifeStatus() {
   );
 }
 
+// Appearance lives in this browser, not on the server: it saves as it changes
+// and is not part of the save bar.
+function AppearanceSection({ search }) {
+  const appearance = useAppearance();
+  const { current } = appearance;
+  return (
+    <Section id="settings-appearance" search={search}>
+      <Unit id="set-theme" search={search}>
+        <div className="theme-setting">
+          <span className="theme-setting-mini">
+            <ThemeMini row={current} />
+          </span>
+          <span className="theme-setting-text">
+            <span className="theme-setting-label">Theme · {current.name}</span>
+            <span className="help-text">{current.sub}. Saved in this browser.</span>
+          </span>
+          <button
+            type="button"
+            className="btn btn-sm"
+            aria-haspopup="dialog"
+            onClick={(ev) => appearance.openPicker(ev.currentTarget)}
+          >
+            Change theme…
+          </button>
+        </div>
+      </Unit>
+      <Unit id="set-skin" search={search}>
+        <SwitchRow
+          id="settingsSkin"
+          label="YoRHa skin"
+          help="Boot intro, film grain and scanlines over any palette."
+          checked={appearance.skin}
+          onChange={appearance.setSkin}
+        />
+      </Unit>
+      <Unit id="set-reduce_motion" search={search}>
+        <SwitchRow
+          id="settingsReduceMotion"
+          label="Reduce motion"
+          help="Makes every animation and transition instant. Your system's reduced-motion setting does the same."
+          checked={appearance.reduceMotion}
+          onChange={appearance.setReduceMotion}
+        />
+      </Unit>
+    </Section>
+  );
+}
+
 export default function SettingsPage() {
   const app = useApp();
   const { settings, setSettings, isWdModel, isDirty, dirtyCount, loading, opsLoading, offlineMode } =
@@ -133,7 +184,7 @@ export default function SettingsPage() {
     <>
       <PageHead
         title="Settings"
-        lede="Paths, model, thresholds and performance. Runs and preview scans save pending changes first."
+        lede="Paths, model, thresholds, performance and appearance. Runs and preview scans save pending changes first."
       />
       <div className="settings-layout">
         <nav className="settings-nav" aria-label="Settings sections">
@@ -169,7 +220,7 @@ export default function SettingsPage() {
                       e.preventDefault();
                       document
                         .getElementById(section.id)
-                        ?.scrollIntoView({ block: "start", behavior: "smooth" });
+                        ?.scrollIntoView({ block: "start", behavior: motionReduced() ? "auto" : "smooth" });
                     }}
                   >
                     {section.label}
@@ -418,6 +469,8 @@ export default function SettingsPage() {
               {settings.tagging_domain === "real_life" && !offlineMode ? <RealLifeStatus /> : null}
             </Unit>
           </Section>
+
+          <AppearanceSection search={search} />
 
           <div className={`sticky-save-bar${isDirty ? " is-dirty" : ""}`}>
             <span className="sticky-save-status" role="status">

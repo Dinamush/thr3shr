@@ -52,6 +52,14 @@
   --t-fast: 120ms;
   --t-base: 160ms;
   --t-slow: 240ms;
+  /* Overlays that open and close (the theme picker): a long settle in, a
+     quick exit, a small overshoot for things that land. */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.55, 0, 0.75, 0.2);
+  --ease-pop: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --t-open: 320ms;
+  --t-close: 170ms;
+  --t-stagger: 18ms;
 
   /* App shell geometry */
   --sidebar-w: 236px;
@@ -92,12 +100,16 @@
 /* ─── Reduced motion ────────────────────────────────────────────────────────
    Tier 1 (default): functional motion only - counters tick, panels slide,
    status colours sweep.  Tier 2 (reduce): every change is instant and nothing
-   loops; the same information is still shown. */
+   loops; the same information is still shown.  The OS setting and the in-app
+   "Reduce motion" switch (html[data-motion="reduce"]) both select tier 2. */
 @media (prefers-reduced-motion: reduce) {
   :root {
     --t-fast: 0.01ms;
     --t-base: 0.01ms;
     --t-slow: 0.01ms;
+    --t-open: 0.01ms;
+    --t-close: 0.01ms;
+    --t-stagger: 0ms;
   }
   *,
   *::before,
@@ -105,6 +117,25 @@
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
     scroll-behavior: auto !important;
   }
+}
+:root[data-motion="reduce"] {
+  scroll-behavior: auto !important;
+  --t-fast: 0.01ms;
+  --t-base: 0.01ms;
+  --t-slow: 0.01ms;
+  --t-open: 0.01ms;
+  --t-close: 0.01ms;
+  --t-stagger: 0ms;
+}
+:root[data-motion="reduce"] *,
+:root[data-motion="reduce"] *::before,
+:root[data-motion="reduce"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  transition-delay: 0s !important;
+  scroll-behavior: auto !important;
 }

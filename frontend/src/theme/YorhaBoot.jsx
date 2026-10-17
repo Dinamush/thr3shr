@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { BOOT_SEEN_STORAGE_KEY } from "./themes";
+import { motionReduced } from "./appearance";
 
 const LINES = [
   ["Commencing System Check"],
@@ -54,9 +55,7 @@ export default function YorhaBoot() {
     document.addEventListener("keydown", onKey);
     overlayRef.current?.focus();
 
-    const reduced =
-      window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduced) {
+    if (motionReduced()) {
       setShown(LINES.length);
       timers.push(setTimeout(dismiss, 400));
     } else {

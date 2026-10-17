@@ -251,8 +251,15 @@ function render(element) {
 
 async function renderPage(path, app) {
   const { AppContext } = await load("/src/ui.jsx");
+  const { AppearanceProvider } = await load("/src/theme/Appearance.jsx");
   const Page = (await load(path)).default;
-  return render(React.createElement(AppContext.Provider, { value: app }, React.createElement(Page)));
+  return render(
+    React.createElement(
+      AppContext.Provider,
+      { value: app },
+      React.createElement(AppearanceProvider, null, React.createElement(Page))
+    )
+  );
 }
 
 test("the whole app renders its shell on the first page", async () => {
@@ -405,7 +412,7 @@ test("Runs renders an empty state and the run table", async () => {
 
 test("Settings renders every section with the save bar", async () => {
   const html = await renderPage("/src/pages/SettingsPage.jsx", makeApp());
-  for (const text of ["Paths &amp; scan", "Tagger model", "Thresholds", "Performance", "Classification", "Tagging domain", "Save settings", "Settings saved"]) {
+  for (const text of ["Paths &amp; scan", "Tagger model", "Thresholds", "Performance", "Classification", "Tagging domain", "Appearance", "Change theme…", "YoRHa skin", "Reduce motion", "Save settings", "Settings saved"]) {
     assert.ok(html.includes(text), `missing ${text}`);
   }
   const dirty = await renderPage("/src/pages/SettingsPage.jsx", makeApp({ isDirty: true, dirtyCount: 2 }));
