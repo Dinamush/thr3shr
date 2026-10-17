@@ -197,6 +197,7 @@ def test_priority_fertilization_over_nakadashi_on_tie(tmp_path: Path) -> None:
     assert result.primary_tag == "fertilization"
 
 
+@pytest.mark.live_onnx
 def test_model_smoke_nonempty_scores_all_taggers(tmp_path: Path) -> None:
     """Smoke: each tagger returns a non-empty score dict on a tiny RGB image.
 

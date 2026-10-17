@@ -27,6 +27,34 @@ def _join_new_threads(before: set[threading.Thread]) -> None:
         thread.join(timeout=max(0.0, deadline - time.monotonic()))
 
 
+def _cpu_probe(force_cpu: bool, probe_model: str | None) -> dict[str, object]:
+    return {
+        "available_providers": ["CPUExecutionProvider"],
+        "active_providers": ["CPUExecutionProvider"],
+        "cuda_available": False,
+        "cuda_usable": False,
+        "cpu_available": True,
+        "forced_cpu": force_cpu,
+        "likely_device": "cpu",
+        "provider_error": None,
+        "ort_version": None,
+        "nvidia_dll_dirs": [],
+    }
+
+
+@pytest.fixture(autouse=True)
+def _no_model_loads(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep app startup and provider probes from loading real ONNX models.
+
+    Every TestClient(app) block runs startup, which warms the tagger, and the
+    provider probe builds its own session; each costs hundreds of MB of RAM and
+    VRAM, and an unload test reloading them drove the suite into an OOM kill.
+    Tests that need real models are marked live_onnx and call the engine directly.
+    """
+    monkeypatch.setattr("app.main._start_engine_warmup", lambda tagger_model: None)
+    monkeypatch.setattr("app.providers._probe_execution_providers", _cpu_probe)
+
+
 @pytest.fixture(autouse=True)
 def _isolated_app_db(
     tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch

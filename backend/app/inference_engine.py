@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import gc
 import logging
 import os
@@ -461,6 +462,20 @@ def release_cuda_caches() -> None:
     except Exception:
         pass
     gc.collect()
+    trim_process_heap()
+
+
+def trim_process_heap() -> None:
+    """Return freed heap pages to the OS.
+
+    glibc keeps freed blocks (ORT model parse buffers, decoded images) resident,
+    so RSS would otherwise stay at its peak after a model load or a run. No-op
+    where libc is not glibc.
+    """
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass
 
 
 _ENGINE: InferenceEngine | None = None
