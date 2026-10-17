@@ -204,7 +204,7 @@ MAX_INFERENCE_WORKERS=2 ../.venv/bin/uvicorn app.main:app --host 127.0.0.1 --por
 - `POST /api/runs/{run_id}/cancel`
 - `GET /api/runs/{run_id}/items` — includes `global_top_tags`, secondary suggestions
 - `PATCH /api/items/{item_id}` — `409` once an item is migrated; status `migrated` is set only by migrate
-- `GET /api/items/{item_id}/preview`
+- `GET /api/items/{item_id}/preview` — the original still (a JPEG still for GIF/video); `?thumb=1` returns a small cached WebP for list and grid rows
 - `GET /api/items/{item_id}/scores`
 - `POST /api/runs/{run_id}/batch` — migrated items are skipped and counted in `skipped`
 - `POST /api/runs/{run_id}/migrate`
@@ -214,6 +214,7 @@ MAX_INFERENCE_WORKERS=2 ../.venv/bin/uvicorn app.main:app --host 127.0.0.1 --por
 ```bash
 cd backend
 ../.venv/bin/python -m pytest tests -q
+../.venv/bin/python -m pytest tests -q -m live_onnx   # loads the real tagger models (GBs of RAM/VRAM)
 ```
 
 ```bash
