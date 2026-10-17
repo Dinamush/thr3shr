@@ -205,15 +205,29 @@ def media_preview_still_jpeg(path: Path, *, max_edge: int = 320) -> bytes:
     return data
 
 
+_KNOWN_TAGS_CACHE: dict[Path, tuple[tuple[int, int], frozenset[str]]] = {}
+
+
 def load_known_tags(tags_csv_path: Path) -> set[str]:
-    tags: set[str] = set()
-    with tags_csv_path.open("r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            tag = (row.get("tag") or "").strip()
-            if tag:
-                tags.add(tag)
-    return tags
+    """The tags.csv vocabulary, parsed again only when the file changes.
+
+    Tag search runs on every keystroke and settings save on every tag change;
+    parsing 12k rows each time dominated both.
+    """
+    stat = tags_csv_path.stat()
+    stamp = (stat.st_mtime_ns, stat.st_size)
+    cached = _KNOWN_TAGS_CACHE.get(tags_csv_path)
+    if cached is None or cached[0] != stamp:
+        tags: set[str] = set()
+        with tags_csv_path.open("r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                tag = (row.get("tag") or "").strip()
+                if tag:
+                    tags.add(tag)
+        cached = (stamp, frozenset(tags))
+        _KNOWN_TAGS_CACHE[tags_csv_path] = cached
+    return set(cached[1])
 
 
 def discover_tag_folders(

@@ -82,6 +82,9 @@ def init_db() -> None:
             -- Every run view filters items by run_id; without this index each
             -- status poll and list refresh scans the whole multi-GB table.
             CREATE INDEX IF NOT EXISTS idx_items_run_id ON items(run_id);
+            -- Per-run status counts (runs list, run header) read only this
+            -- index instead of every item row.
+            CREATE INDEX IF NOT EXISTS idx_items_run_status ON items(run_id, status);
 
             -- Global top-5 tags per item, kept apart from items: a column after
             -- full_scores_json would force SQLite to walk that blob's overflow

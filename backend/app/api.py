@@ -13,6 +13,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, Response
+from pydantic import TypeAdapter
 
 from .schemas import (
     AppSettings,
@@ -3008,7 +3009,7 @@ def get_run_items(
     status: str | None = None,
     needs_review: bool | None = None,
     include_scores: bool = Query(False),
-) -> list[ClassifiedItem]:
+) -> Response:
     # Never SELECT * here: full_scores_json is most of a multi‑GB app.db and
     # caused disk-read spikes / UI freezes on every refresh. Global tops come
     # from the slim item_global_tops side table instead.
@@ -3028,7 +3029,14 @@ def get_run_items(
         params.append(1 if needs_review else 0)
     query += " ORDER BY i.id ASC"
     rows = fetch_all(query, tuple(params))
-    return [_item_from_row(r, include_full_scores=include_scores) for r in rows]
+    items = [_item_from_row(r, include_full_scores=include_scores) for r in rows]
+    # The items are validated already; FastAPI's response_model pass would dump,
+    # re-validate and re-encode every one of them again, most of the time a
+    # 10k-item refresh took. response_model still documents the shape.
+    return Response(content=_ITEM_LIST_ADAPTER.dump_json(items), media_type="application/json")
+
+
+_ITEM_LIST_ADAPTER = TypeAdapter(list[ClassifiedItem])
 
 
 def _secondary_tags_from_row(row: dict) -> list[str]:
@@ -3337,8 +3345,10 @@ def batch_update(run_id: int, payload: BatchUpdateRequest) -> dict:
     categories_root = Path(run["categories_root"]) if run and run.get("categories_root") else None
     updated = 0
     skipped = 0
+    rows_by_id = _fetch_run_items_by_id(run_id, payload.item_ids)
+    changes: list[tuple] = []
     for item_id in payload.item_ids:
-        row = fetch_one("SELECT * FROM items WHERE id = ? AND run_id = ?", (item_id, run_id))
+        row = rows_by_id.get(item_id)
         if not row or row["status"] == "migrated":
             skipped += 1
             continue
@@ -3379,27 +3389,51 @@ def batch_update(run_id: int, payload: BatchUpdateRequest) -> dict:
                 if new_status in {"reviewed", "approved", "migrated"}
                 else row["review_reason"]
             )
-        with transaction() as conn:
+        changes.append(
+            (
+                new_status,
+                new_final_tag,
+                new_final_destination,
+                new_needs_review,
+                new_review_reason,
+                item_id,
+            )
+        )
+    # One transaction for the whole batch: a commit per item made approving a
+    # few thousand items take seconds.
+    with transaction() as conn:
+        for params in changes:
             changed = conn.execute(
                 """
                 UPDATE items
                 SET status = ?, final_tag = ?, final_destination = ?, needs_review = ?, review_reason = ?
                 WHERE id = ? AND status != 'migrated'
                 """,
-                (
-                    new_status,
-                    new_final_tag,
-                    new_final_destination,
-                    new_needs_review,
-                    new_review_reason,
-                    item_id,
-                ),
+                params,
             ).rowcount
-        if not changed:
-            skipped += 1
-            continue
-        updated += 1
+            if changed:
+                updated += 1
+            else:
+                skipped += 1
     return {"updated": updated, "skipped": skipped}
+
+
+# SQLite caps bound parameters per statement (999 on older builds).
+_ID_CHUNK = 900
+
+
+def _fetch_run_items_by_id(run_id: int, item_ids: list[int]) -> dict[int, dict]:
+    unique_ids = list(dict.fromkeys(item_ids))
+    rows: dict[int, dict] = {}
+    for start in range(0, len(unique_ids), _ID_CHUNK):
+        chunk = unique_ids[start : start + _ID_CHUNK]
+        placeholders = ",".join("?" for _ in chunk)
+        for row in fetch_all(
+            f"SELECT * FROM items WHERE run_id = ? AND id IN ({placeholders})",
+            (run_id, *chunk),
+        ):
+            rows[int(row["id"])] = row
+    return rows
 
 
 @router.post("/runs/{run_id}/migrate", response_model=MigrateResponse)
