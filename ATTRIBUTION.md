@@ -89,6 +89,7 @@ from PyPI / npm. Notable dependencies:
 | [huggingface_hub](https://huggingface.co/docs/huggingface_hub) | Model download / cache | Apache-2.0 |
 | [FastAPI](https://fastapi.tiangolo.com/) | Backend API | MIT |
 | [React](https://react.dev/) + [Vite](https://vitejs.dev/) | Frontend SPA | MIT |
+| [Figtree](https://fontsource.org/fonts/figtree) + [Fragment Mono](https://fontsource.org/fonts/fragment-mono) (via Fontsource) | UI fonts, bundled with the frontend | OFL-1.1 |
 | [llama-cpp-python](https://github.com/abetlen/llama-cpp-python) (optional) | VLM runtime | MIT |
 | [timm](https://github.com/huggingface/pytorch-image-models) (optional) | Position classifier | Apache-2.0 |
 

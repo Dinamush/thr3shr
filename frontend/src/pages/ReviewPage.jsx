@@ -23,6 +23,29 @@ const FILTERS = [
 
 const STATUS_KEYS = { a: "approved", r: "rejected", v: "reviewed" };
 
+// List or Grid, remembered per browser.
+const LAYOUT_STORAGE_KEY = "thr3shr-review-layout";
+const LAYOUTS = [
+  { id: "list", label: "List" },
+  { id: "grid", label: "Grid" },
+];
+
+function readLayout() {
+  try {
+    return localStorage.getItem(LAYOUT_STORAGE_KEY) === "grid" ? "grid" : "list";
+  } catch {
+    return "list";
+  }
+}
+
+function writeLayout(layout) {
+  try {
+    localStorage.setItem(LAYOUT_STORAGE_KEY, layout);
+  } catch {
+    /* storage blocked: the choice lasts for this page only */
+  }
+}
+
 const NON_TYPING_INPUTS = new Set(["checkbox", "radio", "button", "submit"]);
 
 function isTypingTarget(el) {
@@ -36,13 +59,19 @@ function itemLabel(item) {
   return item.relative_path || item.file_path;
 }
 
-function Thumb({ item, large = false }) {
+function fileName(item) {
+  return String(itemLabel(item) || "").split(/[\\/]/).pop();
+}
+
+// size: "row" (list), "tile" (grid) or "large" (detail pane).
+function Thumb({ item, size = "row" }) {
   const { previewErrors, setPreviewErrors } = useApp();
   const url = api.getItemPreviewUrl(item.id);
   const isVideo = isVideoPreviewPath(item.file_path || item.relative_path);
   const failed = previewErrors[item.id] || !url;
+  const large = size === "large";
   return (
-    <span className={`review-thumb${large ? " is-large" : ""}`}>
+    <span className={`review-thumb${size === "row" ? "" : ` is-${size}`}`}>
       {failed ? (
         <span className="review-thumb-fallback">{url ? "No preview" : "Preview offline"}</span>
       ) : (
@@ -84,7 +113,14 @@ function PrimaryTag({ item }) {
   );
 }
 
-function ItemDetail({ item, position, total, onBack, finalTagRef }) {
+function ItemTag({ item }) {
+  if (item.final_tag && item.final_tag !== item.primary_tag) {
+    return <span className="review-row-final">→ {item.final_tag}</span>;
+  }
+  return <PrimaryTag item={item} />;
+}
+
+function ItemDetail({ item, position, total, backLabel, onBack, finalTagRef }) {
   const app = useApp();
   const isMigrated = item.status === "migrated";
   const rowBusy = Boolean(app.pendingItemIds[item.id]);
@@ -95,7 +131,7 @@ function ItemDetail({ item, position, total, onBack, finalTagRef }) {
     <section className="layout-panel review-detail" aria-label="Item detail">
       <div className="pane-head">
         <button type="button" className="btn btn-ghost btn-sm review-back" onClick={onBack}>
-          ← List
+          ← {backLabel}
         </button>
         <h2 className="pane-title">
           Item {position} of {total}
@@ -103,7 +139,7 @@ function ItemDetail({ item, position, total, onBack, finalTagRef }) {
         <StatusChip status={item.status} />
       </div>
       <div className="review-preview" title={item.file_path}>
-        <Thumb item={item} large />
+        <Thumb item={item} size="large" />
       </div>
       <div className="pane-body review-detail-body">
         <p className="review-path" title={item.file_path}>
@@ -274,7 +310,7 @@ function SelectionBar({ selectedCount }) {
       </fieldset>
       <button
         type="button"
-        className="btn btn-primary"
+        className="btn btn-migrate"
         disabled={opsLoading.migrating || runActive || stats.approved === 0}
         title={
           runActive
@@ -285,6 +321,9 @@ function SelectionBar({ selectedCount }) {
         }
         onClick={app.migrateApproved}
       >
+        <span className="btn-migrate-arrow" aria-hidden="true">
+          →
+        </span>
         {opsLoading.migrating ? "Migrating…" : `Migrate approved (${stats.approved})`}
       </button>
     </div>
@@ -293,11 +332,23 @@ function SelectionBar({ selectedCount }) {
 
 export default function ReviewPage() {
   const app = useApp();
-  const { runId, runStatus, runActive, items, stats, settings, selectedIds, selectedIdSet } = app;
+  const {
+    runId,
+    runStatus,
+    runActive,
+    otherActiveRun,
+    items,
+    stats,
+    settings,
+    selectedIds,
+    selectedIdSet,
+  } = app;
   const [filterId, setFilterId] = useState("all");
   const [query, setQuery] = useState("");
   const [focusedId, setFocusedId] = useState(null);
+  // view: which pane shows on narrow screens; layout: List or Grid.
   const [view, setView] = useState("list");
+  const [layout, setLayout] = useState(readLayout);
   const listRef = useRef(null);
   const finalTagRef = useRef(null);
   const scrollFocusRef = useRef(false);
@@ -389,7 +440,14 @@ export default function ReviewPage() {
     return () => document.removeEventListener("keydown", onKey);
   });
 
+  function pickLayout(next) {
+    setLayout(next);
+    writeLayout(next);
+  }
+
   if (!runId) {
+    // A run is tagging but none is open here: lead with that run.
+    const live = otherActiveRun;
     return (
       <>
         <PageHead title="Review" lede="Approve, retag or reject what a run proposed, then migrate." />
@@ -397,16 +455,27 @@ export default function ReviewPage() {
           title="No run open"
           action={
             <p className="empty-state-actions">
+              {live ? (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => app.openRunForReview(live.run_id)}
+                >
+                  Open live run #{live.run_id}
+                </button>
+              ) : null}
               <a className="btn" href="#/runs">
                 Open a run
               </a>
-              <a className="btn btn-primary" href="#/">
+              <a className={live ? "btn" : "btn btn-primary"} href="#/">
                 Start a run
               </a>
             </p>
           }
         >
-          Reopen an earlier run or start a new one to review its results here.
+          {live
+            ? `Run #${live.run_id} is ${live.status === "pending" ? "queued" : "tagging"}; open it to review items as they arrive, or reopen an earlier run.`
+            : "Reopen an earlier run or start a new one to review its results here."}
         </EmptyState>
       </>
     );
@@ -458,7 +527,7 @@ export default function ReviewPage() {
         </div>
       ) : null}
 
-      <div className="review-layout" data-view={view}>
+      <div className="review-layout" data-view={view} data-layout={layout}>
         <section className="layout-panel review-list-pane" aria-label="Items">
           <div className="review-filters" role="tablist" aria-label="Filter items">
             {FILTERS.map((f) => (
@@ -504,6 +573,18 @@ export default function ReviewPage() {
             <span className="pane-meta">
               {visible.length}/{items.length}
             </span>
+            <span className="view-toggle" role="group" aria-label="Item layout">
+              {LAYOUTS.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  aria-pressed={layout === option.id}
+                  onClick={() => pickLayout(option.id)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </span>
           </div>
           {visible.length === 0 ? (
             <p className="pane-empty">
@@ -513,6 +594,57 @@ export default function ReviewPage() {
                   : "This run has no items."
                 : "No items match this filter."}
             </p>
+          ) : layout === "grid" ? (
+            <ul className="review-grid" ref={listRef}>
+              {visible.map((item, idx) => {
+                const isMigrated = item.status === "migrated";
+                const isFocused = focused?.id === item.id;
+                return (
+                  <li
+                    key={item.id}
+                    data-item-id={item.id}
+                    className={[
+                      "grid-tile",
+                      `row-${item.status}`,
+                      item.needs_review ? "needs-review" : "",
+                      isFocused ? "is-focused" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                  >
+                    <input
+                      type="checkbox"
+                      className="grid-check"
+                      aria-label={`Select ${itemLabel(item)}`}
+                      checked={selectedIdSet.has(item.id)}
+                      disabled={isMigrated}
+                      onChange={(e) => toggleSelected(item.id, e.target.checked)}
+                    />
+                    <button
+                      type="button"
+                      className="grid-tile-main"
+                      aria-current={isFocused ? "true" : undefined}
+                      title={item.file_path}
+                      onClick={() => {
+                        focusIndex(idx);
+                        setView("detail");
+                      }}
+                    >
+                      <Thumb item={item} size="tile" />
+                      <span className="grid-tile-text">
+                        <span className="grid-tile-path">
+                          {fileName(item) || "-"}
+                        </span>
+                        <span className="grid-tile-meta">
+                          <ItemTag item={item} />
+                          <StatusChip status={item.status} />
+                        </span>
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
           ) : (
             <ul className="review-list" ref={listRef}>
               {visible.map((item, idx) => {
@@ -552,11 +684,7 @@ export default function ReviewPage() {
                       <span className="review-row-text">
                         <span className="review-row-path">{itemLabel(item) || "-"}</span>
                         <span className="review-row-meta">
-                          {item.final_tag && item.final_tag !== item.primary_tag ? (
-                            <span className="review-row-final">→ {item.final_tag}</span>
-                          ) : (
-                            <PrimaryTag item={item} />
-                          )}
+                          <ItemTag item={item} />
                         </span>
                       </span>
                       <StatusChip status={item.status} />
@@ -579,6 +707,7 @@ export default function ReviewPage() {
             item={focused}
             position={focusedIndex + 1}
             total={visible.length}
+            backLabel={layout === "grid" ? "Grid" : "List"}
             onBack={() => setView("list")}
             finalTagRef={finalTagRef}
           />

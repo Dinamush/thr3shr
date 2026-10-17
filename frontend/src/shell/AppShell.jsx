@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import AppearancePicker from "../theme/AppearancePicker";
+import EngineChip from "./EngineChip";
 import { NAV_COLLAPSED_STORAGE_KEY } from "../theme/themes";
 import Icon from "./icons";
 import JumpBar from "./JumpBar";
@@ -141,12 +142,7 @@ export default function AppShell({
             ))}
           </nav>
           <div className="app-sidebar-foot">
-            {engine ? (
-              <p className={`engine-chip is-${engine.tone}`} title={engine.title}>
-                <span className="engine-chip-dot" aria-hidden="true" />
-                <span className="engine-chip-label">{engine.label}</span>
-              </p>
-            ) : null}
+            <EngineChip engine={engine} />
             <p className="app-version">v{version}</p>
           </div>
         </aside>
@@ -283,6 +279,9 @@ export default function AppShell({
             <Icon name="search" size={18} />
             <span>Jump to a setting or run…</span>
           </button>
+          <div className="mobile-nav-panel-engine">
+            <EngineChip engine={engine} />
+          </div>
         </nav>
       </div>
 

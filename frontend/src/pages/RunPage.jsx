@@ -1,13 +1,5 @@
 import React, { useState } from "react";
-import {
-  TAGGER_MODELS,
-  formatDurationSeconds,
-  formatEtaFinishAt,
-  formatRunDate,
-  pathTail,
-  runProgressText,
-  taggerLabel,
-} from "../lib";
+import { TAGGER_MODELS, formatDurationSeconds, formatEtaFinishAt, taggerLabel } from "../lib";
 import { PageHead, PageStats, ProgressBar, StatusChip, SwitchRow, useApp } from "../ui";
 
 const RUN_MODES = [
@@ -463,105 +455,8 @@ export function RunDashboard({ compact = false }) {
   );
 }
 
-function EnginePanel() {
-  const { providerInfo, offlineMode, settings, anyRunActive, opsLoading, handleUnloadModels } =
-    useApp();
-  const loaded = providerInfo?.loaded_models || [];
-  const rows = providerInfo
-    ? [
-        ["Device", providerInfo.likely_device || "unknown"],
-        ["CUDA", providerInfo.cuda_usable ? "usable" : "not usable", providerInfo.cuda_usable ? "ok" : null],
-        ["Active", (providerInfo.active_providers || []).join(", ") || "n/a"],
-        ["Tagger", providerInfo.tagger_model || settings.tagger_model],
-        ["Forced CPU", providerInfo.forced_cpu ? "yes" : "no"],
-        ["Loaded", loaded.length ? loaded.join(", ") : "none"],
-      ]
-    : [];
-  return (
-    <section className="layout-panel engine-panel" aria-labelledby="engine-title">
-      <div className="pane-head">
-        <h2 className="pane-title" id="engine-title">
-          Engine
-        </h2>
-      </div>
-      {offlineMode ? (
-        <p className="pane-empty">Demo mode: no inference engine attached.</p>
-      ) : !providerInfo ? (
-        <p className="pane-empty">Engine status unavailable.</p>
-      ) : (
-        <>
-          <div className="stat-rows">
-            {rows.map(([label, value, tone]) => (
-              <div key={label} className={`stat-row${tone ? ` is-${tone}` : ""}`}>
-                <span>{label}</span>
-                <span className="stat-row-value">{value}</span>
-              </div>
-            ))}
-          </div>
-          <div className="pane-foot">
-            <button
-              type="button"
-              className="btn btn-sm btn-block"
-              disabled={anyRunActive || opsLoading.unloadingModels}
-              onClick={handleUnloadModels}
-              title={
-                anyRunActive
-                  ? "Cancel the active run before unloading GPU models"
-                  : "Drop cached tagger sessions to free GPU memory"
-              }
-            >
-              {opsLoading.unloadingModels ? "Unloading…" : "Unload GPU models"}
-            </button>
-          </div>
-        </>
-      )}
-    </section>
-  );
-}
-
-function RecentRuns() {
-  const { runs, runId, openRunForReview } = useApp();
-  return (
-    <section className="layout-panel recent-runs" aria-labelledby="recent-runs-title">
-      <div className="pane-head">
-        <h2 className="pane-title" id="recent-runs-title">
-          Recent runs
-        </h2>
-        <a className="pane-link" href="#/runs">
-          All runs
-        </a>
-      </div>
-      {runs.length === 0 ? (
-        <p className="pane-empty">No runs yet.</p>
-      ) : (
-        <ul className="recent-run-list">
-          {runs.slice(0, 5).map((run) => (
-            <li key={run.run_id}>
-              <button
-                type="button"
-                className="recent-run"
-                aria-current={run.run_id === runId ? "true" : undefined}
-                onClick={() => openRunForReview(run.run_id)}
-              >
-                <span className="recent-run-head">
-                  <span className="recent-run-name">Run #{run.run_id}</span>
-                  <StatusChip status={run.status} kind="run" />
-                </span>
-                <span className="recent-run-sub">
-                  {runProgressText(run)} images · {pathTail(run.root_repo)}
-                  {run.created_at ? ` · ${formatRunDate(run.created_at)}` : ""}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}
-
 export default function RunPage() {
-  const { selectedTags, scanPreview, settings, runs } = useApp();
+  const { selectedTags, scanPreview, settings, runs, runActive } = useApp();
   return (
     <>
       <PageHead
@@ -579,13 +474,11 @@ export default function RunPage() {
       </PageHead>
       <div className="run-grid">
         <Destinations />
+        {/* While a run is live its dashboard leads; the form below waits for it. */}
         <div className="run-main">
+          {runActive ? <RunDashboard /> : null}
           <NewRun />
-          <RunDashboard />
-        </div>
-        <div className="run-side">
-          <EnginePanel />
-          <RecentRuns />
+          {runActive ? null : <RunDashboard />}
         </div>
       </div>
     </>

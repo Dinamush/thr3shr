@@ -5,6 +5,7 @@
 
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import React from "react";
 import { renderToString } from "react-dom/server";
@@ -267,13 +268,33 @@ test("Tag & run renders idle and with a live run", async () => {
   const idle = await renderPage("/src/pages/RunPage.jsx", makeApp());
   assert.ok(idle.includes("Start run"));
   assert.ok(idle.includes("Preview scan"));
-  assert.ok(idle.includes("Unload GPU models"));
   assert.ok(!idle.includes("Cancel run"));
+  // Two columns: the engine lives on the sidebar chip, recent runs on Runs.
+  assert.ok(!idle.includes("Unload GPU models"));
+  assert.ok(!idle.includes("Recent runs"));
 
   const live = await renderPage("/src/pages/RunPage.jsx", makeApp(ACTIVE));
   assert.ok(live.includes("Run #12"));
   assert.ok(live.includes("Cancel run"));
   assert.ok(live.includes("Eligible images"));
+  assert.ok(
+    live.indexOf('id="run-dashboard-title"') < live.indexOf('id="new-run-title"'),
+    "a live run's dashboard sits above the New run form"
+  );
+
+  const done = await renderPage(
+    "/src/pages/RunPage.jsx",
+    makeApp({
+      ...ACTIVE,
+      runStatus: { ...ACTIVE.runStatus, status: "completed" },
+      runActive: false,
+      anyRunActive: false,
+    })
+  );
+  assert.ok(
+    done.indexOf('id="new-run-title"') < done.indexOf('id="run-dashboard-title"'),
+    "a finished run's dashboard follows the New run form"
+  );
 
   const realLife = await renderPage(
     "/src/pages/RunPage.jsx",
@@ -286,6 +307,13 @@ test("Tag & run renders idle and with a live run", async () => {
 test("Review renders the empty state and a split list with detail", async () => {
   const empty = await renderPage("/src/pages/ReviewPage.jsx", makeApp());
   assert.ok(empty.includes("No run open"));
+  assert.ok(!empty.includes("Open live run"));
+
+  const liveElsewhere = await renderPage(
+    "/src/pages/ReviewPage.jsx",
+    makeApp({ otherActiveRun: RUN, anyRunActive: true, runs: [RUN] })
+  );
+  assert.ok(liveElsewhere.includes("Open live run #12"));
 
   const html = await renderPage("/src/pages/ReviewPage.jsx", makeApp(ACTIVE));
   for (const text of [
@@ -301,6 +329,71 @@ test("Review renders the empty state and a split list with detail", async () => 
   ]) {
     assert.ok(html.includes(text), `missing ${text}`);
   }
+  assert.ok(html.includes('class="review-list"'), "list is the default layout");
+  assert.ok(!html.includes('class="review-grid"'));
+  // Migrate has its own outlined style, distinct from Approve selected.
+  assert.match(html, /class="btn btn-migrate"[^>]*>.*Migrate approved \(1\)/);
+  // A fresh item's "proposed" chip is neutral, not a warning.
+  assert.ok(html.includes("status-chip is-neutral status-proposed"));
+  assert.ok(!html.includes("is-warn status-proposed"));
+});
+
+test("Review remembers the Grid layout and renders tiles", async () => {
+  localStorage.setItem("thr3shr-review-layout", "grid");
+  try {
+    const html = await renderPage("/src/pages/ReviewPage.jsx", makeApp(ACTIVE));
+    assert.ok(html.includes('class="review-grid"'));
+    assert.ok(!html.includes('class="review-list"'));
+    assert.ok(html.includes('data-layout="grid"'));
+    assert.match(html, /aria-pressed="true"[^>]*>Grid</);
+    for (const text of ["one.png", "clip.mp4", "Select a/one.png", "Final tag for a/one.png", "← Grid"]) {
+      assert.ok(html.includes(text), `missing ${text}`);
+    }
+    // Migrated items cannot be selected in the grid either.
+    assert.match(html, /<input type="checkbox" class="grid-check" aria-label="Select c\/done.jpg" disabled=""/);
+  } finally {
+    localStorage.removeItem("thr3shr-review-layout");
+  }
+});
+
+test("the sidebar engine chip carries the engine facts and the unload guard", async () => {
+  const { AppContext } = await load("/src/ui.jsx");
+  const EngineChip = (await load("/src/shell/EngineChip.jsx")).default;
+  const engine = { tone: "ok", label: "cuda · wd_swinv2_v3", title: "Active: CUDAExecutionProvider" };
+  const chip = (app) =>
+    render(
+      React.createElement(
+        AppContext.Provider,
+        { value: app },
+        React.createElement(EngineChip, { engine })
+      )
+    );
+  const idle = chip(makeApp());
+  assert.ok(idle.includes("cuda · wd_swinv2_v3"));
+  assert.ok(idle.includes('aria-expanded="false"'));
+  assert.match(idle, /<button type="button" class="btn btn-sm btn-block" title="Drop cached/);
+
+  const busy = chip(makeApp(ACTIVE));
+  assert.match(busy, /disabled="" title="Cancel the active run before unloading GPU models"/);
+
+  assert.equal(
+    render(
+      React.createElement(
+        AppContext.Provider,
+        { value: makeApp() },
+        React.createElement(EngineChip, { engine: null })
+      )
+    ),
+    ""
+  );
+});
+
+test("fonts ship with the app instead of loading from Google", () => {
+  const html = readFileSync(`${root}index.html`, "utf8");
+  assert.ok(!/fonts\.(googleapis|gstatic)\.com/.test(html));
+  const main = readFileSync(`${root}src/main.jsx`, "utf8");
+  assert.ok(main.includes("@fontsource/figtree"));
+  assert.ok(main.includes("@fontsource/fragment-mono"));
 });
 
 test("Runs renders an empty state and the run table", async () => {

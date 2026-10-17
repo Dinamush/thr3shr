@@ -31,7 +31,7 @@ This repo includes:
 
 - Tag vocabulary (`tags.csv`)
 - FastAPI backend for scan → tag → review → migrate
-- React SPA in a desktop app shell: sidebar, Ctrl+K jump bar, live run dock, split review view, searchable settings and palette themes
+- React SPA in a desktop app shell: sidebar, Ctrl+K jump bar, live run dock, split review view (list or grid), searchable settings and palette themes
 - Multi-model inference via `dghs-imgutils` (ML-Danbooru ONNX and WD14 taggers)
 
 ONNX weights are **not** stored in this git tree (too large for GitHub). They are downloaded into the Hugging Face Hub cache on first use. See [Model weights](#model-weights) for direct links.
@@ -39,10 +39,11 @@ ONNX weights are **not** stored in this git tree (too large for GitHub). They ar
 ## What The Web UI Does
 
 Every page sits in one app shell: a sidebar with every page, a top bar with the **Ctrl+K jump bar** (pages, settings sections, single settings, runs and debug benchmarks) and the **Appearance** menu, and a **run dock** along the bottom that shows the live tagging or migration job, its progress and ETA, and how many items wait for review.
+The **engine chip** at the foot of the sidebar (in the **More** sheet on phones) opens the engine status: device, providers, loaded models and **Unload GPU models**.
 On a phone the sidebar becomes a bottom tab bar with a "More" sheet.
 
-1. **Tag & run** - destination tags (search chips from `tags.csv`, auto-persisted, SFW mode), the run mode (tag, filter real-life only, Doujin works), **Preview scan**, the live run dashboard (status, totals, progress, ETA, cancel, reclassify needs-review) and the engine status (device, providers, loaded models, unload GPU models)
-2. **Review** - split view: a filterable item list (all, needs review, proposed, reviewed, approved, rejected, migrated, plus a path / tag filter) beside the focused item's preview, primary (or "needs review"), final tag, category tags and **global top-5 tags** as score bars, with approve / reject / reviewed; a sticky bar holds batch approve / reject and migrate (`copy` or `move`); keys: J/K move, A approve, R reject, V reviewed, X select, F final tag
+1. **Tag & run** - destination tags (search chips from `tags.csv`, auto-persisted, SFW mode), the run mode (tag, filter real-life only, Doujin works), **Preview scan** and the run dashboard (status, totals, progress, ETA, cancel, reclassify needs-review), which moves above the form while a run is live
+2. **Review** - split view: a filterable item list or thumbnail grid (all, needs review, proposed, reviewed, approved, rejected, migrated, plus a path / tag filter; the List / Grid choice is remembered) beside the focused item's preview, primary (or "needs review"), final tag, category tags and **global top-5 tags** as score bars, with approve / reject / reviewed; a sticky bar holds batch approve / reject and migrate (`copy` or `move`); keys: J/K move, A approve, R reject, V reviewed, X select, F final tag
 3. **Runs** - every run with status, progress, approved / migrated counts and root; open one to review or migrate it; the last opened run is remembered across reloads
 4. **Settings** - paths, tagger model, thresholds, workers, classification and tagging domain as searchable sections with a section index and a sticky save bar that counts unsaved changes and can revert them
 5. **Classifier debug** - the tag recall / false-positive, style detector, real-life vs anime and SFW benchmarks with a benchmark index

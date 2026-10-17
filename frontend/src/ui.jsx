@@ -7,8 +7,10 @@ export function useApp() {
   return useContext(AppContext);
 }
 
+// "proposed" is every fresh item, so it stays neutral; amber is kept for
+// needs-review and warnings.
 const ITEM_TONES = {
-  proposed: "warn",
+  proposed: "neutral",
   reviewed: "info",
   approved: "ok",
   rejected: "bad",
