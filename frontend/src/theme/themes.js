@@ -15,6 +15,9 @@ export const THEME_STORAGE_KEY = "thr3shr-theme";
 export const SKIN_STORAGE_KEY = "thr3shr-skin";
 export const BOOT_SEEN_STORAGE_KEY = "thr3shr-boot-seen";
 export const NAV_COLLAPSED_STORAGE_KEY = "thr3shr-nav-collapsed";
+// "reduce" turns every animation instant, like the OS reduced-motion setting.
+export const MOTION_STORAGE_KEY = "thr3shr-motion";
+export const REDUCE_MOTION = "reduce";
 
 export const AUTO_THEME = "auto";
 // "Auto" follows the OS: Graphite on dark systems, Daylight on light ones.
@@ -489,6 +492,7 @@ export function themeMenu() {
     slug: AUTO_THEME,
     name: "Auto",
     sub: "Match system",
+    square: false,
     chips: [
       findTheme(AUTO_DARK).tokens.bg,
       findTheme(AUTO_DARK).tokens.sf3,
@@ -504,6 +508,7 @@ export function themeMenu() {
         slug: theme.slug,
         name: theme.name,
         sub: theme.sub,
+        square: Boolean(theme.square),
         chips: themeChips(theme),
       })),
     ],

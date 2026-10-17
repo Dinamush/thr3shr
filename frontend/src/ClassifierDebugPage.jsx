@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react"
 import { api } from "./api"
 import { DEBUG_SECTIONS } from "./shell/nav"
+import { motionReduced } from "./theme/appearance"
 
 const DEFAULT_SOURCES = [
   { id: "safebooru", label: "Safebooru", sfw_policy: "rating:safe", max_content_tags: null },
@@ -277,7 +278,7 @@ export default function ClassifierDebugPage({ landing, onLanded }) {
                     setCurrentSection(section.id)
                     document
                       .getElementById(section.id)
-                      ?.scrollIntoView({ block: "start", behavior: "smooth" })
+                      ?.scrollIntoView({ block: "start", behavior: motionReduced() ? "auto" : "smooth" })
                   }}
                 >
                   {section.label}

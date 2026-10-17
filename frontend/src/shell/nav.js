@@ -35,6 +35,7 @@ export const SETTINGS_SECTIONS = [
   { id: "settings-performance", label: "Performance" },
   { id: "settings-classification", label: "Classification" },
   { id: "settings-domain", label: "Tagging domain" },
+  { id: "settings-appearance", label: "Appearance" },
 ];
 
 // One entry per searchable settings unit.  `terms` is the text a search
@@ -131,6 +132,24 @@ export const SETTINGS_INDEX = [
     label: "Tagging domain",
     terms: "animated drawn real-life photos videos adult tagger vlm sensitive",
   },
+  {
+    id: "set-theme",
+    section: "settings-appearance",
+    label: "Theme",
+    terms: "appearance palette colour color dark light auto graphite daylight picker",
+  },
+  {
+    id: "set-skin",
+    section: "settings-appearance",
+    label: "YoRHa skin",
+    terms: "nier automata grain scanlines boot intro",
+  },
+  {
+    id: "set-reduce_motion",
+    section: "settings-appearance",
+    label: "Reduce motion",
+    terms: "animation motion transitions instant accessibility",
+  },
 ];
 
 export const DEBUG_SECTIONS = [
@@ -167,11 +186,12 @@ export function searchSettings(query, isVisible = () => true) {
   return { terms, hits, counts, total: hits.size };
 }
 
-// Jump bar ranking: every term must appear; word starts and label prefixes
-// rank higher, earlier entries break ties.
+// Jump bar ranking: every term must appear in the label, group or extra
+// search terms; word starts and label prefixes rank higher, earlier entries
+// break ties.
 export function scoreJumpEntry(entry, terms) {
   const label = entry.label.toLowerCase();
-  const hay = `${label} ${entry.group.toLowerCase()}`;
+  const hay = `${label} ${entry.group.toLowerCase()} ${(entry.terms || "").toLowerCase()}`;
   let total = 0;
   for (const term of terms) {
     const at = hay.indexOf(term);
@@ -208,6 +228,14 @@ export function staticJumpEntries() {
       group: "Pages",
       route: page.id,
     })),
+    // Opens the theme picker instead of going to a page.
+    {
+      key: "appearance",
+      label: "Appearance",
+      group: "Change theme",
+      terms: "theme palette colour color dark light skin yorha",
+      appearance: true,
+    },
     ...SETTINGS_SECTIONS.map((section) => ({
       key: `section-${section.id}`,
       label: section.label,
@@ -215,6 +243,8 @@ export function staticJumpEntries() {
       route: "settings",
       target: section.id,
     })),
+    // The Theme setting is a button that opens the picker, so its entry
+    // opens the picker too.
     ...SETTINGS_INDEX.map((unit) => ({
       key: `setting-${unit.id}`,
       label: unit.label,
@@ -222,6 +252,7 @@ export function staticJumpEntries() {
       route: "settings",
       target: unit.id,
       quiet: true,
+      ...(unit.id === "set-theme" ? { appearance: true } : {}),
     })),
     ...DEBUG_SECTIONS.map((section) => ({
       key: `debug-${section.id}`,

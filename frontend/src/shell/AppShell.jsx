@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import AppearancePicker from "../theme/AppearancePicker";
+import { AppearanceButton, useAppearance } from "../theme/Appearance";
 import EngineChip from "./EngineChip";
 import { NAV_COLLAPSED_STORAGE_KEY } from "../theme/themes";
 import Icon from "./icons";
@@ -18,7 +18,7 @@ function NavBadge({ badge }) {
   );
 }
 
-// Console app shell: sidebar, top bar with the jump bar and Appearance menu,
+// Console app shell: sidebar, top bar with the jump bar and Appearance button,
 // banner slot, run dock, and on phones a bottom tab bar with a "More" sheet.
 export default function AppShell({
   route,
@@ -39,6 +39,7 @@ export default function AppShell({
   const sheetRef = useRef(null);
   const moreRef = useRef(null);
   const page = pageById(route);
+  const appearance = useAppearance();
 
   useEffect(() => {
     document.documentElement.classList.toggle("nav-collapsed", collapsed);
@@ -170,7 +171,7 @@ export default function AppShell({
               <span className="app-jump-trigger-text">Jump to a page, setting or run…</span>
               <kbd className="app-kbd">Ctrl K</kbd>
             </button>
-            <AppearancePicker />
+            <AppearanceButton />
           </header>
 
           {banners ? <div className="app-banner-slot">{banners}</div> : null}
@@ -285,7 +286,15 @@ export default function AppShell({
         </nav>
       </div>
 
-      <JumpBar open={jumpOpen} onOpenChange={setJumpOpen} entries={jumpEntries} onGo={onJump} />
+      <JumpBar
+        open={jumpOpen}
+        onOpenChange={(next) => {
+          // Ctrl+K does not stack the jump bar over the theme picker.
+          if (!appearance.pickerOpen) setJumpOpen(next);
+        }}
+        entries={jumpEntries}
+        onGo={(entry) => (entry.appearance ? appearance.openPicker() : onJump(entry))}
+      />
     </>
   );
 }

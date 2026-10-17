@@ -138,6 +138,10 @@ body.nier-boot-active { overflow: hidden; }
   .nier-boot__cursor { animation: none; }
   .nier-boot__line { transition: none; opacity: 1; transform: none; }
 }
+html[data-motion="reduce"][data-skin="yorha"]::before,
+html[data-motion="reduce"] .nier-boot--glitch,
+html[data-motion="reduce"] .nier-boot__cursor { animation: none; }
+html[data-motion="reduce"] .nier-boot__line { transition: none; opacity: 1; transform: none; }
 
 @media (forced-colors: active) {
   html[data-skin="yorha"]::before,

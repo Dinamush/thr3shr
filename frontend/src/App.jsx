@@ -10,6 +10,7 @@ import SettingsPage from "./pages/SettingsPage";
 import AppShell from "./shell/AppShell";
 import { pageHref, routeFromHash, staticJumpEntries } from "./shell/nav";
 import RunDock from "./shell/RunDock";
+import { AppearanceProvider } from "./theme/Appearance";
 import YorhaBoot from "./theme/YorhaBoot";
 import { AppContext } from "./ui";
 
@@ -1198,47 +1199,49 @@ function App() {
 
   return (
     <AppContext.Provider value={app}>
-      <AppShell
-        route={route}
-        badges={badges}
-        engine={engine}
-        version={APP_VERSION}
-        jumpEntries={jumpEntries}
-        onJump={handleJump}
-        banners={banners}
-        dock={<RunDock model={dockModel()} />}
-      >
-        {page}
-      </AppShell>
-      <div className="toasts">
-        {error ? (
-          <div className="toast is-bad" role="alert">
-            <span className="toast-text">{error}</span>
-            <button
-              type="button"
-              className="toast-close"
-              aria-label="Dismiss error"
-              onClick={() => setError("")}
-            >
-              ×
-            </button>
-          </div>
-        ) : null}
-        {notice ? (
-          <div className="toast is-ok" role="status">
-            <span className="toast-text">{notice}</span>
-            <button
-              type="button"
-              className="toast-close"
-              aria-label="Dismiss notice"
-              onClick={() => setNotice("")}
-            >
-              ×
-            </button>
-          </div>
-        ) : null}
-      </div>
-      <YorhaBoot />
+      <AppearanceProvider>
+        <AppShell
+          route={route}
+          badges={badges}
+          engine={engine}
+          version={APP_VERSION}
+          jumpEntries={jumpEntries}
+          onJump={handleJump}
+          banners={banners}
+          dock={<RunDock model={dockModel()} />}
+        >
+          {page}
+        </AppShell>
+        <div className="toasts">
+          {error ? (
+            <div className="toast is-bad" role="alert">
+              <span className="toast-text">{error}</span>
+              <button
+                type="button"
+                className="toast-close"
+                aria-label="Dismiss error"
+                onClick={() => setError("")}
+              >
+                ×
+              </button>
+            </div>
+          ) : null}
+          {notice ? (
+            <div className="toast is-ok" role="status">
+              <span className="toast-text">{notice}</span>
+              <button
+                type="button"
+                className="toast-close"
+                aria-label="Dismiss notice"
+                onClick={() => setNotice("")}
+              >
+                ×
+              </button>
+            </div>
+          ) : null}
+        </div>
+        <YorhaBoot />
+      </AppearanceProvider>
     </AppContext.Provider>
   );
 }
