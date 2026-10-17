@@ -2,7 +2,7 @@
 // phone tab bar, the settings index and the Ctrl+K jump bar list.
 
 export const PAGES = [
-  { id: "run", path: "/", label: "Tag & run", group: "Workflow", icon: "tag" },
+  { id: "run", path: "/", label: "Tag & run", group: "Workflow", icon: "run" },
   { id: "review", path: "/review", label: "Review", group: "Workflow", icon: "review" },
   { id: "runs", path: "/runs", label: "Runs", group: "Workflow", icon: "runs" },
   { id: "settings", path: "/settings", label: "Settings", group: "Setup", icon: "settings" },

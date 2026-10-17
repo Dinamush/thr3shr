@@ -8,6 +8,7 @@ import RunPage from "./pages/RunPage";
 import RunsPage from "./pages/RunsPage";
 import SettingsPage from "./pages/SettingsPage";
 import AppShell from "./shell/AppShell";
+import Icon, { StatusGlyph } from "./shell/icons";
 import { pageHref, routeFromHash, staticJumpEntries } from "./shell/nav";
 import RunDock from "./shell/RunDock";
 import { AppearanceProvider } from "./theme/Appearance";
@@ -1215,6 +1216,7 @@ function App() {
         <div className="toasts">
           {error ? (
             <div className="toast is-bad" role="alert">
+              <StatusGlyph name="failed" size={14} className="toast-lead" />
               <span className="toast-text">{error}</span>
               <button
                 type="button"
@@ -1222,12 +1224,13 @@ function App() {
                 aria-label="Dismiss error"
                 onClick={() => setError("")}
               >
-                ×
+                <Icon name="close" size={14} />
               </button>
             </div>
           ) : null}
           {notice ? (
             <div className="toast is-ok" role="status">
+              <StatusGlyph name="completed" size={14} className="toast-lead" />
               <span className="toast-text">{notice}</span>
               <button
                 type="button"
@@ -1235,7 +1238,7 @@ function App() {
                 aria-label="Dismiss notice"
                 onClick={() => setNotice("")}
               >
-                ×
+                <Icon name="close" size={14} />
               </button>
             </div>
           ) : null}

@@ -237,24 +237,8 @@ html.nav-collapsed { --sidebar-w: 60px; }
   text-decoration: none;
 }
 .app-brand:hover { color: var(--tx); }
-.app-brand-mark {
-  position: relative;
-  display: inline-block;
-  flex: none;
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  background: var(--ac);
-}
-/* Mark: three grains dropping into a bin, cut out of the accent tile. */
-.app-brand-mark::after {
-  content: "";
-  position: absolute;
-  inset: 4px;
-  background: var(--on-ac);
-  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M3.6 1.6v3.6M7 1.6v5.6M10.4 1.6v3.6M2 9.2v2.8h10V9.2' fill='none' stroke='%23000' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M3.6 1.6v3.6M7 1.6v5.6M10.4 1.6v3.6M2 9.2v2.8h10V9.2' fill='none' stroke='%23000' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
-}
+/* The app icon (BrandMark in shell/icons.jsx), the same artwork as the favicon. */
+.app-brand-mark { display: block; flex: none; }
 .app-brand-name {
   font-size: 15px;
   font-weight: 700;
@@ -273,7 +257,11 @@ html.nav-collapsed { --sidebar-w: 60px; }
   cursor: pointer;
 }
 .app-collapse:hover { background: var(--sf2); color: var(--tx); }
-.app-collapse svg { transition: transform var(--t-base) var(--ease); }
+.app-collapse .icon-collapse-chevron {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform var(--t-base) var(--ease);
+}
 
 .app-nav {
   flex: 1;
@@ -372,16 +360,10 @@ html.nav-collapsed { --sidebar-w: 60px; }
 .engine-chip:hover { background: var(--sf2); color: var(--tx); }
 .engine-chip[aria-expanded="true"] { background: var(--sf3); color: var(--tx); box-shadow: inset 0 0 0 1px var(--ac-line); }
 .engine-chip-label { overflow: hidden; text-overflow: ellipsis; }
-.engine-chip-dot {
-  flex: none;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--tx3);
-}
-.engine-chip.is-ok .engine-chip-dot { background: var(--ok); }
-.engine-chip.is-warn .engine-chip-dot { background: var(--warn); }
-.engine-chip.is-bad .engine-chip-dot { background: var(--bad); }
+.engine-chip-icon { flex: none; color: var(--tx3); }
+.engine-chip.is-ok .engine-chip-icon { color: var(--ok); }
+.engine-chip.is-warn .engine-chip-icon { color: var(--warn); }
+.engine-chip.is-bad .engine-chip-icon { color: var(--bad); }
 .engine-pop {
   position: absolute;
   left: 0;
@@ -421,7 +403,7 @@ html.nav-collapsed .app-nav-label,
 html.nav-collapsed .app-nav-heading > span,
 html.nav-collapsed .engine-chip-label,
 html.nav-collapsed .app-version { display: none; }
-html.nav-collapsed .app-collapse svg { transform: rotate(180deg); }
+html.nav-collapsed .app-collapse .icon-collapse-chevron { transform: scaleX(-1); }
 html.nav-collapsed .app-nav-link { justify-content: center; padding: 6px 0; }
 html.nav-collapsed .app-nav-heading {
   height: 1px;
@@ -557,13 +539,6 @@ main { flex: 1 0 auto; min-width: 0; }
   cursor: pointer;
 }
 .theme-picker-toggle:hover { border-color: var(--ln2); color: var(--tx); }
-.theme-picker-toggle-dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: conic-gradient(var(--ac) 0 50%, var(--tx) 50% 100%);
-  box-shadow: 0 0 0 1px var(--ln2);
-}
 
 /* The modal layer.  Every animation below is transform or opacity; the
    reduced-motion tiers in tokens.css make all of it instant. */
@@ -922,21 +897,19 @@ body.theme-picker-open { overflow: hidden; }
 }
 .run-dock-summary:hover { color: var(--tx); text-decoration: underline; }
 .run-dock-label { overflow: hidden; text-overflow: ellipsis; }
-.run-dock-dot {
+.run-dock-lamp {
   flex: none;
-  width: 8px;
-  height: 8px;
   border-radius: 50%;
-  background: var(--tx3);
-  transition: background-color var(--t-slow) var(--ease);
+  color: var(--tx3);
+  transition: color var(--t-slow) var(--ease);
 }
-.run-dock[data-state="running"] .run-dock-dot,
-.run-dock[data-state="migrating"] .run-dock-dot {
-  background: var(--ok);
+.run-dock[data-state="running"] .run-dock-lamp,
+.run-dock[data-state="migrating"] .run-dock-lamp {
+  color: var(--ok);
   animation: dock-pulse 1.8s ease-out infinite;
 }
-.run-dock[data-state="queued"] .run-dock-dot { background: var(--warn); }
-.run-dock[data-state="offline"] .run-dock-dot { background: var(--bad); }
+.run-dock[data-state="queued"] .run-dock-lamp { color: var(--warn); }
+.run-dock[data-state="offline"] .run-dock-lamp { color: var(--bad); }
 .run-dock[data-state="idle"] .run-dock-label,
 .run-dock[data-state="offline"] .run-dock-label { color: var(--tx2); font-weight: 500; }
 @keyframes dock-pulse {
@@ -988,8 +961,11 @@ body.theme-picker-open { overflow: hidden; }
   font-variant-numeric: tabular-nums;
 }
 .run-dock-review {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   flex: none;
-  padding: 2px 8px;
+  padding: 2px 8px 2px 6px;
   border-radius: var(--r-pill);
   background: var(--warn-s);
   color: var(--warn);
@@ -997,7 +973,14 @@ body.theme-picker-open { overflow: hidden; }
 }
 .run-dock-review:hover { color: var(--warn); box-shadow: inset 0 0 0 1px var(--warn-line); }
 .run-dock-review-count { font-family: var(--font-mono); }
-.run-dock-more { flex: none; margin-left: auto; color: var(--tx3); }
+.run-dock-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  margin-left: auto;
+  color: var(--tx3);
+}
 .run-dock-more:hover { color: var(--tx); }
 
 /* ── Phone tab bar + "More" sheet (shown at phone width) ── */
@@ -1113,8 +1096,13 @@ body.jump-open { overflow: hidden; }
 }
 .toast.is-bad { border-color: var(--bad-line); border-left-color: var(--bad); }
 .toast.is-ok { border-color: var(--ok-line); border-left-color: var(--ok); }
+.toast-lead { flex: none; margin-top: 3px; }
+.toast.is-bad .toast-lead { color: var(--bad); }
+.toast.is-ok .toast-lead { color: var(--ok); }
 .toast-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .toast-close {
+  display: grid;
+  place-items: center;
   flex: none;
   width: 24px;
   height: 24px;
@@ -1123,8 +1111,6 @@ body.jump-open { overflow: hidden; }
   border-radius: var(--r-sm);
   background: transparent;
   color: var(--tx3);
-  font-size: 16px;
-  line-height: 1;
   cursor: pointer;
 }
 .toast-close:hover { background: var(--sf3); color: var(--tx); }
@@ -1497,8 +1483,8 @@ fieldset {
 }
 .btn-migrate { border-color: var(--ac-line); background: var(--sf); color: var(--ac-tx); }
 .btn-migrate:hover:not(:disabled) { border-color: var(--ac); background: var(--ac-s); color: var(--ac-tx); }
-.btn-migrate-arrow { font-family: var(--font-mono); transition: transform var(--t-fast) var(--ease); }
-.btn-migrate:hover:not(:disabled) .btn-migrate-arrow { transform: translateX(2px); }
+.btn-migrate-icon { transition: transform var(--t-fast) var(--ease); }
+.btn-migrate:hover:not(:disabled) .btn-migrate-icon { transform: translateX(2px); }
 .btn-sm { min-height: 28px; padding: 3px 10px; font-size: var(--fs-sm); }
 .btn-lg { min-height: 38px; min-width: 180px; }
 .btn-block { width: 100%; }
@@ -1533,9 +1519,9 @@ fieldset {
 .status-chip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   flex: none;
-  padding: 2px 8px;
+  padding: 2px 8px 2px 6px;
   border-radius: var(--r-pill);
   background: var(--sf3);
   color: var(--tx2);
@@ -1545,14 +1531,7 @@ fieldset {
     background-color var(--t-slow) var(--ease),
     color var(--t-slow) var(--ease);
 }
-.status-chip::before {
-  content: "";
-  flex: none;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-}
+.status-chip .status-glyph { flex: none; }
 .status-chip.is-ok { background: var(--ok-s); color: var(--ok); }
 .status-chip.is-warn,
 .status-chip.is-queued { background: var(--warn-s); color: var(--warn); }
@@ -1560,10 +1539,8 @@ fieldset {
 .status-chip.is-info,
 .status-chip.is-running { background: var(--ac-s); color: var(--ac-tx); }
 .status-chip.is-done { background: var(--sf3); color: var(--tx2); }
-.status-chip.is-done::before { border-radius: 1px; }
 .status-chip.is-neutral { background: var(--sf3); color: var(--tx2); }
-.status-chip.is-neutral::before { background: transparent; box-shadow: inset 0 0 0 1.5px currentColor; }
-.status-chip.is-running::before { animation: chip-blink 1.2s ease-in-out infinite; }
+.status-chip.is-running .status-glyph { animation: chip-blink 1.2s ease-in-out infinite; }
 @keyframes chip-blink { 50% { opacity: 0.3; } }
 
 .callout {
@@ -1776,19 +1753,17 @@ button.chip:disabled { opacity: 0.5; cursor: not-allowed; }
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
 }
-.sticky-save-status { flex: 1; min-width: 0; color: var(--tx2); }
+.sticky-save-status {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex: 1;
+  min-width: 0;
+  color: var(--tx2);
+}
+.sticky-save-status .icon { flex: none; color: var(--warn); }
 .sticky-save-bar.is-dirty { border-color: var(--warn-line); }
 .sticky-save-bar.is-dirty .sticky-save-status { color: var(--tx); font-weight: 600; }
-.sticky-save-bar.is-dirty .sticky-save-status::before {
-  content: "";
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  margin-right: var(--s2);
-  border-radius: 50%;
-  background: var(--warn);
-  vertical-align: 1px;
-}
 
 /* ═══ 7  Tables ═════════════════════════════════════════════════════════════ */
 
@@ -1959,6 +1934,9 @@ tr.needs-review td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
   background: var(--sf2);
 }
 .view-toggle button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 3px 9px;
   border: 0;
   border-radius: 5px;
@@ -2023,7 +2001,7 @@ tr.needs-review td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
   white-space: nowrap;
   font-size: var(--fs-sm);
 }
-.review-row-final { color: var(--ac-tx); font-weight: 600; }
+.review-row-final { display: inline-flex; align-items: center; gap: 4px; color: var(--ac-tx); font-weight: 600; }
 .review-row.needs-review .review-thumb { box-shadow: 0 0 0 2px var(--warn-line); }
 .review-grid {
   display: grid;
@@ -2135,17 +2113,16 @@ tr.needs-review td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
   position: absolute;
   right: 4px;
   bottom: 4px;
-  width: 18px;
+  display: grid;
+  place-items: center;
+  width: 22px;
   height: 18px;
-  border-radius: 50%;
+  border-radius: 5px;
   background: rgba(20, 20, 24, 0.72);
   color: #fff;
-  font-size: 9px;
-  line-height: 18px;
-  text-align: center;
   pointer-events: none;
 }
-.review-thumb.is-large .media-badge { width: 26px; height: 26px; font-size: 12px; line-height: 26px; right: 10px; bottom: 10px; }
+.review-thumb.is-large .media-badge { width: 30px; height: 24px; border-radius: 6px; right: 10px; bottom: 10px; }
 
 .review-detail { overflow: hidden; }
 .review-detail .pane-head { gap: var(--s3); }
@@ -2173,6 +2150,7 @@ tr.needs-review td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
 .primary-tag-score { color: var(--tx3); font: var(--fs-xs)/1 var(--font-mono); }
 .primary-empty { color: var(--warn); font-weight: 600; }
 .migrated-path { color: var(--tx3); font: var(--fs-xs)/1.4 var(--font-mono); overflow-wrap: anywhere; }
+.migrated-path .icon { margin-right: 4px; vertical-align: -2px; }
 .review-actions { display: flex; flex-wrap: wrap; gap: var(--s2); }
 .review-actions .btn { min-width: 112px; }
 .review-done { margin: 0; }
@@ -2420,6 +2398,8 @@ tr.needs-review td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
   .app { grid-template-columns: minmax(0, 1fr); }
   .app-sidebar { display: none; }
   .app-topbar { gap: var(--s2); padding: 0 var(--s4); }
+  /* The layout toggle goes icon-only so the filter keeps its width. */
+  .view-toggle-label { display: none; }
   .app-topbar-brand { display: inline-flex; }
   .app-crumb-section,
   .app-crumb-sep { display: none; }
@@ -2524,27 +2504,17 @@ tr.needs-review td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     padding: 1px 4px;
     font-size: 9px;
   }
-  .nav-hamburger-icon { position: relative; display: block; width: 20px; height: 20px; }
-  .nav-hamburger-icon > span,
-  .nav-hamburger-icon::before,
-  .nav-hamburger-icon::after {
-    content: "";
-    position: absolute;
-    left: 3px;
-    right: 3px;
-    height: 1.5px;
-    border-radius: 1px;
-    background: currentColor;
+  /* The "more" icon's three bars fold into a cross while the sheet is open. */
+  .nav-hamburger-icon .icon-more-bar {
+    transform-box: fill-box;
+    transform-origin: center;
     transition:
       transform var(--t-base) var(--ease),
       opacity var(--t-base) var(--ease);
   }
-  .nav-hamburger-icon::before { top: 5px; }
-  .nav-hamburger-icon > span { top: 9.5px; }
-  .nav-hamburger-icon::after { top: 14px; }
-  .nav-hamburger[aria-expanded="true"] .nav-hamburger-icon::before { transform: translateY(4.5px) rotate(45deg); }
-  .nav-hamburger[aria-expanded="true"] .nav-hamburger-icon > span { opacity: 0; }
-  .nav-hamburger[aria-expanded="true"] .nav-hamburger-icon::after { transform: translateY(-4.5px) rotate(-45deg); }
+  .nav-hamburger[aria-expanded="true"] .icon-more-bar:nth-child(1) { transform: translateY(3.5px) rotate(45deg); }
+  .nav-hamburger[aria-expanded="true"] .icon-more-bar:nth-child(2) { opacity: 0; }
+  .nav-hamburger[aria-expanded="true"] .icon-more-bar:nth-child(3) { transform: translateY(-3.5px) rotate(-45deg); }
 
   .mobile-nav-panel[data-open="true"] {
     position: fixed;
@@ -2630,8 +2600,8 @@ tr.needs-review td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
    every duration; looping status animations stop and show their resting
    state instead. */
 @media (prefers-reduced-motion: reduce) {
-  .run-dock-dot,
-  .status-chip.is-running::before { animation: none !important; }
+  .run-dock-lamp,
+  .status-chip.is-running .status-glyph { animation: none !important; }
   .run-dock-bar.is-indeterminate i,
   .progress-bar.is-indeterminate .progress-fill {
     animation: none !important;
@@ -2642,8 +2612,8 @@ tr.needs-review td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
   ::view-transition-old(*),
   ::view-transition-new(*) { animation: none !important; }
 }
-html[data-motion="reduce"] .run-dock-dot,
-html[data-motion="reduce"] .status-chip.is-running::before { animation: none !important; }
+html[data-motion="reduce"] .run-dock-lamp,
+html[data-motion="reduce"] .status-chip.is-running .status-glyph { animation: none !important; }
 html[data-motion="reduce"] .run-dock-bar.is-indeterminate i,
 html[data-motion="reduce"] .progress-bar.is-indeterminate .progress-fill {
   animation: none !important;

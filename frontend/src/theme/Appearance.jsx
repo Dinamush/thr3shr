@@ -9,6 +9,7 @@ import {
   themeMenu,
 } from "./themes";
 import { applyMotion, applyPalette, readStored, writeStored } from "./appearance";
+import Icon from "../shell/icons";
 import ThemePicker from "./ThemePicker";
 
 const AppearanceContext = createContext(null);
@@ -113,7 +114,7 @@ export function AppearanceButton() {
       title="Appearance"
       onClick={(ev) => appearance.openPicker(ev.currentTarget)}
     >
-      <span className="theme-picker-toggle-dot" aria-hidden="true" />
+      <Icon name="appearance" size={14} />
       <span className="theme-picker-toggle-label">{appearance.current.name}</span>
       <span className="sr-only">: change appearance</span>
     </button>

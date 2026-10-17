@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react"
 import { api } from "./api"
+import Icon from "./shell/icons"
 import { DEBUG_SECTIONS } from "./shell/nav"
 import { motionReduced } from "./theme/appearance"
 
@@ -1296,7 +1297,7 @@ export default function ClassifierDebugPage({ landing, onLanded }) {
                   aria-label={`Remove pull tag ${tag}`}
                   disabled={loading}
                 >
-                  ×
+                  <Icon name="close" size={12} />
                 </button>
               </span>
             ))

@@ -1,4 +1,12 @@
 import React from "react";
+import Icon, { StatusGlyph } from "./icons";
+
+// The state lamp: a status glyph, or the unplugged icon when offline.
+function DockLamp({ state }) {
+  if (state === "offline") return <Icon name="offline" size={14} className="run-dock-lamp" />;
+  const glyph = { running: "running", migrating: "running", queued: "queued" }[state] || "proposed";
+  return <StatusGlyph name={glyph} size={12} className="run-dock-lamp" />;
+}
 
 // Live run dock, on every page: what is tagging or migrating right now, how
 // far it is, and how much is waiting for review.  App.jsx builds the model
@@ -8,7 +16,7 @@ export default function RunDock({ model }) {
   return (
     <section className="run-dock" aria-label="Run activity" data-state={state}>
       <a className="run-dock-summary" href={job?.href || "#/"}>
-        <span className="run-dock-dot" aria-hidden="true" />
+        <DockLamp state={state} />
         <span className="run-dock-label" aria-live="polite">
           {label}
         </span>
@@ -31,10 +39,14 @@ export default function RunDock({ model }) {
       ) : null}
       {review ? (
         <a className="run-dock-review" href="#/review">
-          <span className="run-dock-review-count">{review.count}</span> need review
+          <StatusGlyph name="needs" />
+          <span>
+            <span className="run-dock-review-count">{review.count}</span> need review
+          </span>
         </a>
       ) : null}
       <a className="run-dock-more" href="#/runs">
+        <Icon name="runs" size={14} />
         Runs
       </a>
     </section>

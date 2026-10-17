@@ -1,4 +1,5 @@
 import React, { createContext, useContext } from "react";
+import { StatusGlyph } from "./shell/icons";
 
 // App state and actions, provided by App.jsx to every page.
 export const AppContext = createContext(null);
@@ -25,11 +26,24 @@ const RUN_TONES = {
   failed: "bad",
 };
 
-export function StatusChip({ status, kind = "item", children }) {
-  const tones = kind === "run" ? RUN_TONES : ITEM_TONES;
-  const tone = tones[status] || "neutral";
+// Review flags on an item's primary tag.
+const FLAG_TONES = {
+  sensitive: "warn",
+  fallback: "warn",
+};
+
+const TONES = { item: ITEM_TONES, run: RUN_TONES, flag: FLAG_TONES };
+
+// The glyph carries the status without relying on colour.
+const GLYPHS = { pending: "queued" };
+
+export function StatusChip({ status, kind = "item", title, children }) {
+  const tone = TONES[kind][status] || "neutral";
   return (
-    <span className={`status-chip is-${tone} status-${status}`}>{children || status}</span>
+    <span className={`status-chip is-${tone} status-${status}`} title={title}>
+      <StatusGlyph name={GLYPHS[status] || status} />
+      {children || status}
+    </span>
   );
 }
 
