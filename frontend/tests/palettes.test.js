@@ -94,7 +94,10 @@ test("generated CSS has one block per palette, the default on :root", () => {
     assert.ok(css.includes(`[data-theme="${theme.slug}"]`), theme.slug);
     assert.ok(css.includes(`--ac-tx: ${theme.tokens["ac-tx"]}`), `${theme.slug} accent text`);
   }
-  assert.ok(css.startsWith(":root,") || css.includes(`:root,\n[data-theme="${DEFAULT_PALETTE}"]`));
+  // :root ties with [data-theme] on specificity, so it must come first or it
+  // overrides every palette written before it.
+  assert.ok(css.startsWith(`:root,\n[data-theme="${DEFAULT_PALETTE}"] {`));
+  assert.equal(css.indexOf(":root"), css.lastIndexOf(":root"));
   assert.ok(css.includes('[data-theme="nier"] {\n  --r-sm: 0'), "YoRHa stays square");
 });
 
