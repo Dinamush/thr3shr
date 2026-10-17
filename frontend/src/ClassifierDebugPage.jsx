@@ -1,18 +1,20 @@
 import React, { useEffect, useMemo, useState } from "react"
 import { api } from "./api"
-import { version as APP_VERSION } from "../package.json"
+import { DEBUG_SECTIONS } from "./shell/nav"
 
 const DEFAULT_SOURCES = [
   { id: "safebooru", label: "Safebooru", sfw_policy: "rating:safe", max_content_tags: null },
   { id: "danbooru", label: "Danbooru", sfw_policy: "rating:g", max_content_tags: 2 },
 ]
 
+const DEFAULT_SECTION = DEBUG_SECTIONS[0].id
+
 function pct(value) {
   if (value == null || Number.isNaN(Number(value))) return "n/a"
   return `${(Number(value) * 100).toFixed(1)}%`
 }
 
-export default function ClassifierDebugPage() {
+export default function ClassifierDebugPage({ landing, onLanded }) {
   const [sources, setSources] = useState(DEFAULT_SOURCES)
   const [source, setSource] = useState("safebooru")
   const [pullTags, setPullTags] = useState(["1girl", "solo"])
@@ -52,6 +54,20 @@ export default function ClassifierDebugPage() {
   const [tagFpLoading, setTagFpLoading] = useState(false)
   const [tagFpError, setTagFpError] = useState("")
   const [tagFpResult, setTagFpResult] = useState(null)
+
+  const [currentSection, setCurrentSection] = useState(DEFAULT_SECTION)
+
+  // Jump-bar landings scroll to their benchmark, then clear.
+  useEffect(() => {
+    const target = landing?.target
+    if (!target) return undefined
+    const frame = requestAnimationFrame(() => {
+      document.getElementById(target)?.scrollIntoView({ block: "start" })
+      setCurrentSection(target)
+      onLanded?.()
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [landing])
 
   const sourceMeta = useMemo(
     () => sources.find((s) => s.id === source) || sources[0],
@@ -233,31 +249,56 @@ export default function ClassifierDebugPage() {
   const tagFpReports = tagFpResult?.reports || []
   const tagFpAlt = tagFpResult?.at_wd_general_threshold
 
-  return (
-    <div className="container">
-      <header className="app-header">
-        <div className="app-nav">
-          <a href="#/" className="nav-link">
-            THR3SHR
-          </a>
-          <a href="#/debug" className="nav-link active" aria-current="page">
-            Debug
-          </a>
-        </div>
-        <h1>THR3SHR debug</h1>
-        <p className="lede">
-          Curated tag recall / false-positive benchmarks, SFW pull-tag recall, and real-life vs
-          anime separation. Uses saved settings from the main page — no migrate.
-        </p>
-      </header>
+  const anyError = error || realismError || styleError || tagRecallError || tagFpError
 
-      {(error || realismError || styleError || tagRecallError || tagFpError) && (
-        <div className="error">
-          {error || realismError || styleError || tagRecallError || tagFpError}
+  return (
+    <>
+      <div className="page-head">
+        <div className="page-head-copy">
+          <h1>Classifier debug</h1>
+          <p className="page-lede">
+            Curated tag recall / false-positive benchmarks, SFW pull-tag recall, and real-life vs
+            anime separation. Uses saved settings from the main page — no migrate.
+          </p>
+        </div>
+      </div>
+
+      <div className="debug-layout">
+        <nav className="settings-nav debug-nav" aria-label="Benchmarks">
+          <ol className="settings-nav-list">
+            {DEBUG_SECTIONS.map((section) => (
+              <li key={section.id}>
+                <a
+                  href="#/debug"
+                  className="settings-nav-link"
+                  aria-current={currentSection === section.id ? "true" : undefined}
+                  onClick={(e) => {
+                    e.preventDefault()
+                    setCurrentSection(section.id)
+                    document
+                      .getElementById(section.id)
+                      ?.scrollIntoView({ block: "start", behavior: "smooth" })
+                  }}
+                >
+                  {section.label}
+                </a>
+              </li>
+            ))}
+          </ol>
+          <p className="settings-nav-note">
+            Model: <strong>{settingsSummary.tagger_model}</strong> · threshold{" "}
+            <strong>{Number(settingsSummary.confidence_threshold).toFixed(2)}</strong>
+          </p>
+        </nav>
+
+        <div className="debug-sections">
+      {anyError && (
+        <div className="callout callout-danger" role="alert">
+          {anyError}
         </div>
       )}
 
-      <section className="panel" aria-label="Tag recall benchmark">
+      <section className="panel" id="debug-tag-recall" aria-label="Tag recall benchmark">
         <h2>Tag recall benchmark</h2>
         <span className="kicker">
           Fixed curated suite: <code>ml_danbooru</code> vs <code>wd_swinv2_v3</code>. Metrics are
@@ -482,7 +523,7 @@ export default function ClassifierDebugPage() {
         </section>
       )}
 
-      <section className="panel" aria-label="Tag false-positive benchmark">
+      <section className="panel" id="debug-tag-fp" aria-label="Tag false-positive benchmark">
         <h2>Tag false-positive benchmark</h2>
         <span className="kicker">
           Same curated suite. Probes taxonomy evidence tags (weight ≥ min) for your{" "}
@@ -763,7 +804,7 @@ export default function ClassifierDebugPage() {
         </section>
       )}
 
-      <section className="panel" aria-label="Style detector compare">
+      <section className="panel" id="debug-style" aria-label="Style detector compare">
         <h2>Style detectors (real vs anime)</h2>
         <span className="kicker">
           Debug-only compare: dedicated ONNX classifiers (
@@ -922,7 +963,7 @@ export default function ClassifierDebugPage() {
         </section>
       )}
 
-      <section className="panel" aria-label="Real-life vs anime eval">
+      <section className="panel" id="debug-realism" aria-label="Real-life vs anime eval">
         <h2>Real-life vs anime</h2>
         <span className="kicker">
           Remote people portraits (RandomUser CDN) vs Safebooru anime, including realistic /
@@ -1153,7 +1194,7 @@ export default function ClassifierDebugPage() {
         </section>
       )}
 
-      <section className="panel" aria-label="THR3SHR debug controls">
+      <section className="panel" id="debug-sfw" aria-label="THR3SHR debug controls">
         <h2>SFW tag recall</h2>
         <span className="kicker">
           Safebooru / Danbooru only. Change tagger and destination tags on the main THR3SHR page,
@@ -1355,26 +1396,8 @@ export default function ClassifierDebugPage() {
         </section>
       )}
 
-      <footer className="app-footer" aria-label="Attribution">
-        <p>
-          THR3SHR v{APP_VERSION} © 2026 Dinamush · code MIT · creative{" "}
-          <a
-            href="https://creativecommons.org/licenses/by/4.0/"
-            target="_blank"
-            rel="noreferrer"
-          >
-            CC BY 4.0
-          </a>
-          {" · "}
-          <a
-            href="https://github.com/Dinamush/thr3shr/blob/main/ATTRIBUTION.md"
-            target="_blank"
-            rel="noreferrer"
-          >
-            model attributions
-          </a>
-        </p>
-      </footer>
-    </div>
+        </div>
+      </div>
+    </>
   )
 }
