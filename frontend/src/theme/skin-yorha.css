@@ -68,9 +68,8 @@ html[data-skin="yorha"] .app-brand-name {
   letter-spacing: 0.16em;
   text-transform: uppercase;
 }
-html[data-skin="yorha"] .app-brand-mark,
-html[data-skin="yorha"] .run-dock-dot {
-  border-radius: 0;
+html[data-skin="yorha"] .app-brand-tile {
+  rx: 0;
 }
 
 /* ── Boot overlay ──────────────────────────────────────────────────────────

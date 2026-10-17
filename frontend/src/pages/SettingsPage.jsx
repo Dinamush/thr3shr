@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import NumberField from "../NumberField";
+import Icon from "../shell/icons";
 import { TAGGER_MODELS } from "../lib";
 import { SETTINGS_SECTIONS, searchSettings } from "../shell/nav";
 import { useAppearance } from "../theme/Appearance";
@@ -474,6 +475,7 @@ export default function SettingsPage() {
 
           <div className={`sticky-save-bar${isDirty ? " is-dirty" : ""}`}>
             <span className="sticky-save-status" role="status">
+              {isDirty ? <Icon name="edit" size={14} /> : null}
               {isDirty
                 ? `${dirtyCount} unsaved change${dirtyCount === 1 ? "" : "s"}`
                 : "Settings saved"}

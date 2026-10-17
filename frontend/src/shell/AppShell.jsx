@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { AppearanceButton, useAppearance } from "../theme/Appearance";
 import EngineChip from "./EngineChip";
 import { NAV_COLLAPSED_STORAGE_KEY } from "../theme/themes";
-import Icon from "./icons";
+import Icon, { BrandMark } from "./icons";
 import JumpBar from "./JumpBar";
 import { PAGES, PAGE_GROUPS, pageById, pageHref } from "./nav";
 
@@ -104,7 +104,7 @@ export default function AppShell({
         <aside className="app-sidebar" aria-label="Sidebar">
           <div className="app-sidebar-head">
             <a href="#/" className="app-brand" aria-label="THR3SHR home">
-              <span className="app-brand-mark" aria-hidden="true" />
+              <BrandMark />
               <span className="app-brand-name">THR3SHR</span>
             </a>
             <button
@@ -115,7 +115,7 @@ export default function AppShell({
               title={collapseLabel}
               onClick={toggleCollapsed}
             >
-              <Icon name="chevron" />
+              <Icon name="collapse" />
             </button>
           </div>
           <nav className="app-nav" aria-label="Primary">
@@ -151,7 +151,7 @@ export default function AppShell({
         <div className="app-main">
           <header className="app-topbar">
             <a href="#/" className="app-topbar-brand" aria-label="THR3SHR home">
-              <span className="app-brand-mark" aria-hidden="true" />
+              <BrandMark />
             </a>
             <p className="app-crumb">
               <span className="app-crumb-section">{page.group}</span>
@@ -221,7 +221,7 @@ export default function AppShell({
               className="app-tab"
               aria-current={route === id ? "page" : undefined}
             >
-              <Icon name={item.icon} size={20} strokeWidth={1.5} />
+              <Icon name={item.icon} size={20} />
               <span>{id === "run" ? "Run" : item.label}</span>
               <NavBadge badge={badges[id]} />
             </a>
@@ -236,9 +236,7 @@ export default function AppShell({
           aria-label="More pages"
           onClick={() => setSheetOpen((prev) => !prev)}
         >
-          <span className="nav-hamburger-icon" aria-hidden="true">
-            <span />
-          </span>
+          <Icon name="more" size={20} className="nav-hamburger-icon" />
           <span className="nav-hamburger-text" aria-hidden="true">
             More
           </span>

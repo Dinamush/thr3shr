@@ -343,6 +343,9 @@ test("Review renders the empty state and a split list with detail", async () => 
   // A fresh item's "proposed" chip is neutral, not a warning.
   assert.ok(html.includes("status-chip is-neutral status-proposed"));
   assert.ok(!html.includes("is-warn status-proposed"));
+  // Status reads without colour: every chip leads with its glyph.
+  assert.match(html, /class="status-chip is-neutral status-proposed"><svg[^>]*class="status-glyph"/);
+  assert.match(html, /class="status-chip is-done status-migrated"><svg[^>]*class="status-glyph"/);
 });
 
 test("Review remembers the Grid layout and renders tiles", async () => {
@@ -352,8 +355,10 @@ test("Review remembers the Grid layout and renders tiles", async () => {
     assert.ok(html.includes('class="review-grid"'));
     assert.ok(!html.includes('class="review-list"'));
     assert.ok(html.includes('data-layout="grid"'));
-    assert.match(html, /aria-pressed="true"[^>]*>Grid</);
-    for (const text of ["one.png", "clip.mp4", "Select a/one.png", "Final tag for a/one.png", "← Grid"]) {
+    assert.match(html, /aria-pressed="true" aria-label="Grid"/);
+    // The detail pane's back button returns to the grid.
+    assert.match(html, /review-back"[^>]*><svg[^>]*>.*?<\/svg>Grid</);
+    for (const text of ["one.png", "clip.mp4", "Select a/one.png", "Final tag for a/one.png"]) {
       assert.ok(html.includes(text), `missing ${text}`);
     }
     // Migrated items cannot be selected in the grid either.
@@ -393,6 +398,58 @@ test("the sidebar engine chip carries the engine facts and the unload guard", as
     ),
     ""
   );
+});
+
+test("every icon the app names exists in the set", async () => {
+  const { ICON_NAMES, STATUS_GLYPH_NAMES } = await load("/src/shell/icons.jsx");
+  assert.equal(ICON_NAMES.length, 29);
+  const { PAGES } = await load("/src/shell/nav.js");
+  for (const page of PAGES) assert.ok(ICON_NAMES.includes(page.icon), `no icon ${page.icon}`);
+  const used = new Set();
+  for (const file of [
+    "App.jsx",
+    "ClassifierDebugPage.jsx",
+    "pages/ReviewPage.jsx",
+    "pages/RunPage.jsx",
+    "pages/RunsPage.jsx",
+    "pages/SettingsPage.jsx",
+    "shell/AppShell.jsx",
+    "shell/EngineChip.jsx",
+    "shell/JumpBar.jsx",
+    "shell/RunDock.jsx",
+    "theme/Appearance.jsx",
+    "theme/ThemePicker.jsx",
+  ]) {
+    const src = readFileSync(`${root}src/${file}`, "utf8");
+    for (const [, name] of src.matchAll(/<Icon name="([a-z]+)"/g)) used.add(name);
+    for (const [, name] of src.matchAll(/<StatusGlyph name="([a-z]+)"/g)) {
+      assert.ok(STATUS_GLYPH_NAMES.includes(name), `no status glyph ${name}`);
+    }
+  }
+  for (const name of used) assert.ok(ICON_NAMES.includes(name), `no icon ${name}`);
+  // Every item, run and flag status has its own glyph.
+  for (const status of ["proposed", "reviewed", "approved", "rejected", "migrated", "running", "completed", "cancelled", "failed", "sensitive", "fallback", "queued", "needs"]) {
+    assert.ok(STATUS_GLYPH_NAMES.includes(status), `no status glyph ${status}`);
+  }
+});
+
+test("the app icon files match their source", async () => {
+  const { faviconSvg } = await load("/src/shell/appIcon.js");
+  assert.equal(readFileSync(`${root}public/favicon.svg`, "utf8"), faviconSvg());
+  const html = readFileSync(`${root}index.html`, "utf8");
+  for (const href of ["/favicon.ico", "/favicon.svg", "/apple-touch-icon.png", "/manifest.webmanifest"]) {
+    assert.ok(html.includes(`href="${href}"`), `index.html links ${href}`);
+  }
+  const manifest = JSON.parse(readFileSync(`${root}public/manifest.webmanifest`, "utf8"));
+  for (const icon of manifest.icons) {
+    const png = readFileSync(`${root}public${icon.src}`);
+    const [w, h] = icon.sizes.split("x").map(Number);
+    assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20)], [w, h], icon.src);
+  }
+  // The desktop icon carries a 256px image (stored as 0 in the ICO header).
+  const ico = readFileSync(`${root}public/app.ico`);
+  const widths = Array.from({ length: ico.readUInt16LE(4) }, (_, i) => ico.readUInt8(6 + 16 * i) || 256);
+  assert.deepEqual(widths, [16, 24, 32, 48, 64, 128, 256]);
 });
 
 test("fonts ship with the app instead of loading from Google", () => {

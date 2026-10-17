@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { TAGGER_MODELS, formatDurationSeconds, formatEtaFinishAt, taggerLabel } from "../lib";
+import Icon from "../shell/icons";
 import { PageHead, PageStats, ProgressBar, StatusChip, SwitchRow, useApp } from "../ui";
 
 const RUN_MODES = [
@@ -113,6 +114,7 @@ function Destinations() {
               disabled={sfwClassifyMode}
               onClick={addFromInput}
             >
+              <Icon name="add" size={14} />
               Add tag(s)
             </button>
           </div>
@@ -154,7 +156,7 @@ function Destinations() {
                   aria-label={`Remove ${tag}`}
                   disabled={sfwClassifyMode}
                 >
-                  ×
+                  <Icon name="close" size={12} />
                 </button>
               </span>
             ))
@@ -217,6 +219,7 @@ export function PreviewScanButton() {
       disabled={scanPreviewLoading}
       onClick={handlePreviewScan}
     >
+      <Icon name="scan" />
       {scanPreviewLoading ? "Scanning…" : "Preview scan"}
     </button>
   );
@@ -328,6 +331,7 @@ function NewRun() {
           disabled={startDisabled}
           onClick={() => app.handleStartRun(mode.id)}
         >
+          <Icon name="play" />
           {opsLoading.startingRun ? "Starting…" : mode.start(realLife)}
         </button>
       </div>
@@ -427,6 +431,7 @@ export function RunDashboard({ compact = false }) {
                 onClick={app.handleReclassifyNeedsReview}
                 aria-label="Reclassify needs review items"
               >
+                <Icon name="reclassify" size={14} />
                 {opsLoading.reclassifying ? "Queuing…" : "Reclassify needs review"}
               </button>
             </span>
@@ -441,6 +446,7 @@ export function RunDashboard({ compact = false }) {
       <div className="pane-actions">
         {runActive ? (
           <button type="button" className="btn btn-danger" onClick={app.cancelActiveRun}>
+            <Icon name="stop" size={14} />
             Cancel run
           </button>
         ) : null}

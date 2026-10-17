@@ -1,5 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
+import Icon from "../shell/icons";
 import { REAL_LIFE_SENSITIVE_TAGS, isVideoPreviewPath, pathTail } from "../lib";
 import {
   EmptyState,
@@ -84,7 +85,7 @@ function Thumb({ item, size = "row" }) {
       )}
       {isVideo ? (
         <span className="media-badge" title="Video">
-          ▶
+          <Icon name="video" size={large ? 16 : 12} />
         </span>
       ) : null}
     </span>
@@ -97,14 +98,10 @@ function PrimaryTag({ item }) {
     <span className="primary-tag">
       <span className="primary-tag-name">{item.primary_tag}</span>
       {REAL_LIFE_SENSITIVE_TAGS.has(item.primary_tag) ? (
-        <span className="status-chip is-warn" title="Sensitive — confirm Final tag">
-          sensitive
-        </span>
+        <StatusChip status="sensitive" kind="flag" title="Sensitive — confirm Final tag" />
       ) : null}
       {String(item.review_reason || "").includes("vlm_unavailable") ? (
-        <span className="status-chip is-warn" title="Adult VLM unavailable">
-          fallback
-        </span>
+        <StatusChip status="fallback" kind="flag" title="Adult VLM unavailable" />
       ) : null}
       {item.primary_score != null ? (
         <span className="primary-tag-score">{Number(item.primary_score).toFixed(3)}</span>
@@ -115,7 +112,12 @@ function PrimaryTag({ item }) {
 
 function ItemTag({ item }) {
   if (item.final_tag && item.final_tag !== item.primary_tag) {
-    return <span className="review-row-final">→ {item.final_tag}</span>;
+    return (
+      <span className="review-row-final">
+        <Icon name="forward" size={12} />
+        {item.final_tag}
+      </span>
+    );
   }
   return <PrimaryTag item={item} />;
 }
@@ -131,7 +133,8 @@ function ItemDetail({ item, position, total, backLabel, onBack, finalTagRef }) {
     <section className="layout-panel review-detail" aria-label="Item detail">
       <div className="pane-head">
         <button type="button" className="btn btn-ghost btn-sm review-back" onClick={onBack}>
-          ← {backLabel}
+          <Icon name="back" size={14} />
+          {backLabel}
         </button>
         <h2 className="pane-title">
           Item {position} of {total}
@@ -160,7 +163,7 @@ function ItemDetail({ item, position, total, backLabel, onBack, finalTagRef }) {
               <StatusChip status={item.status} />
               {isMigrated && item.migrated_to ? (
                 <span className="migrated-path" title={item.migrated_to}>
-                  {"→ "}
+                  <Icon name="forward" size={12} />
                   {pathTail(item.migrated_to)}
                 </span>
               ) : null}
@@ -273,6 +276,7 @@ function SelectionBar({ selectedCount }) {
       </span>
       {selectedCount ? (
         <button type="button" className="btn btn-ghost btn-sm" onClick={() => app.setSelectedIds([])}>
+          <Icon name="close" size={14} />
           Clear
         </button>
       ) : null}
@@ -282,6 +286,7 @@ function SelectionBar({ selectedCount }) {
         disabled={opsLoading.applyingBatch || selectedCount === 0}
         onClick={() => app.applyBatch("approved")}
       >
+        <Icon name="approve" />
         Approve selected{selectedCount ? ` (${selectedCount})` : ""}
       </button>
       <button
@@ -290,6 +295,7 @@ function SelectionBar({ selectedCount }) {
         disabled={opsLoading.applyingBatch || selectedCount === 0}
         onClick={() => app.applyBatch("rejected")}
       >
+        <Icon name="reject" />
         Reject selected{selectedCount ? ` (${selectedCount})` : ""}
       </button>
       <span className="selection-spacer" />
@@ -321,9 +327,7 @@ function SelectionBar({ selectedCount }) {
         }
         onClick={app.migrateApproved}
       >
-        <span className="btn-migrate-arrow" aria-hidden="true">
-          →
-        </span>
+        <Icon name="migrate" className="btn-migrate-icon" />
         {opsLoading.migrating ? "Migrating…" : `Migrate approved (${stats.approved})`}
       </button>
     </div>
@@ -730,9 +734,12 @@ export default function ReviewPage() {
                   key={option.id}
                   type="button"
                   aria-pressed={layout === option.id}
+                  aria-label={option.label}
+                  title={option.label}
                   onClick={() => pickLayout(option.id)}
                 >
-                  {option.label}
+                  <Icon name={option.id} size={14} />
+                  <span className="view-toggle-label">{option.label}</span>
                 </button>
               ))}
             </span>

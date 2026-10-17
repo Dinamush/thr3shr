@@ -1,5 +1,6 @@
 import React from "react";
 import { ACTIVE_RUN_STATUSES, formatRunDate, pathTail, runPct, runProgressText, taggerLabel } from "../lib";
+import Icon from "../shell/icons";
 import { EmptyState, PageHead, PageStats, StatusChip, useApp } from "../ui";
 
 export default function RunsPage() {
@@ -85,6 +86,7 @@ export default function RunsPage() {
                           aria-label={`Open run #${run.run_id}`}
                           onClick={() => openRunForReview(run.run_id)}
                         >
+                          <Icon name="review" size={14} />
                           {viewing ? "Viewing" : "Open"}
                         </button>
                       </td>

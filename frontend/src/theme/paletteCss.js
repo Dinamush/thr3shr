@@ -10,7 +10,14 @@ function block(selector, declarations) {
 
 export function paletteCss(themes = THEMES) {
   const out = [];
-  for (const theme of themes) {
+  // The default palette also sits on :root, which ties with [data-theme] on
+  // specificity, so it goes first: a later :root block would override
+  // whichever palettes were written before it.
+  const ordered = [
+    ...themes.filter((theme) => theme.slug === DEFAULT_PALETTE),
+    ...themes.filter((theme) => theme.slug !== DEFAULT_PALETTE),
+  ];
+  for (const theme of ordered) {
     const selector =
       theme.slug === DEFAULT_PALETTE
         ? `:root,\n[data-theme="${theme.slug}"]`

@@ -1,4 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import Icon from "../shell/icons";
 import { AUTO_THEME } from "./themes";
 import { applyPalette, motionReduced } from "./appearance";
 
@@ -80,24 +81,6 @@ function MiniShell({ slug, square }) {
         </span>
       </span>
     </span>
-  );
-}
-
-function CheckIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false"
-      fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3.5 8.5l3 3 6-7" />
-    </svg>
-  );
-}
-
-function CloseIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false"
-      fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-      <path d="M4 4l8 8M12 4l-8 8" />
-    </svg>
   );
 }
 
@@ -277,7 +260,7 @@ export default function ThemePicker({ appearance }) {
             </p>
           </div>
           <button type="button" className="theme-picker-close" aria-label="Close" onClick={cancel}>
-            <CloseIcon />
+            <Icon name="close" />
           </button>
         </header>
         <div className="theme-picker-body" role="radiogroup" aria-label="Theme">
@@ -329,7 +312,7 @@ export default function ThemePicker({ appearance }) {
                         <span className="theme-card-sub">{row.sub}</span>
                       </span>
                       <span className="theme-card-check" aria-hidden="true">
-                        <CheckIcon />
+                        <Icon name="check" size={13} strokeWidth={2.2} />
                       </span>
                     </button>
                   );

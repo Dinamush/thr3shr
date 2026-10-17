@@ -54,6 +54,11 @@ The Appearance menu picks a palette: **Auto** (follows the system: Graphite on d
 An opt-in **YoRHa skin** adds the boot intro, film grain and scanlines over any palette.
 Palettes are defined once in `frontend/src/theme/themes.js`; the build generates their CSS from that list and `npm test` checks every palette's text contrast, so a new palette is one entry there.
 
+### App icon
+
+The app icon (grains pouring into a hopper on an amber tile) is drawn once in `frontend/src/shell/appIcon.js`, and the in-app UI icons and status glyphs live in `frontend/src/shell/icons.jsx`.
+`npm run icons` (in `frontend/`) regenerates the favicon, the web app manifest icons and `frontend/public/app.ico`, a 16-256px icon for a desktop shortcut.
+
 ## Tagger Models
 
 Choose in Settings (persisted in SQLite as `tagger_model`):

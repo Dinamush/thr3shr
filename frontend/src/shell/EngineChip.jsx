@@ -1,5 +1,6 @@
 import React, { useEffect, useId, useRef, useState } from "react";
 import { useApp } from "../ui";
+import Icon from "./icons";
 
 // Sidebar engine chip.  Clicking it opens the engine facts and the
 // "Unload GPU models" action; in the phone "More" sheet the same panel
@@ -56,7 +57,7 @@ export default function EngineChip({ engine }) {
         title={`${engine.title} · engine details`}
         onClick={() => setOpen((prev) => !prev)}
       >
-        <span className="engine-chip-dot" aria-hidden="true" />
+        <Icon name={offlineMode ? "offline" : "gpu"} size={14} className="engine-chip-icon" />
         <span className="engine-chip-label">{engine.label}</span>
       </button>
       <div className="engine-pop" id={panelId} role="region" aria-label="Engine" hidden={!open}>
@@ -87,6 +88,7 @@ export default function EngineChip({ engine }) {
                     : "Drop cached tagger sessions to free GPU memory"
                 }
               >
+                <Icon name="unload" size={14} />
                 {opsLoading.unloadingModels ? "Unloading…" : "Unload GPU models"}
               </button>
             </div>
