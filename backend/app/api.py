@@ -49,6 +49,7 @@ from .services import (
     is_experimental_media,
     load_known_tags,
     media_preview_still_jpeg,
+    still_thumbnail_webp,
     migrate_file,
     normalize_tag_name,
     resolve_settings,
@@ -3202,18 +3203,20 @@ def get_item_scores(item_id: int) -> dict:
     }
 
 
-def _jpeg_still_response(jpeg: bytes, source: Path) -> Response:
+def _still_response(
+    data: bytes, source: Path, media_type: str = "image/jpeg", ext: str = "jpg"
+) -> Response:
     # Header values must be latin-1; non-ASCII names (common in media dumps)
     # use the RFC 5987 form, as Starlette's FileResponse does.
-    filename = f"{source.stem}_thumb.jpg"
+    filename = f"{source.stem}_thumb.{ext}"
     quoted = quote(filename)
     if quoted == filename:
         disposition = f'inline; filename="{filename}"'
     else:
         disposition = f"inline; filename*=utf-8''{quoted}"
     return Response(
-        content=jpeg,
-        media_type="image/jpeg",
+        content=data,
+        media_type=media_type,
         headers={
             "Content-Disposition": disposition,
             "Cache-Control": "private, max-age=86400",
@@ -3227,6 +3230,10 @@ def get_item_preview(
     raw: bool = Query(
         False,
         description="Serve original bytes (video/gif). Default returns a JPEG still for media.",
+    ),
+    thumb: bool = Query(
+        False,
+        description="Small cached thumbnail for list and grid rows instead of the original still.",
     ),
 ):
     row = fetch_one("SELECT file_path, migrated_to FROM items WHERE id = ?", (item_id,))
@@ -3249,6 +3256,17 @@ def get_item_preview(
     if image_path is None:
         raise HTTPException(status_code=404, detail="Preview media not found")
     suffix = image_path.suffix.lower()
+    is_media = suffix == ".gif" or suffix in VIDEO_EXTENSIONS
+    if thumb and not is_media:
+        try:
+            return _still_response(
+                still_thumbnail_webp(image_path), image_path, "image/webp", "webp"
+            )
+        except Exception:
+            # Fall through to the original bytes, which the browser may still render.
+            logger.warning(
+                "preview_thumb_failed item_id=%s path=%s", item_id, image_path, exc_info=True
+            )
     media_type = SUPPORTED_PREVIEW_SUFFIXES.get(suffix)
     if not media_type:
         # The scan also accepts .tiff and extensionless files Pillow can decode.
@@ -3260,11 +3278,11 @@ def get_item_preview(
             raise HTTPException(
                 status_code=415, detail="Unsupported media type for preview"
             ) from err
-        return _jpeg_still_response(jpeg, image_path)
+        return _still_response(jpeg, image_path)
 
     # Table thumbs must stay tiny: full MP4/GIF as media elements collapses under
     # parallel loads. Default to a cached JPEG still; ?raw=1 keeps original bytes.
-    needs_still = (not raw) and (suffix == ".gif" or suffix in VIDEO_EXTENSIONS)
+    needs_still = (not raw) and is_media
     if needs_still:
         try:
             jpeg = media_preview_still_jpeg(image_path)
@@ -3279,7 +3297,7 @@ def get_item_preview(
             raise HTTPException(
                 status_code=500, detail=f"Unable to build media thumbnail: {err}"
             ) from err
-        return _jpeg_still_response(jpeg, image_path)
+        return _still_response(jpeg, image_path)
 
     # Must be inline so <img>/<video> can render; "attachment" + filename makes
     # browsers refuse to display the bytes in media elements.

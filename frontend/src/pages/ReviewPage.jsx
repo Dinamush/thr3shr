@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { REAL_LIFE_SENSITIVE_TAGS, isVideoPreviewPath, pathTail } from "../lib";
 import {
@@ -66,10 +66,10 @@ function fileName(item) {
 // size: "row" (list), "tile" (grid) or "large" (detail pane).
 function Thumb({ item, size = "row" }) {
   const { previewErrors, setPreviewErrors } = useApp();
-  const url = api.getItemPreviewUrl(item.id);
+  const large = size === "large";
+  const url = api.getItemPreviewUrl(item.id, { thumb: !large });
   const isVideo = isVideoPreviewPath(item.file_path || item.relative_path);
   const failed = previewErrors[item.id] || !url;
-  const large = size === "large";
   return (
     <span className={`review-thumb${size === "row" ? "" : ` is-${size}`}`}>
       {failed ? (
@@ -330,6 +330,155 @@ function SelectionBar({ selectedCount }) {
   );
 }
 
+// Server rendering (the tests) has no layout to measure.
+const useIsomorphicLayoutEffect =
+  typeof document !== "undefined" && typeof document.createElement === "function"
+    ? useLayoutEffect
+    : useEffect;
+
+// Rows and tiles all share one height, so only those near the viewport are
+// rendered and spacers stand in for the rest: rendering every item of a 10k
+// run built 120k DOM nodes and froze the page for seconds.
+const INITIAL_ITEMS = 60;
+const OVERSCAN_ROWS = 6;
+
+function sameRange(a, b) {
+  return a.start === b.start && a.end === b.end && a.cols === b.cols && a.stride === b.stride;
+}
+
+// Returns the [start, end) slice of `count` items to render in listRef's list
+// or grid, the column count and row stride, and scrollToIndex for items that
+// are not rendered yet. The list scrolls itself on wide screens and with the
+// page on narrow ones; measuring against the viewport covers both.
+function useWindowedItems(listRef, count, layout) {
+  const [range, setRange] = useState(() => ({
+    start: 0,
+    end: Math.min(count, INITIAL_ITEMS),
+    cols: 1,
+    stride: 0,
+    gap: 0,
+  }));
+  const metricsRef = useRef(null);
+  const measureRef = useRef(null);
+
+  measureRef.current = () => {
+    const list = listRef.current;
+    if (!list) return;
+    const style = window.getComputedStyle(list);
+    const grid = layout === "grid";
+    const cols = grid
+      ? Math.max(1, style.gridTemplateColumns.split(" ").filter(Boolean).length)
+      : 1;
+    const listRect = list.getBoundingClientRect();
+    const nodes = list.querySelectorAll("[data-index]");
+    if (nodes.length) {
+      const first = nodes[0];
+      const firstRect = first.getBoundingClientRect();
+      const nextRow = Array.prototype.find.call(
+        nodes,
+        (node) => node.getBoundingClientRect().top > firstRect.top + 0.5
+      );
+      const gap = grid ? parseFloat(style.rowGap) || 0 : 0;
+      const stride = nextRow
+        ? nextRow.getBoundingClientRect().top - firstRect.top
+        : metricsRef.current?.layout === layout && metricsRef.current.cols === cols
+          ? metricsRef.current.stride
+          : firstRect.height + gap;
+      if (stride > 0) {
+        const firstRow = Math.floor(Number(first.dataset.index) / cols);
+        const offset = firstRect.top - listRect.top + list.scrollTop - firstRow * stride;
+        metricsRef.current = { layout, cols, stride, gap, offset };
+      }
+    }
+    const metrics = metricsRef.current;
+    if (!metrics || metrics.layout !== layout || metrics.cols !== cols) return;
+    const toContent = (y) => y - listRect.top + list.scrollTop - metrics.offset;
+    const viewTop = toContent(Math.max(listRect.top, 0));
+    const viewBottom = toContent(Math.min(listRect.bottom, window.innerHeight));
+    const rows = Math.ceil(count / cols);
+    const firstRow = Math.min(rows, Math.max(0, Math.floor(viewTop / metrics.stride) - OVERSCAN_ROWS));
+    const lastRow = Math.min(rows, Math.max(firstRow, Math.ceil(viewBottom / metrics.stride) + OVERSCAN_ROWS));
+    const next = {
+      start: firstRow * cols,
+      end: Math.min(count, lastRow * cols),
+      cols,
+      stride: metrics.stride,
+      gap: metrics.gap,
+    };
+    setRange((prev) => (sameRange(prev, next) ? prev : next));
+  };
+
+  // After every render: rows may have changed height, count or columns.
+  useIsomorphicLayoutEffect(() => measureRef.current());
+
+  const hasList = count > 0;
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return undefined;
+    let frame = 0;
+    const schedule = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        measureRef.current();
+      });
+    };
+    list.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", schedule);
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : null;
+    observer?.observe(list);
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      list.removeEventListener("scroll", schedule);
+      window.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", schedule);
+      observer?.disconnect();
+    };
+  }, [listRef, layout, hasList]);
+
+  // Brings an unrendered item into view the way scrollIntoView({ block:
+  // "nearest" }) would; the scroll then renders it.
+  function scrollToIndex(index) {
+    const list = listRef.current;
+    const metrics = metricsRef.current;
+    if (!list || !metrics) return;
+    const listRect = list.getBoundingClientRect();
+    const top = metrics.offset + Math.floor(index / metrics.cols) * metrics.stride;
+    const bottom = top + metrics.stride - metrics.gap;
+    const scrollsItself = list.scrollHeight > list.clientHeight + 1;
+    const viewTop = scrollsItself ? list.scrollTop : window.scrollY - (listRect.top + window.scrollY);
+    const viewHeight = scrollsItself ? list.clientHeight : window.innerHeight;
+    let delta = 0;
+    if (top < viewTop) delta = top - viewTop;
+    else if (bottom > viewTop + viewHeight) delta = bottom - viewTop - viewHeight;
+    if (!delta) return;
+    if (scrollsItself) list.scrollTop += delta;
+    else window.scrollBy(0, delta);
+  }
+
+  const start = Math.min(range.start, count);
+  const end = Math.max(start, Math.min(count, range.end || INITIAL_ITEMS));
+  const rows = Math.ceil(count / range.cols);
+  const rowsBefore = Math.floor(start / range.cols);
+  const rowsAfter = Math.max(0, rows - Math.ceil(end / range.cols));
+  // A grid spacer sits in its own row, so the row gap after it is already there.
+  const spacer = (rowCount) =>
+    range.stride && rowCount ? Math.max(0, rowCount * range.stride - range.gap) : 0;
+  return {
+    start,
+    end,
+    before: spacer(rowsBefore),
+    after: spacer(rowsAfter),
+    scrollToIndex,
+  };
+}
+
+function Spacer({ height }) {
+  if (!height) return null;
+  return <li className="review-spacer" aria-hidden="true" style={{ height }} />;
+}
+
 export default function ReviewPage() {
   const app = useApp();
   const {
@@ -399,12 +548,14 @@ export default function ReviewPage() {
     );
   }
 
+  const windowed = useWindowedItems(listRef, visible.length, layout);
+
   useEffect(() => {
     if (!scrollFocusRef.current || !focused) return;
     scrollFocusRef.current = false;
-    listRef.current
-      ?.querySelector(`[data-item-id="${focused.id}"]`)
-      ?.scrollIntoView({ block: "nearest" });
+    const row = listRef.current?.querySelector(`[data-item-id="${focused.id}"]`);
+    if (row) row.scrollIntoView({ block: "nearest" });
+    else windowed.scrollToIndex(focusedIndex);
   }, [focused]);
 
   // J/K move, A approve, R reject, V reviewed (each then moves on), X select,
@@ -596,13 +747,18 @@ export default function ReviewPage() {
             </p>
           ) : layout === "grid" ? (
             <ul className="review-grid" ref={listRef}>
-              {visible.map((item, idx) => {
+              <Spacer height={windowed.before} />
+              {visible.slice(windowed.start, windowed.end).map((item, offset) => {
+                const idx = windowed.start + offset;
                 const isMigrated = item.status === "migrated";
                 const isFocused = focused?.id === item.id;
                 return (
                   <li
                     key={item.id}
                     data-item-id={item.id}
+                    data-index={idx}
+                    aria-setsize={visible.length}
+                    aria-posinset={idx + 1}
                     className={[
                       "grid-tile",
                       `row-${item.status}`,
@@ -644,16 +800,22 @@ export default function ReviewPage() {
                   </li>
                 );
               })}
+              <Spacer height={windowed.after} />
             </ul>
           ) : (
             <ul className="review-list" ref={listRef}>
-              {visible.map((item, idx) => {
+              <Spacer height={windowed.before} />
+              {visible.slice(windowed.start, windowed.end).map((item, offset) => {
+                const idx = windowed.start + offset;
                 const isMigrated = item.status === "migrated";
                 const isFocused = focused?.id === item.id;
                 return (
                   <li
                     key={item.id}
                     data-item-id={item.id}
+                    data-index={idx}
+                    aria-setsize={visible.length}
+                    aria-posinset={idx + 1}
                     className={[
                       "review-row",
                       `row-${item.status}`,
@@ -692,6 +854,7 @@ export default function ReviewPage() {
                   </li>
                 );
               })}
+              <Spacer height={windowed.after} />
             </ul>
           )}
           <p className="review-keys">
