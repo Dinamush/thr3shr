@@ -1,0 +1,110 @@
+/*
+ * THR3SHR design tokens - the one token layer every page and palette shares.
+ *
+ * The palettes themselves (the colour tokens --bg, --sf, --tx, --ac, ...) are
+ * generated from src/theme/themes.js and load right after this file, so the
+ * per-palette overrides at the bottom of that output win over the defaults
+ * below.  Everything here - spacing, type, radii, motion, derived tints -
+ * reads those colour tokens, so every palette restyles every page.
+ *
+ * The YoRHa grain, scanlines and boot intro are not a palette: they are the
+ * opt-in skin in skin-yorha.css, switched on with html[data-skin="yorha"].
+ */
+
+/* ─── Scale ─────────────────────────────────────────────────────────────── */
+:root {
+  /* Figtree for every control, Fragment Mono for paths and numbers.  The CJK
+     families after Figtree render Japanese tag names instead of missing-glyph
+     boxes when the OS default font has no Japanese cover. */
+  --font-cjk: "Yu Gothic UI", "Yu Gothic", "Meiryo", "Hiragino Sans",
+    "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP", "Noto Sans JP",
+    "Microsoft YaHei", "Noto Sans CJK SC";
+  --font-sans: "Figtree", system-ui, -apple-system, "Segoe UI", var(--font-cjk), sans-serif;
+  --font-mono: "Fragment Mono", ui-monospace, "Cascadia Mono", "Consolas", var(--font-cjk), monospace;
+
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-base: 13px;
+  --fs-md: 14px;
+  --fs-lg: 16px;
+  --fs-xl: 20px;
+  --fs-2xl: 24px;
+  --lh: 1.45;
+
+  /* 4/8 spacing */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 20px;
+  --s6: 24px;
+  --s8: 32px;
+  --s10: 40px;
+
+  --r-sm: 4px;
+  --r: 8px;
+  --r-lg: 12px;
+  --r-pill: 999px;
+
+  /* Functional motion only.  Reduced motion swaps every duration to an
+     instant change (bottom of this file); the information shown is the same. */
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --t-fast: 120ms;
+  --t-base: 160ms;
+  --t-slow: 240ms;
+
+  /* App shell geometry */
+  --sidebar-w: 236px;
+  --topbar-h: 52px;
+  --dock-h: 40px;
+  --tabbar-h: 58px;
+
+  --z-base: 0;
+  --z-content: 1;
+  --z-dropdown: 20;
+  --z-sticky-bar: 30;
+  --z-header: 40;
+  --z-dock: 50;
+  --z-overlay: 90;
+  --z-skip: 100;
+  --z-toast: 1100;
+  --z-modal: 1000;
+  --z-palette: 1050;
+}
+
+/* ─── Derived tokens ────────────────────────────────────────────────────── */
+:root {
+  --ac-s: color-mix(in srgb, var(--ac) 14%, var(--sf));
+  --ac-line: color-mix(in srgb, var(--ac) 45%, var(--ln));
+  --ok-s: color-mix(in srgb, var(--ok) 14%, var(--sf));
+  --ok-line: color-mix(in srgb, var(--ok) 40%, var(--ln));
+  --warn-s: color-mix(in srgb, var(--warn) 14%, var(--sf));
+  --warn-line: color-mix(in srgb, var(--warn) 40%, var(--ln));
+  --bad-s: color-mix(in srgb, var(--bad) 14%, var(--sf));
+  --bad-line: color-mix(in srgb, var(--bad) 45%, var(--ln));
+  --focus: color-mix(in srgb, var(--ac) 55%, transparent);
+  --scrim: rgba(10, 10, 12, 0.55);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.1);
+  --shadow-3: 0 12px 40px rgba(0, 0, 0, 0.18);
+}
+
+/* ─── Reduced motion ────────────────────────────────────────────────────────
+   Tier 1 (default): functional motion only - counters tick, panels slide,
+   status colours sweep.  Tier 2 (reduce): every change is instant and nothing
+   loops; the same information is still shown. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --t-fast: 0.01ms;
+    --t-base: 0.01ms;
+    --t-slow: 0.01ms;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

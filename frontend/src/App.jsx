@@ -2,6 +2,16 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import ClassifierDebugPage from "./ClassifierDebugPage";
 import { version as APP_VERSION } from "../package.json";
+import { formatDurationSeconds, runOptionLabel, runPct } from "./lib";
+import ReviewPage from "./pages/ReviewPage";
+import RunPage from "./pages/RunPage";
+import RunsPage from "./pages/RunsPage";
+import SettingsPage from "./pages/SettingsPage";
+import AppShell from "./shell/AppShell";
+import { pageHref, routeFromHash, staticJumpEntries } from "./shell/nav";
+import RunDock from "./shell/RunDock";
+import YorhaBoot from "./theme/YorhaBoot";
+import { AppContext } from "./ui";
 
 const DEFAULT_SETTINGS = {
   root_repo: "",
@@ -23,7 +33,6 @@ const DEFAULT_SETTINGS = {
   wd_general_threshold: 0.35,
 };
 
-const REAL_LIFE_SENSITIVE_TAGS = new Set(["BBC", "Ebony", "Asian"]);
 const REAL_LIFE_DEFAULT_FOLDERS = [
   "creampie",
   "cumshot",
@@ -46,50 +55,11 @@ const REAL_LIFE_DEFAULT_FOLDERS = [
   "Asian",
 ];
 
-const TAGGER_MODELS = [
-  {
-    id: "ml_danbooru",
-    label: "ML-Danbooru",
-    help: "Loli-only classifier — strong recall on that folder (not used for full multi-folder runs).",
-  },
-  {
-    id: "wd_swinv2_v3",
-    label: "WD SwinV2 v3",
-    help: "Recommended default — strong general-tag accuracy on anime art.",
-  },
-  {
-    id: "wd_eva02_large",
-    label: "WD EVA02 Large",
-    help: "Largest WD tagger; slower, often slightly more accurate.",
-  },
-];
-
 const SFW_CLASSIFY_FOLDERS = ["SFW", "scenery"];
 // Last run opened in the dashboard. Kept after the run finishes so a reload
 // returns to its review table (key name predates that and stays for upgrades).
 const LAST_RUN_STORAGE_KEY = "thr3shrActiveRunId";
 const STATUS_POLL_INTERVAL_MS = 1500;
-const VIDEO_PREVIEW_EXTS = new Set([
-  ".mp4",
-  ".m4v",
-  ".webm",
-  ".mov",
-  ".mkv",
-  ".avi",
-  ".flv",
-  ".wmv",
-]);
-
-function mediaExtFromPath(path) {
-  if (!path || typeof path !== "string") return "";
-  const clean = path.split(/[?#]/)[0];
-  const idx = clean.lastIndexOf(".");
-  return idx >= 0 ? clean.slice(idx).toLowerCase() : "";
-}
-
-function isVideoPreviewPath(path) {
-  return VIDEO_PREVIEW_EXTS.has(mediaExtFromPath(path));
-}
 
 function settingsSnapshot(settings, selectedTags) {
   return JSON.stringify({
@@ -102,102 +72,8 @@ function sameList(a, b) {
   return a.length === b.length && a.every((value, idx) => value === b[idx]);
 }
 
-function formatTagScore(entry) {
-  if (!entry) return "";
-  return `${entry.tag} (${Number(entry.score).toFixed(3)})`;
-}
-
-function formatDurationSeconds(totalSeconds) {
-  const secs = Math.max(0, Math.round(Number(totalSeconds) || 0));
-  const hours = Math.floor(secs / 3600);
-  const minutes = Math.floor((secs % 3600) / 60);
-  const seconds = secs % 60;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  if (minutes > 0) return `${minutes}m ${seconds}s`;
-  return `${seconds}s`;
-}
-
-function formatEtaFinishAt(iso) {
-  if (!iso) return null;
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return null;
-  return date.toLocaleString(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
-
-// Number input that can be cleared and retyped. The text the user types is
-// kept as a draft; valid in-range values commit as they are typed (so the
-// unsaved-changes bar reacts), and on blur an empty or out-of-range draft is
-// clamped or reverted instead of being coerced to 0 mid-edit.
-function NumberField({ value, onCommit, min, max, step = 1, integer = false, ...inputProps }) {
-  const [draft, setDraft] = useState(null);
-  const normalize = (raw) => {
-    const parsed = Number(raw);
-    if (String(raw).trim() === "" || !Number.isFinite(parsed)) return null;
-    return integer ? Math.round(parsed) : parsed;
-  };
-  return (
-    <input
-      {...inputProps}
-      type="number"
-      min={min}
-      max={max}
-      step={step}
-      value={draft ?? String(value ?? "")}
-      onChange={(e) => {
-        const text = e.target.value;
-        setDraft(text);
-        const next = normalize(text);
-        if (next !== null && next >= min && next <= max && next !== value) onCommit(next);
-      }}
-      onBlur={() => {
-        if (draft === null) return;
-        const next = normalize(draft);
-        if (next !== null) {
-          const clamped = Math.min(max, Math.max(min, next));
-          if (clamped !== value) onCommit(clamped);
-        }
-        setDraft(null);
-      }}
-    />
-  );
-}
-
 function readRoute() {
-  const hash = window.location.hash.replace(/^#/, "") || "/";
-  return hash.startsWith("/debug") ? "debug" : "home";
-}
-
-function pathTail(path) {
-  const parts = String(path || "").split(/[\\/]+/).filter(Boolean);
-  return parts.slice(-2).join("/") || String(path || "");
-}
-
-function formatRunDate(iso) {
-  if (!iso) return "";
-  // SQLite CURRENT_TIMESTAMP is UTC without a zone marker.
-  const normalized = /[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso.replace(" ", "T")}Z`;
-  const date = new Date(normalized);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
-function runOptionLabel(run) {
-  const progress = run.total_images
-    ? `${run.processed_images}/${run.total_images}`
-    : `${run.processed_images}`;
-  const when = formatRunDate(run.created_at);
-  return [`Run #${run.run_id}`, run.status, `${progress} images`, pathTail(run.root_repo), when]
-    .filter(Boolean)
-    .join(" · ");
+  return routeFromHash(window.location.hash);
 }
 
 function App() {
@@ -494,9 +370,6 @@ function App() {
     () => items.filter((item) => item.status !== "migrated").map((item) => item.id),
     [items]
   );
-  const allSelectableSelected =
-    selectableIds.length > 0 && selectableIds.every((id) => selectedIdSet.has(id));
-  const someSelectableSelected = selectableIds.some((id) => selectedIdSet.has(id));
 
   // Rows that just migrated (or left the list) drop out of the selection.
   useEffect(() => {
@@ -1071,1054 +944,302 @@ function App() {
     setSelectedTags((prev) => prev.filter((t) => t !== value));
   }
 
-  if (route === "debug") {
-    return <ClassifierDebugPage />;
+  // ── Console shell ─────────────────────────────────────────────────────────
+
+  // A jump-bar target waiting for its page to scroll to it; the page clears it.
+  const [landing, setLanding] = useState(null);
+
+  function navigate(pageId) {
+    const href = pageHref(pageId);
+    if (window.location.hash !== href) window.location.hash = href;
   }
 
-  return (
-    <div className="container">
-      <header className="app-header">
-        <div className="app-nav">
-          <a href="#/" className="nav-link active" aria-current="page">
-            THR3SHR
-          </a>
-          <a href="#/debug" className="nav-link">
-            Debug
-          </a>
-        </div>
-        <h1>THR3SHR</h1>
-        <p className="lede">
-          Thresh a media dump into destination bins — configure paths and tagger, pick tags, run
-          inference, then review and migrate.
-        </p>
-        {providerInfo && !offlineMode && (
-          <div className="provider-strip">
-            <span>
-              Device: <strong>{providerInfo.likely_device || "unknown"}</strong>
-            </span>
-            <span>
-              CUDA: <strong>{String(Boolean(providerInfo.cuda_usable))}</strong>
-            </span>
-            <span>
-              Active: <strong>{(providerInfo.active_providers || []).join(", ") || "n/a"}</strong>
-            </span>
-            <span>
-              Tagger: <strong>{providerInfo.tagger_model || settings.tagger_model}</strong>
-            </span>
-            <span>
-              Forced CPU: <strong>{String(Boolean(providerInfo.forced_cpu))}</strong>
-            </span>
-            <span>
-              Loaded:{" "}
-              <strong>
-                {(providerInfo.loaded_models || []).length
-                  ? (providerInfo.loaded_models || []).join(", ")
-                  : "none"}
-              </strong>
-            </span>
-            <button
-              type="button"
-              className="unload-models-btn"
-              disabled={anyRunActive || opsLoading.unloadingModels}
-              onClick={handleUnloadModels}
-              title={
-                anyRunActive
-                  ? "Cancel the active run before unloading GPU models"
-                  : "Drop cached tagger sessions to free GPU memory"
-              }
-            >
-              {opsLoading.unloadingModels ? "Unloading…" : "Unload GPU models"}
-            </button>
-          </div>
-        )}
-      </header>
+  function openRunForReview(nextRunId) {
+    openRun(nextRunId);
+    navigate("review");
+  }
 
-      {offlineMode && (
-        <div className={backendBack ? "notice offline-banner" : "error offline-banner"} role="status">
-          {backendBack ? (
-            <span>
-              The backend is reachable again. Reconnect to leave demo mode and load your real
-              settings and runs.
-            </span>
-          ) : (
-            <span>
-              Backend is offline. Running in browser-only demo mode with local mock data; nothing
-              here touches your files.
-            </span>
-          )}
-          {backendBack ? (
-            <button type="button" onClick={() => window.location.reload()}>
-              Reconnect
-            </button>
-          ) : null}
-        </div>
-      )}
-      {providerInfo?.provider_error && !offlineMode && (
-        <div className="error">{providerInfo.provider_error}</div>
-      )}
-      {error && <div className="error">{error}</div>}
-      {notice && <div className="notice">{notice}</div>}
+  function handleJump(entry) {
+    if (entry.run) {
+      openRunForReview(entry.run);
+      return;
+    }
+    navigate(entry.route);
+    if (entry.target) setLanding({ target: entry.target, at: Date.now() });
+  }
 
-      <section className="panel">
-        <h2>Settings</h2>
-        <span className="kicker">Paths, model, thresholds, and performance. Save before runs.</span>
-        <form onSubmit={handleSaveSettings}>
-          <fieldset className="settings-section">
-            <legend>Paths &amp; scan</legend>
-            <div className="grid">
-              <label>
-                Root repository
-                <input
-                  value={settings.root_repo}
-                  onChange={(e) => setSettings({ ...settings, root_repo: e.target.value })}
-                  placeholder="Folder of unsorted images"
-                />
-              </label>
-              <label>
-                Categories root
-                <input
-                  value={settings.categories_root}
-                  onChange={(e) => setSettings({ ...settings, categories_root: e.target.value })}
-                  placeholder="Destination folders root (not tags.csv)"
-                />
-              </label>
-              <label>
-                Default migrate mode
-                <select
-                  value={settings.default_migrate_mode}
-                  onChange={(e) =>
-                    setSettings({ ...settings, default_migrate_mode: e.target.value })
-                  }
-                >
-                  <option value="copy">copy</option>
-                  <option value="move">move</option>
-                </select>
-              </label>
-              <label className="inline-check">
-                <input
-                  type="checkbox"
-                  checked={Boolean(settings.scan_recursive)}
-                  onChange={(e) => setSettings({ ...settings, scan_recursive: e.target.checked })}
-                />
-                Scan subfolders recursively
-              </label>
-            </div>
-            <div className="actions">
-              <button
-                type="button"
-                className="secondary"
-                disabled={scanPreviewLoading}
-                onClick={handlePreviewScan}
-              >
-                {scanPreviewLoading ? "Scanning…" : "Preview scan"}
-              </button>
-            </div>
-            {scanPreview?.stats && (
-              <div className="scan-preview" role="status">
-                Eligible: <strong>{scanPreview.stats.eligible_images}</strong> · Total files:{" "}
-                {scanPreview.stats.total_files} · Ignored GIF: {scanPreview.stats.ignored_gif} ·
-                Unsupported: {scanPreview.stats.ignored_unsupported} · Unreadable:{" "}
-                {scanPreview.stats.failed_to_read}
-                {scanPreview.recursive ? "" : " · top folder only"}
-              </div>
-            )}
-          </fieldset>
+  const dirtyCount = useMemo(() => {
+    if (!isDirty) return 0;
+    let saved = {};
+    try {
+      saved = JSON.parse(savedSnapshot);
+    } catch {
+      saved = {};
+    }
+    const current = { ...settings, selected_tags: selectedTags };
+    let changed = 0;
+    new Set([...Object.keys(saved), ...Object.keys(current)]).forEach((key) => {
+      if (JSON.stringify(saved[key]) !== JSON.stringify(current[key])) changed += 1;
+    });
+    return Math.max(1, changed);
+  }, [isDirty, savedSnapshot, settings, selectedTags]);
 
-          <fieldset className="settings-section">
-            <legend>Tagger model</legend>
-            <div className="model-options">
-              {TAGGER_MODELS.map((model) => (
-                <label key={model.id} className="model-option">
-                  <input
-                    type="radio"
-                    name="tagger_model"
-                    value={model.id}
-                    checked={settings.tagger_model === model.id}
-                    onChange={() => setSettings({ ...settings, tagger_model: model.id })}
-                  />
-                  <span>
-                    <strong>{model.label}</strong>
-                    <span>{model.help}</span>
-                  </span>
-                </label>
-              ))}
-            </div>
-          </fieldset>
+  // Back to what the server holds.  Destination tags save on their own, so
+  // they are not part of the revert.
+  function revertSettings() {
+    if (!savedSettingsRef.current) return;
+    setSettings((prev) => ({
+      ...prev,
+      ...savedSettingsRef.current,
+      selected_tags: prev.selected_tags,
+    }));
+  }
 
-          <fieldset className="settings-section">
-            <legend>Thresholds</legend>
-            <div className="grid">
-              <label>
-                Assignment confidence
-                <NumberField
-                  step={0.01}
-                  min={0}
-                  max={1}
-                  value={settings.confidence_threshold}
-                  onCommit={(next) =>
-                    setSettings((prev) => ({ ...prev, confidence_threshold: next }))
-                  }
-                />
-                <span className="help">
-                  Selected-tag scores below this are suggestions only (no primary assignment).
-                </span>
-              </label>
-              {isWdModel && (
-                <label>
-                  WD general threshold
-                  <NumberField
-                    step={0.01}
-                    min={0}
-                    max={1}
-                    value={settings.wd_general_threshold}
-                    onCommit={(next) =>
-                      setSettings((prev) => ({ ...prev, wd_general_threshold: next }))
-                    }
-                  />
-                  <span className="help">
-                    WD14 inference cutoff for general tags (default 0.35).
-                  </span>
-                </label>
-              )}
-            </div>
-          </fieldset>
+  const jumpEntries = useMemo(
+    () => [
+      ...staticJumpEntries(),
+      ...runs.map((run) => ({
+        key: `run-${run.run_id}`,
+        label: runOptionLabel(run),
+        group: "Run",
+        run: run.run_id,
+        quiet: true,
+      })),
+    ],
+    [runs]
+  );
 
-          <fieldset className="settings-section">
-            <legend>Performance</legend>
-            <div className="grid">
-              <label>
-                Max inference workers
-                <NumberField
-                  min={1}
-                  max={16}
-                  integer
-                  value={settings.max_inference_workers ?? 2}
-                  onCommit={(next) =>
-                    setSettings((prev) => ({ ...prev, max_inference_workers: next }))
-                  }
-                />
-                <span className="help">Keep at 2 for GPU ORT sessions (serialized lock).</span>
-              </label>
-              <label>
-                Inference batch size
-                <NumberField
-                  min={1}
-                  max={64}
-                  integer
-                  value={settings.inference_batch_size ?? 8}
-                  onCommit={(next) =>
-                    setSettings((prev) => ({ ...prev, inference_batch_size: next }))
-                  }
-                />
-                <span className="help">
-                  WD models: 4–8 is a good GPU default. 1 forces single-image mode.
-                </span>
-              </label>
-              <label className="inline-check">
-                <input
-                  type="checkbox"
-                  checked={Boolean(settings.force_cpu_inference)}
-                  onChange={(e) => {
-                    const { checked } = e.target;
-                    setSettings((prev) => ({ ...prev, force_cpu_inference: checked }));
-                  }}
-                />
-                <span>Force CPU inference</span>
-              </label>
-            </div>
-          </fieldset>
+  function dockModel() {
+    const review = runId && stats.reviewNeeded > 0 ? { count: stats.reviewNeeded } : null;
+    if (opsLoading.migrating) {
+      return {
+        state: "migrating",
+        label: `Migrating ${stats.approved} approved (${migrateMode})`,
+        job: {
+          name: `Run #${runId}`,
+          indeterminate: true,
+          detail: migrateMode,
+          href: "#/review",
+        },
+        review,
+      };
+    }
+    const live =
+      runActive && runStatus
+        ? { ...runStatus, run_id: runId, href: "#/" }
+        : otherActiveRun
+          ? { ...otherActiveRun, href: "#/runs" }
+          : null;
+    if (live) {
+      const total = Number(live.total_images) || 0;
+      const processed = Number(live.processed_images) || 0;
+      const pct = runPct(live);
+      const eta =
+        live.eta_seconds_remaining != null
+          ? formatDurationSeconds(live.eta_seconds_remaining)
+          : null;
+      const queued = live.status === "pending";
+      return {
+        state: queued ? "queued" : "running",
+        label: queued ? `Run #${live.run_id} queued` : `Tagging run #${live.run_id}`,
+        job: {
+          name: `Run #${live.run_id}`,
+          pct,
+          indeterminate: !total,
+          detail: total
+            ? `${processed}/${total} · ${pct.toFixed(0)}%${eta ? ` · ETA ${eta}` : ""}`
+            : "starting",
+          href: live.href,
+        },
+        review,
+      };
+    }
+    if (offlineMode) return { state: "offline", label: "Demo mode · backend offline", review };
+    const last = runs[0];
+    return {
+      state: "idle",
+      label: last ? `Idle · last run #${last.run_id} ${last.status}` : "Idle · no runs yet",
+      review,
+    };
+  }
 
-          <fieldset className="settings-section">
-            <legend>Classification</legend>
-            <div className="check-list">
-              <label className="inline-check">
-                <input
-                  type="checkbox"
-                  checked={Boolean(settings.experimental_media_enabled)}
-                  onChange={(e) => {
-                    const { checked } = e.target;
-                    setSettings((prev) => ({ ...prev, experimental_media_enabled: checked }));
-                  }}
-                />
-                <span>Experimental: classify GIF/videos via length-scaled multi-frame sampling</span>
-              </label>
-              <label className="inline-check">
-                <input
-                  type="checkbox"
-                  checked={Boolean(settings.experimental_style_detector_enabled)}
-                  onChange={(e) => {
-                    const { checked } = e.target;
-                    setSettings((prev) => ({
-                      ...prev,
-                      experimental_style_detector_enabled: checked,
-                    }));
-                  }}
-                />
-                <span>
-                  Experimental: real vs anime style gate (dedicated ONNX →{" "}
-                  <code>real_life</code>; uncertain → needs review)
-                </span>
-              </label>
-              <label className="inline-check">
-                <input
-                  type="checkbox"
-                  checked={Boolean(settings.hybrid_ml_on_review)}
-                  onChange={(e) => {
-                    const { checked } = e.target;
-                    setSettings((prev) => ({ ...prev, hybrid_ml_on_review: checked }));
-                  }}
-                  disabled={settings.tagging_domain === "real_life"}
-                />
-                <span>
-                  Hybrid: on needs-review (WD primary), re-run ML-Danbooru and merge allowlisted
-                  high-recall tags only (skips Voyeur soft cues)
-                </span>
-              </label>
-            </div>
-            <fieldset className="domain-toggle">
-              <legend>Tagging domain</legend>
-              <label className="inline-check">
-                <input
-                  type="radio"
-                  name="tagging_domain"
-                  checked={settings.tagging_domain !== "real_life"}
-                  onChange={() =>
-                    setSettings((prev) => ({ ...prev, tagging_domain: "drawn" }))
-                  }
-                />
-                <span>Animated / drawn (WD + ML-Danbooru taxonomy)</span>
-              </label>
-              <label className="inline-check">
-                <input
-                  type="radio"
-                  name="tagging_domain"
-                  checked={settings.tagging_domain === "real_life"}
-                  onChange={() =>
-                    setSettings({
-                      ...settings,
-                      tagging_domain: "real_life",
-                      experimental_media_enabled: true,
-                      sfw_classify_mode: false,
-                    })
-                  }
-                />
-                <span>Real-life photos / videos (local adult tagger)</span>
-              </label>
-              <span className="help">
-                Real-life mode uses an isolated taxonomy under{" "}
-                <code>Real Life/&lt;primary&gt;/</code>. Sensitive tags (BBC /
-                Ebony / Asian) are suggestions only and need explicit Final-tag
-                confirmation. Save settings after switching domains.
-              </span>
-              {settings.tagging_domain === "real_life" && !offlineMode ? (
-                <div className="scan-preview real-life-status">
-                  {realLifeStatusLoading ? (
-                    <span className="muted">Checking local adult tagger…</span>
-                  ) : realLifeStatus?.engine ? (
-                    <>
-                      <div>
-                        VLM:{" "}
-                        <strong>
-                          {realLifeStatus.engine.vlm?.available ? "ready" : "unavailable"}
-                        </strong>
-                        {realLifeStatus.engine.vlm?.backend
-                          ? ` (${realLifeStatus.engine.vlm.backend})`
-                          : ""}
-                      </div>
-                      <div>
-                        Position classifier:{" "}
-                        <strong>
-                          {realLifeStatus.engine.position?.available
-                            ? "ready"
-                            : "unavailable"}
-                        </strong>
-                      </div>
-                      <div className="help">{realLifeStatus.engine.message}</div>
-                      {realLifeStatus.engine.fallback ? (
-                        <div className="help">
-                          Fallback active: style gate + manual review only until{" "}
-                          <code>llama-cpp-python</code> and the Qwen2.5-VL GGUF +
-                          mmproj are installed.
-                        </div>
-                      ) : null}
-                    </>
-                  ) : (
-                    <span className="muted">Real-life tagger status unavailable.</span>
-                  )}
-                </div>
-              ) : null}
-            </fieldset>
-          </fieldset>
+  const badges = {
+    review:
+      runId && stats.reviewNeeded > 0
+        ? {
+            text: String(stats.reviewNeeded),
+            tone: "warn",
+            title: `${stats.reviewNeeded} items need review`,
+          }
+        : null,
+    runs: anyRunActive ? { text: "live", tone: "running", title: "A run is active" } : null,
+    settings: isDirty
+      ? { text: String(dirtyCount), tone: "warn", title: "Unsaved settings changes" }
+      : null,
+  };
 
-          <div className="sticky-save">
-            <span className={isDirty ? "dirty" : "clean"}>
-              {isDirty ? "Unsaved settings changes" : "Settings saved"}
-            </span>
-            <button type="submit" disabled={loading || opsLoading.saving || !isDirty}>
-              {opsLoading.saving ? "Saving…" : "Save settings"}
-            </button>
-          </div>
-        </form>
-      </section>
+  const engine = offlineMode
+    ? { tone: "bad", label: "Demo mode", title: "Backend offline: browser-only mock data" }
+    : providerInfo
+      ? {
+          tone: providerInfo.cuda_usable && !providerInfo.forced_cpu ? "ok" : "warn",
+          label: `${providerInfo.likely_device || "unknown"} · ${providerInfo.tagger_model || settings.tagger_model}`,
+          title: `Active: ${(providerInfo.active_providers || []).join(", ") || "n/a"}`,
+        }
+      : null;
 
-      <section className="panel">
-        <h2>Tag selection</h2>
-        <span className="kicker">
-          {settings.tagging_domain === "real_life"
-            ? "Real-life categories only (isolated from anime tags.csv). Changes auto-save after settings save."
-            : sfwClassifyMode
-              ? "SFW mode: only SFW / scenery compete. Your NSFW tags stay parked."
-              : "Only these tags compete for folder assignment. Changes auto-save."}
-        </span>
-        {settings.tagging_domain !== "real_life" ? (
-          <label className="inline-check sfw-mode-toggle">
-            <input
-              type="checkbox"
-              checked={sfwClassifyMode}
-              disabled={runActive || opsLoading.startingRun}
-              onChange={(e) => setSfwClassifyMode(e.target.checked)}
-            />
-            SFW classify mode (parks NSFW tags; restore when off)
-          </label>
-        ) : null}
-        <div className="tag-search-row">
-          <label>
-            {settings.tagging_domain === "real_life"
-              ? "Real-life category search"
-              : "Tag match search (destinations + tags.csv)"}
-            <input
-              value={tagQuery}
-              onChange={(e) => setTagQuery(e.target.value)}
-              list="tag-match-suggestions"
-              autoComplete="off"
-              disabled={sfwClassifyMode}
-              onKeyDown={async (e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  if (sfwClassifyMode) return;
-                  setError("");
-                  try {
-                    await addTagsFromInput(tagQuery);
-                    setTagQuery("");
-                  } catch (err) {
-                    setError(err.message);
-                  }
-                }
-              }}
-              placeholder={
-                sfwClassifyMode
-                  ? "Tag editing disabled in SFW mode"
-                  : settings.tagging_domain === "real_life"
-                    ? "Type creampie, BBC, hotwife…"
-                    : "Type Voyeur, loli, Pokemon…"
-              }
-            />
-            <datalist id="tag-match-suggestions">
-              {tagOptions.map((tag) => (
-                <option key={tag} value={tag} />
-              ))}
-            </datalist>
-          </label>
-          <button
-            type="button"
-            className="secondary"
-            disabled={sfwClassifyMode}
-            onClick={async () => {
-              setError("");
-              try {
-                await addTagsFromInput(tagQuery);
-              } catch (err) {
-                setError(err.message);
-              }
-            }}
+  const banners =
+    offlineMode || (providerInfo?.provider_error && !offlineMode) ? (
+      <>
+        {offlineMode ? (
+          <div
+            className={`app-banner offline-banner ${backendBack ? "is-info" : "is-bad"}`}
+            role="status"
           >
-            Add tag(s)
-          </button>
-        </div>
-        {tagQuery.trim() && !sfwClassifyMode && (
-          <div className="tag-suggestions">
-            {tagOptions.length === 0 ? (
-              <span className="muted">No matching tags</span>
+            {backendBack ? (
+              <span>
+                The backend is reachable again. Reconnect to leave demo mode and load your real
+                settings and runs.
+              </span>
             ) : (
-              tagOptions.slice(0, 30).map((tag) => (
-                <button
-                  key={tag}
-                  type="button"
-                  className="tag-suggestion"
-                  onClick={() => {
-                    addSelectedTag(tag);
-                    setTagQuery("");
-                    setError("");
-                  }}
-                >
-                  {tag}
-                </button>
-              ))
-            )}
-          </div>
-        )}
-        <div className={`stats${sfwClassifyMode ? " tags-locked" : ""}`}>
-          {selectedTags.length === 0 ? (
-            <span className="muted">No tags selected</span>
-          ) : (
-            selectedTags.map((tag) => (
-              <span key={tag} className="chip">
-                {tag}
-                <button
-                  type="button"
-                  onClick={() => removeSelectedTag(tag)}
-                  aria-label={`Remove ${tag}`}
-                  disabled={sfwClassifyMode}
-                >
-                  ×
-                </button>
+              <span>
+                Backend is offline. Running in browser-only demo mode with local mock data; nothing
+                here touches your files.
               </span>
-            ))
-          )}
-        </div>
-        {sfwClassifyMode && parkedNsfwTags.length > 0 ? (
-          <div className="parked-tags">
-            <span className="help">Parked NSFW tags (inactive until SFW mode is off):</span>
-            <div className="stats tags-locked">
-              {parkedNsfwTags.map((tag) => (
-                <span key={`parked-${tag}`} className="chip chip-parked">
-                  {tag}
-                </span>
-              ))}
-            </div>
+            )}
+            {backendBack ? (
+              <button type="button" className="btn btn-sm" onClick={() => window.location.reload()}>
+                Reconnect
+              </button>
+            ) : null}
           </div>
         ) : null}
-        <div className="actions run-actions">
-          <button
-            type="button"
-            disabled={loading || opsLoading.startingRun || anyRunActive}
-            onClick={() => handleStartRun("classify")}
-          >
-            {opsLoading.startingRun
-              ? "Starting…"
-              : settings.tagging_domain === "real_life"
-                ? "Start real-life tagging"
-                : "Start run"}
-          </button>
-          <button
-            type="button"
-            className="secondary"
-            title="Scan root (including GIF/video). Keep only confident real_life hits — nothing else."
-            disabled={
-              loading ||
-              opsLoading.startingRun ||
-              anyRunActive ||
-              settings.tagging_domain === "real_life"
-            }
-            onClick={() => handleStartRun("real_life_filter")}
-          >
-            {opsLoading.startingRun ? "Starting…" : "Filter real-life only"}
-          </button>
-          <button
-            type="button"
-            className="secondary"
-            title="Treat each child folder or top-level .cbz as one work. Sample pages → WD → primary + category tags. Migrate moves into Doujins/<tag>/ with junctions."
-            disabled={
-              loading ||
-              opsLoading.startingRun ||
-              anyRunActive ||
-              settings.tagging_domain === "real_life"
-            }
-            onClick={() => handleStartRun("doujin_works")}
-          >
-            {opsLoading.startingRun ? "Starting…" : "Start Doujin works"}
-          </button>
-        </div>
-        {otherActiveRun && (
-          <p className="help run-blocked" role="status">
-            Run #{otherActiveRun.run_id} is still {otherActiveRun.status}. Wait for it to
-            finish or cancel it before starting another run.{" "}
+        {providerInfo?.provider_error && !offlineMode ? (
+          <div className="app-banner is-bad" role="alert">
+            {providerInfo.provider_error}
+          </div>
+        ) : null}
+      </>
+    ) : null;
+
+  const app = {
+    settings,
+    setSettings,
+    isDirty,
+    dirtyCount,
+    isWdModel,
+    loading,
+    opsLoading,
+    offlineMode,
+    providerInfo,
+    realLifeStatus,
+    realLifeStatusLoading,
+    runs,
+    runId,
+    runStatus,
+    runActive,
+    otherActiveRun,
+    anyRunActive,
+    items,
+    stats,
+    selectedIds,
+    setSelectedIds,
+    selectedIdSet,
+    previewErrors,
+    setPreviewErrors,
+    pendingItemIds,
+    finalTagDrafts,
+    expandedScoreRows,
+    scoreDebugByItem,
+    scoreLoadingByItem,
+    migrateMode,
+    setMigrateMode,
+    reclassifyModel,
+    setReclassifyModel,
+    tagQuery,
+    setTagQuery,
+    tagOptions,
+    selectedTags,
+    sfwClassifyMode,
+    parkedNsfwTags,
+    scanPreview,
+    scanPreviewLoading,
+    landing,
+    setLanding,
+    setError,
+    openRun,
+    openRunForReview,
+    handleSaveSettings,
+    revertSettings,
+    handlePreviewScan,
+    handleStartRun,
+    updateStatus,
+    setFinalTagDraft,
+    dropFinalTagDraft,
+    commitFinalTag,
+    applyBatch,
+    migrateApproved,
+    cancelActiveRun,
+    handleUnloadModels,
+    handleReclassifyNeedsReview,
+    toggleScoreDebug,
+    setSfwClassifyMode,
+    addSelectedTag,
+    addTagsFromInput,
+    removeSelectedTag,
+  };
+
+  let page;
+  if (route === "review") page = <ReviewPage />;
+  else if (route === "runs") page = <RunsPage />;
+  else if (route === "settings") page = <SettingsPage />;
+  else if (route === "debug") page = <ClassifierDebugPage landing={landing} onLanded={() => setLanding(null)} />;
+  else page = <RunPage />;
+
+  return (
+    <AppContext.Provider value={app}>
+      <AppShell
+        route={route}
+        badges={badges}
+        engine={engine}
+        version={APP_VERSION}
+        jumpEntries={jumpEntries}
+        onJump={handleJump}
+        banners={banners}
+        dock={<RunDock model={dockModel()} />}
+      >
+        {page}
+      </AppShell>
+      <div className="toasts">
+        {error ? (
+          <div className="toast is-bad" role="alert">
+            <span className="toast-text">{error}</span>
             <button
               type="button"
-              className="secondary"
-              onClick={() => openRun(otherActiveRun.run_id)}
+              className="toast-close"
+              aria-label="Dismiss error"
+              onClick={() => setError("")}
             >
-              Open run #{otherActiveRun.run_id}
+              ×
             </button>
-          </p>
-        )}
-        <p className="help">
-          {settings.tagging_domain === "real_life" ? (
-            <>
-              Real-life tagging: style gate → local adult VLM (+ optional position
-              classifier) → isolated categories under <code>Real Life/</code>. All
-              items start in needs-review. Sensitive tags require typing them into
-              Final tag before approve.
-            </>
-          ) : (
-            <>
-              Filter real-life only: style-first hybrid (skip WD on clear anime), capped GIF/video
-              frames, stills stay batched. Only blended <code>real_life</code> hits are kept.
-              Doujin works: one review row per title folder/cbz; favourites loli / shota / milf /
-              fertilization / monster_girl / incest / bestiality / Pokemon / NTR / tentacles /
-              furry / android; approve then migrate (move + tag junctions).
-            </>
-          )}
-        </p>
-      </section>
-
-      {runs.length > 0 && (
-        <section className="panel run-history" aria-labelledby="run-history-heading">
-          <h2 id="run-history-heading">Runs</h2>
-          <span className="kicker">Reopen an earlier run to review or migrate its results.</span>
-          <label className="run-picker">
-            Open run
-            <select
-              value={runId ?? ""}
-              onChange={(e) => openRun(Number(e.target.value))}
-            >
-              {runId == null && <option value="">Select a run…</option>}
-              {runId != null && !runs.some((run) => run.run_id === runId) && (
-                <option value={runId}>Run #{runId}</option>
-              )}
-              {runs.map((run) => (
-                <option key={run.run_id} value={run.run_id}>
-                  {runOptionLabel(run)}
-                </option>
-              ))}
-            </select>
-          </label>
-        </section>
-      )}
-
-      {runId && runStatus && (
-        <section className="panel">
-          <h2>Run dashboard</h2>
-          <span className="kicker">
-            Run #{runId}
-            {runStatus.tagger_model ? ` · ${runStatus.tagger_model}` : ""}
-          </span>
-          {(() => {
-            const etaLabel =
-              runActive && runStatus.eta_seconds_remaining != null
-                ? formatDurationSeconds(runStatus.eta_seconds_remaining)
-                : null;
-            const finishLabel =
-              runActive && runStatus.eta_finish_at
-                ? formatEtaFinishAt(runStatus.eta_finish_at)
-                : null;
-            return (
-              <>
-          <div className="stats">
-            <div className="metric">
-              <span className="label">Status</span>
-              <span className="value">{runStatus.status}</span>
-            </div>
-            <div className="metric">
-              <span className="label">Total</span>
-              <span className="value">{runStatus.total_images}</span>
-            </div>
-            <div className="metric">
-              <span className="label">Processed</span>
-              <span className="value">{runStatus.processed_images}</span>
-            </div>
-            <div className="metric">
-              <span className="label">Failed</span>
-              <span className="value">{runStatus.failed_images}</span>
-            </div>
-            <div className="metric">
-              <span className="label">Needs review</span>
-              <span className="value">{stats.reviewNeeded}</span>
-            </div>
-            <div className="metric">
-              <span className="label">Progress</span>
-              <span className="value">{Number(runStatus.progress_pct || 0).toFixed(1)}%</span>
-            </div>
-            <div className="metric">
-              <span className="label">ETA</span>
-              <span className="value">{etaLabel || (runActive ? "…" : "—")}</span>
-            </div>
-            <div className="metric">
-              <span className="label">Finish by</span>
-              <span className="value">{finishLabel || (runActive ? "…" : "—")}</span>
-            </div>
           </div>
-          <div className="progress-track">
-            <div
-              className="progress-fill"
-              style={{ width: `${Math.min(100, Number(runStatus.progress_pct || 0))}%` }}
-            />
-          </div>
-          <div className="stats">
-            {runStatus.avg_infer_ms_per_image != null && (
-              <span>
-                Avg infer: {Number(runStatus.avg_infer_ms_per_image).toFixed(1)} ms/image
-              </span>
-            )}
-            {etaLabel && (
-              <span>
-                Expected finish in {etaLabel}
-                {finishLabel ? ` (~${finishLabel})` : ""}
-              </span>
-            )}
-            {runStatus.inference_mode && <span>Mode: {runStatus.inference_mode}</span>}
-            {runStatus.cancel_requested && <span>Cancel requested</span>}
-          </div>
-              </>
-            );
-          })()}
-          {runActive && (
-            <div className="actions">
-              <button type="button" className="danger" onClick={cancelActiveRun}>
-                Cancel run
-              </button>
-            </div>
-          )}
-          {!runActive &&
-            stats.reviewNeeded > 0 &&
-            ["completed", "failed", "cancelled"].includes(runStatus.status) && (
-              <div className="actions reclassify-banner" role="region" aria-label="Reclassify needs review">
-                <span>
-                  {stats.reviewNeeded} item{stats.reviewNeeded === 1 ? " needs" : "s need"} review — retry with
-                  another model (approved/rejected/migrated stay untouched). SwinV2 is much faster than
-                  EVA02.
-                </span>
-                <label className="reclassify-model">
-                  <span className="sr-only">Reclassify model</span>
-                  <select
-                    value={reclassifyModel}
-                    onChange={(e) => setReclassifyModel(e.target.value)}
-                    disabled={opsLoading.reclassifying}
-                    aria-label="Model for reclassify"
-                  >
-                    {TAGGER_MODELS.map((model) => (
-                      <option key={model.id} value={model.id}>
-                        {model.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <button
-                  type="button"
-                  disabled={
-                    opsLoading.reclassifying || selectedTags.length === 0 || anyRunActive
-                  }
-                  onClick={handleReclassifyNeedsReview}
-                  aria-label="Reclassify needs review items"
-                >
-                  {opsLoading.reclassifying ? "Queuing…" : "Reclassify needs review"}
-                </button>
-              </div>
-            )}
-          {runStatus.last_error && <div className="error">{runStatus.last_error}</div>}
-        </section>
-      )}
-
-      {runId && (
-        <section className="panel">
-          <h2>Review</h2>
-          <span className="kicker">
-            Primary is the main destination folder; category tags (secondary) are extra labels
-            for junctions on Doujin runs
-            {settings.tagging_domain === "real_life"
-              ? ", or supporting real-life categories. Sensitive suggestions are highlighted."
-              : ". Global tops help spot mis-assignments."}
-          </span>
-          <div className="stats">
-            <span>Listed: {stats.total}</span>
-            <span>Needs review: {stats.reviewNeeded}</span>
-            <span>Approved: {stats.approved}</span>
-            <span>Rejected: {stats.rejected}</span>
-            <span>Migrated: {stats.migrated}</span>
-          </div>
-          <div className="actions">
+        ) : null}
+        {notice ? (
+          <div className="toast is-ok" role="status">
+            <span className="toast-text">{notice}</span>
             <button
               type="button"
-              disabled={opsLoading.applyingBatch || selectedIds.length === 0}
-              onClick={() => applyBatch("approved")}
+              className="toast-close"
+              aria-label="Dismiss notice"
+              onClick={() => setNotice("")}
             >
-              Approve selected{selectedIds.length ? ` (${selectedIds.length})` : ""}
-            </button>
-            <button
-              type="button"
-              className="secondary"
-              disabled={opsLoading.applyingBatch || selectedIds.length === 0}
-              onClick={() => applyBatch("rejected")}
-            >
-              Reject selected{selectedIds.length ? ` (${selectedIds.length})` : ""}
-            </button>
-            <label className="migrate-mode">
-              <span className="sr-only">Migrate mode</span>
-              <select
-                value={migrateMode}
-                onChange={(e) => setMigrateMode(e.target.value)}
-                disabled={opsLoading.migrating}
-              >
-                <option value="copy">copy</option>
-                <option value="move">move</option>
-              </select>
-            </label>
-            <button
-              type="button"
-              disabled={opsLoading.migrating || runActive || stats.approved === 0}
-              title={
-                runActive
-                  ? "Wait for the run to finish (or cancel it) before migrating"
-                  : stats.approved === 0
-                    ? "Approve items first"
-                    : undefined
-              }
-              onClick={migrateApproved}
-            >
-              {opsLoading.migrating ? "Migrating…" : `Migrate approved (${stats.approved})`}
+              ×
             </button>
           </div>
-
-          <div className="table-wrap">
-          <table className="review-table">
-            <thead>
-              <tr>
-                <th scope="col" className="select-col">
-                  <input
-                    type="checkbox"
-                    aria-label="Select all items that are not migrated yet"
-                    checked={allSelectableSelected}
-                    ref={(el) => {
-                      if (el) el.indeterminate = someSelectableSelected && !allSelectableSelected;
-                    }}
-                    disabled={selectableIds.length === 0}
-                    onChange={(e) => setSelectedIds(e.target.checked ? selectableIds : [])}
-                  />
-                </th>
-                <th>Work / media</th>
-                <th>Primary</th>
-                <th>Category tags</th>
-                <th>Global top</th>
-                <th>Status</th>
-                <th>Final tag</th>
-                <th>Debug</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((item) => {
-                const isMigrated = item.status === "migrated";
-                const rowBusy = Boolean(pendingItemIds[item.id]);
-                const itemLabel = item.relative_path || item.file_path;
-                return (
-                <tr
-                  key={item.id}
-                  className={[
-                    item.needs_review ? "needs-review" : "",
-                    `row-${item.status}`,
-                  ]
-                    .filter(Boolean)
-                    .join(" ")}
-                >
-                  <td className="select-col">
-                    <input
-                      type="checkbox"
-                      aria-label={`Select ${itemLabel}`}
-                      checked={selectedIdSet.has(item.id)}
-                      disabled={isMigrated}
-                      onChange={(e) => {
-                        const { checked } = e.target;
-                        setSelectedIds((prev) =>
-                          checked
-                            ? prev.includes(item.id)
-                              ? prev
-                              : [...prev, item.id]
-                            : prev.filter((id) => id !== item.id)
-                        );
-                      }}
-                    />
-                  </td>
-                  <td title={item.file_path}>
-                    <div className="image-cell">
-                      {!previewErrors[item.id] && api.getItemPreviewUrl(item.id) ? (
-                        <div className="image-thumb-wrap">
-                          <img
-                            className="image-thumb"
-                            src={api.getItemPreviewUrl(item.id)}
-                            alt={item.relative_path || item.file_path}
-                            loading="lazy"
-                            onError={() =>
-                              setPreviewErrors((prev) => ({
-                                ...prev,
-                                [item.id]: true,
-                              }))
-                            }
-                          />
-                          {isVideoPreviewPath(item.file_path || item.relative_path) ? (
-                            <span className="media-badge" title="Video">
-                              ▶
-                            </span>
-                          ) : null}
-                        </div>
-                      ) : null}
-                      <div className="image-path">{item.relative_path || item.file_path || "-"}</div>
-                      {item.review_reason && (
-                        <div className="help">{item.review_reason}</div>
-                      )}
-                    </div>
-                  </td>
-                  <td>
-                    {item.primary_tag ? (
-                      <>
-                        {item.primary_tag}
-                        {REAL_LIFE_SENSITIVE_TAGS.has(item.primary_tag) ? (
-                          <span className="chip warn" title="Sensitive — confirm Final tag">
-                            sensitive
-                          </span>
-                        ) : null}
-                        {String(item.review_reason || "").includes("vlm_unavailable") ? (
-                          <span className="chip warn" title="Adult VLM unavailable">
-                            fallback
-                          </span>
-                        ) : null}
-                        <div className="muted">
-                          {item.primary_score != null
-                            ? Number(item.primary_score).toFixed(3)
-                            : ""}
-                        </div>
-                      </>
-                    ) : (
-                      <span className="primary-empty">needs review</span>
-                    )}
-                  </td>
-                  <td>
-                    <div className="tag-list">
-                      {(item.secondary_suggestions || []).length === 0
-                        ? "-"
-                        : (item.secondary_suggestions || []).map((s) => (
-                            <span
-                              key={`${item.id}-${s.tag}`}
-                              className={
-                                REAL_LIFE_SENSITIVE_TAGS.has(s.tag) ? "chip warn" : undefined
-                              }
-                            >
-                              {formatTagScore(s)}
-                              {REAL_LIFE_SENSITIVE_TAGS.has(s.tag) ? " ⚠" : ""}
-                            </span>
-                          ))}
-                    </div>
-                  </td>
-                  <td>
-                    <div className="tag-list">
-                      {(item.global_top_tags || []).length === 0
-                        ? "-"
-                        : (item.global_top_tags || []).slice(0, 5).map((s) => (
-                            <span key={`${item.id}-g-${s.tag}`}>{formatTagScore(s)}</span>
-                          ))}
-                    </div>
-                  </td>
-                  <td>
-                    <span className={`status-badge status-${item.status}`}>{item.status}</span>
-                    {isMigrated && item.migrated_to ? (
-                      <div className="help migrated-path" title={item.migrated_to}>
-                        {"→\u00a0"}
-                        {pathTail(item.migrated_to)}
-                      </div>
-                    ) : null}
-                  </td>
-                  <td>
-                    <input
-                      className="final-tag-input"
-                      aria-label={`Final tag for ${itemLabel}`}
-                      list="final-tag-options"
-                      value={finalTagDrafts[item.id] ?? (item.final_tag || "")}
-                      placeholder={isMigrated ? "" : "Destination tag"}
-                      disabled={isMigrated}
-                      onChange={(e) => setFinalTagDraft(item.id, e.target.value)}
-                      onBlur={() => commitFinalTag(item)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          e.currentTarget.blur();
-                        } else if (e.key === "Escape") {
-                          dropFinalTagDraft(item.id);
-                        }
-                      }}
-                    />
-                  </td>
-                  <td>
-                    <button
-                      type="button"
-                      className="secondary"
-                      aria-expanded={Boolean(expandedScoreRows[item.id])}
-                      onClick={() => toggleScoreDebug(item.id)}
-                    >
-                      {expandedScoreRows[item.id] ? "Hide JSON" : "Show JSON"}
-                    </button>
-                    {expandedScoreRows[item.id] && (
-                      <pre className="debug-json">
-                        {scoreLoadingByItem[item.id]
-                          ? "Loading..."
-                          : JSON.stringify(scoreDebugByItem[item.id] || {}, null, 2)}
-                      </pre>
-                    )}
-                  </td>
-                  <td>
-                    {isMigrated ? (
-                      <span className="muted">Done</span>
-                    ) : (
-                      <div className="row-actions">
-                        <button
-                          type="button"
-                          disabled={rowBusy || item.status === "approved"}
-                          onClick={() => updateStatus(item.id, "approved")}
-                        >
-                          Approve
-                        </button>
-                        <button
-                          type="button"
-                          className="secondary"
-                          disabled={rowBusy || item.status === "rejected"}
-                          onClick={() => updateStatus(item.id, "rejected")}
-                        >
-                          Reject
-                        </button>
-                        <button
-                          type="button"
-                          className="secondary"
-                          disabled={rowBusy || item.status === "reviewed"}
-                          onClick={() => updateStatus(item.id, "reviewed")}
-                        >
-                          Reviewed
-                        </button>
-                      </div>
-                    )}
-                  </td>
-                </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          </div>
-          <datalist id="final-tag-options">
-            {selectedTags.map((tag) => (
-              <option key={tag} value={tag} />
-            ))}
-          </datalist>
-        </section>
-      )}
-
-      <footer className="app-footer" aria-label="Attribution">
-        <p>
-          THR3SHR v{APP_VERSION} © 2026 Dinamush · code MIT · creative{" "}
-          <a
-            href="https://creativecommons.org/licenses/by/4.0/"
-            target="_blank"
-            rel="noreferrer"
-          >
-            CC BY 4.0
-          </a>
-          {" · "}
-          <a
-            href="https://github.com/Dinamush/thr3shr/blob/main/ATTRIBUTION.md"
-            target="_blank"
-            rel="noreferrer"
-          >
-            model attributions
-          </a>
-        </p>
-      </footer>
-    </div>
+        ) : null}
+      </div>
+      <YorhaBoot />
+    </AppContext.Provider>
   );
 }
 

@@ -2,14 +2,41 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" id="meta-color-scheme" />
+    <meta name="theme-color" content="#f6f5f2" id="meta-theme-color" />
     <title>THR3SHR</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,500;9..144,700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=Fragment+Mono&display=swap"
       rel="stylesheet"
     />
+    <script>
+      // Apply the saved palette, skin and sidebar state before the body paints
+      // so a reload never flashes the default.  The palette list itself lives
+      // in src/theme/themes.js; an unknown name falls back to the default
+      // palette here and the Appearance menu corrects it on load.
+      (function () {
+        var root = document.documentElement;
+        var theme = null;
+        try {
+          theme = localStorage.getItem("thr3shr-theme");
+          if (localStorage.getItem("thr3shr-skin") === "yorha") {
+            root.dataset.skin = "yorha";
+            if (localStorage.getItem("thr3shr-boot-seen") !== "1") root.classList.add("nier-booting");
+          }
+          if (localStorage.getItem("thr3shr-nav-collapsed") === "1") root.classList.add("nav-collapsed");
+        } catch (e) {
+          /* storage blocked: Auto palette, no skin */
+        }
+        if (!theme || theme === "auto" || !/^[a-z-]+$/.test(theme)) {
+          var dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+          theme = dark ? "graphite" : "daylight";
+        }
+        root.dataset.theme = theme;
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
