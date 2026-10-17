@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import ctypes
 import gc
 import logging
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +41,24 @@ WD_DEEPGHS_PREFIX = {
 WD_REALISM_ALWAYS_TAGS = frozenset({"realistic", "photorealistic"})
 # Keep weak-but-useful photo signal (≈0.2+) for hybrid real_life filter blends.
 WD_REALISM_FLOOR = 0.18
+
+
+# Pillow decodes and resizes without the GIL, so a batch's images preprocess
+# side by side instead of one after another while the GPU idles. Shared and
+# small: each in-flight image holds a full-size decode and its padded canvas.
+PREPROCESS_THREADS = 4
+_PREPROCESS_POOL: ThreadPoolExecutor | None = None
+_PREPROCESS_POOL_LOCK = threading.Lock()
+
+
+def _preprocess_pool() -> ThreadPoolExecutor:
+    global _PREPROCESS_POOL
+    with _PREPROCESS_POOL_LOCK:
+        if _PREPROCESS_POOL is None:
+            _PREPROCESS_POOL = ThreadPoolExecutor(
+                max_workers=PREPROCESS_THREADS, thread_name_prefix="preprocess"
+            )
+        return _PREPROCESS_POOL
 
 
 def _force_cpu() -> bool:
@@ -171,6 +191,7 @@ class InferenceEngine:
         self._meta_lock = threading.Lock()
         self._sessions: dict[str, Any] = {}
         self._wd_labels: dict[str, tuple[list[str], list[int], list[int], list[int]]] = {}
+        self._wd_general: dict[str, tuple[np.ndarray, list[str], np.ndarray]] = {}
         self._ml_labels: list[str] | None = None
         self._wd_target_size: dict[str, int] = {}
 
@@ -267,7 +288,12 @@ class InferenceEngine:
         session = self._get_session(tagger_model)
         target = self._wd_target_size[wd_name]
         # Preprocess outside the lock so CPU decode overlaps other workers' GPU wait.
-        tensors = [preprocess_wd14(image, target) for image in images]
+        if len(images) > 1:
+            tensors = list(
+                _preprocess_pool().map(lambda image: preprocess_wd14(image, target), images)
+            )
+        else:
+            tensors = [preprocess_wd14(images[0], target)]
 
         preds_list: list[np.ndarray] = []
         input_name = session.get_inputs()[0].name
@@ -299,25 +325,37 @@ class InferenceEngine:
             for row in preds:
                 preds_list.append(row)
 
-        tag_names, _rating_idx, general_idx, _char_idx = self._get_wd_labels(wd_name)
-        results: list[dict[str, float]] = []
-        for pred in preds_list:
-            labels = list(zip(tag_names, pred.astype(float)))
-            general: dict[str, float] = {}
-            for i in general_idx:
-                name, score = labels[i]
-                value = float(score)
-                if raw_general:
-                    # Media presence pooling needs dense probs; threshold after pool.
-                    general[name] = value
-                elif value > general_threshold:
-                    general[name] = value
-                elif name in WD_REALISM_ALWAYS_TAGS and value >= WD_REALISM_FLOOR:
-                    # Keep weak-but-discriminative realism for accidental photos
-                    # (moon/sky etc.) without lowering the global general threshold.
-                    general[name] = value
-            results.append(_normalize_scores(general))
-        return results
+        return [
+            self._wd_general_scores(wd_name, pred, general_threshold, raw_general)
+            for pred in preds_list
+        ]
+
+    def _wd_general_scores(
+        self, wd_name: str, pred: np.ndarray, general_threshold: float, raw_general: bool
+    ) -> dict[str, float]:
+        """Normalized general-tag scores above the threshold for one prediction row."""
+        general_idx, keys, realism = self._get_wd_general_labels(wd_name)
+        # float64 first, so threshold comparisons match float(score) exactly.
+        values = pred[general_idx].astype(np.float64)
+        if raw_general:
+            # Media presence pooling needs dense probs; threshold after pool.
+            kept = range(len(values))
+        else:
+            # Keep weak-but-discriminative realism for accidental photos
+            # (moon/sky etc.) without lowering the global general threshold.
+            kept = np.flatnonzero(
+                (values > general_threshold) | (realism & (values >= WD_REALISM_FLOOR))
+            ).tolist()
+        general: dict[str, float] = {}
+        for j in kept:
+            key = keys[j]
+            if not key:
+                continue
+            value = float(values[j])
+            current = general.get(key)
+            if current is None or value > current:
+                general[key] = value
+        return general
 
     def _get_session(self, tagger_model: str) -> Any:
         with self._meta_lock:
@@ -385,6 +423,26 @@ class InferenceEngine:
             self._wd_labels[wd_name] = packed
             return packed
 
+    def _get_wd_general_labels(self, wd_name: str) -> tuple[np.ndarray, list[str], np.ndarray]:
+        """General-tag indexes, their normalized names and the realism mask.
+
+        Normalizing ~8k names per image (per frame for media) cost more than
+        the rest of postprocessing, so it happens once per model.
+        """
+        tag_names, _rating_idx, general_idx, _char_idx = self._get_wd_labels(wd_name)
+        with self._meta_lock:
+            cached = self._wd_general.get(wd_name)
+            if cached is not None:
+                return cached
+            names = [tag_names[i] for i in general_idx]
+            packed = (
+                np.asarray(general_idx, dtype=np.intp),
+                [_normalize_tag(str(name)) for name in names],
+                np.array([name in WD_REALISM_ALWAYS_TAGS for name in names], dtype=bool),
+            )
+            self._wd_general[wd_name] = packed
+            return packed
+
     def _get_ml_labels(self) -> list[str]:
         with self._meta_lock:
             if self._ml_labels is not None:
@@ -409,6 +467,7 @@ class InferenceEngine:
                 sessions = list(self._sessions.values())
                 self._sessions.clear()
                 self._wd_labels.clear()
+                self._wd_general.clear()
                 self._ml_labels = None
                 self._wd_target_size.clear()
         for session in sessions:
@@ -461,6 +520,20 @@ def release_cuda_caches() -> None:
     except Exception:
         pass
     gc.collect()
+    trim_process_heap()
+
+
+def trim_process_heap() -> None:
+    """Return freed heap pages to the OS.
+
+    glibc keeps freed blocks (ORT model parse buffers, decoded images) resident,
+    so RSS would otherwise stay at its peak after a model load or a run. No-op
+    where libc is not glibc.
+    """
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass
 
 
 _ENGINE: InferenceEngine | None = None

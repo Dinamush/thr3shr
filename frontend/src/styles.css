@@ -1978,7 +1978,11 @@ tr.needs-review td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
   overflow-y: auto;
   list-style: none;
   scrollbar-width: thin;
+  /* Rows swap in and out while scrolling; the spacers keep offsets exact. */
+  overflow-anchor: none;
 }
+/* Stands in for the rows scrolled out of the window; spans every grid column. */
+.review-spacer { grid-column: 1 / -1; }
 .review-row {
   display: flex;
   align-items: center;
@@ -2036,6 +2040,7 @@ tr.needs-review td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
   overflow-y: auto;
   list-style: none;
   scrollbar-width: thin;
+  overflow-anchor: none;
 }
 .grid-tile {
   position: relative;

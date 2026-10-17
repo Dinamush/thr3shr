@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -115,32 +116,46 @@ async def log_requests(request: Request, call_next):
 
 def startup() -> None:
     _configure_logging()
-    preload_onnx_runtime_dlls()
-    provider_state = _get_provider_snapshot()
     logger.info("thr3shr_version version=%s", __version__)
-    logger.info("onnx_provider_state state=%s", provider_state)
     logger.info("initializing database at startup")
     init_db()
     interrupted = fail_interrupted_runs()
     if interrupted:
         logger.warning("interrupted_runs_failed count=%d", interrupted)
+    from .api import _settings_from_db
+
+    settings = _settings_from_db()
+    if settings.force_cpu_inference:
+        os.environ["FORCE_CPU_INFERENCE"] = "true"
+    else:
+        os.environ.pop("FORCE_CPU_INFERENCE", None)
+    _start_engine_warmup(settings.tagger_model)
+    logger.info("startup complete")
+
+
+def _warm_engine(tagger_model: str) -> None:
+    from .inference_engine import get_engine, trim_process_heap
+
     try:
-        from .api import _settings_from_db
-        from .inference_engine import get_engine
-
-        settings = _settings_from_db()
-        if settings.force_cpu_inference:
-            import os
-
-            os.environ["FORCE_CPU_INFERENCE"] = "true"
-        else:
-            import os
-
-            os.environ.pop("FORCE_CPU_INFERENCE", None)
-        get_engine().warm(settings.tagger_model)
+        preload_onnx_runtime_dlls()
+        logger.info("onnx_provider_state state=%s", _get_provider_snapshot())
+        get_engine().warm(tagger_model)
     except Exception:
         logger.exception("inference_engine_warm_failed")
-    logger.info("startup complete")
+    finally:
+        # Model loading leaves hundreds of MB of freed parse buffers resident.
+        trim_process_heap()
+
+
+def _start_engine_warmup(tagger_model: str) -> None:
+    """Probe providers and load the tagger in the background.
+
+    Both take seconds; the API answers meanwhile, and a run or probe that needs
+    them first waits on the engine and probe locks instead of loading twice.
+    """
+    threading.Thread(
+        target=_warm_engine, args=(tagger_model,), name="engine-warmup", daemon=True
+    ).start()
 
 
 @app.get("/health")

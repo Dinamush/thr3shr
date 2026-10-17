@@ -11,7 +11,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from PIL import Image, ImageFile
+from PIL import Image, ImageFile, ImageOps
 
 from .media_pooling import pool_presence
 from .media_sampling import (
@@ -106,6 +106,60 @@ def _preview_cache_dir() -> Path:
     return root
 
 
+def _preview_cache_path(resolved: Path, variant: str, suffix: str) -> Path:
+    try:
+        mtime_ns = resolved.stat().st_mtime_ns
+    except OSError:
+        mtime_ns = 0
+    cache_key = hashlib.sha1(
+        f"{resolved}|{mtime_ns}|{variant}".encode("utf-8", errors="replace")
+    ).hexdigest()
+    return _preview_cache_dir() / f"{cache_key}{suffix}"
+
+
+# List rows and grid tiles crop thumbs to a square (object-fit: cover), so the
+# short edge sets sharpness: 384px covers a 192px tile on a 2x screen. The long
+# edge cap keeps very tall strips small.
+THUMB_SHORT_EDGE = 384
+THUMB_LONG_EDGE_MAX = 1536
+
+
+def still_thumbnail_webp(path: Path) -> bytes:
+    """Small cached WebP of a still image for list and grid thumbnails.
+
+    Serving originals made the browser download and decode a multi-megapixel
+    file for every visible row. WebP keeps PNG transparency, and the EXIF
+    orientation is applied the way the browser shows the original.
+    """
+    resolved = path.resolve()
+    cache_path = _preview_cache_path(resolved, f"thumb{THUMB_SHORT_EDGE}", ".webp")
+    if cache_path.is_file():
+        return cache_path.read_bytes()
+
+    with Image.open(resolved) as opened:
+        # JPEG decodes straight at 1/2, 1/4 or 1/8 scale, never below the request.
+        opened.draft("RGB", (THUMB_SHORT_EDGE, THUMB_SHORT_EDGE))
+        image = ImageOps.exif_transpose(opened)
+    has_alpha = image.mode in {"RGBA", "LA", "PA"} or (
+        image.mode == "P" and "transparency" in image.info
+    )
+    image = image.convert("RGBA" if has_alpha else "RGB")
+    width, height = image.size
+    scale = min(1.0, THUMB_SHORT_EDGE / min(width, height))
+    scale = min(scale, THUMB_LONG_EDGE_MAX / max(width, height))
+    if scale < 1.0:
+        size = (max(1, round(width * scale)), max(1, round(height * scale)))
+        image = image.resize(size, Image.Resampling.LANCZOS)
+    buffer = io.BytesIO()
+    image.save(buffer, format="WEBP", quality=82)
+    data = buffer.getvalue()
+    try:
+        cache_path.write_bytes(data)
+    except OSError:
+        logger.warning("preview_cache_write_failed path=%s", cache_path, exc_info=True)
+    return data
+
+
 def media_preview_still_jpeg(path: Path, *, max_edge: int = 320) -> bytes:
     """Extract a small JPEG still for GIF/video table thumbnails.
 
@@ -121,14 +175,7 @@ def media_preview_still_jpeg(path: Path, *, max_edge: int = 320) -> bytes:
     from .media_types import SamplingBudget
 
     resolved = path.resolve()
-    try:
-        mtime_ns = resolved.stat().st_mtime_ns
-    except OSError:
-        mtime_ns = 0
-    cache_key = hashlib.sha1(
-        f"{resolved}|{mtime_ns}|{max_edge}".encode("utf-8", errors="replace")
-    ).hexdigest()
-    cache_path = _preview_cache_dir() / f"{cache_key}.jpg"
+    cache_path = _preview_cache_path(resolved, str(max_edge), ".jpg")
     if cache_path.is_file():
         return cache_path.read_bytes()
 
@@ -158,15 +205,29 @@ def media_preview_still_jpeg(path: Path, *, max_edge: int = 320) -> bytes:
     return data
 
 
+_KNOWN_TAGS_CACHE: dict[Path, tuple[tuple[int, int], frozenset[str]]] = {}
+
+
 def load_known_tags(tags_csv_path: Path) -> set[str]:
-    tags: set[str] = set()
-    with tags_csv_path.open("r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            tag = (row.get("tag") or "").strip()
-            if tag:
-                tags.add(tag)
-    return tags
+    """The tags.csv vocabulary, parsed again only when the file changes.
+
+    Tag search runs on every keystroke and settings save on every tag change;
+    parsing 12k rows each time dominated both.
+    """
+    stat = tags_csv_path.stat()
+    stamp = (stat.st_mtime_ns, stat.st_size)
+    cached = _KNOWN_TAGS_CACHE.get(tags_csv_path)
+    if cached is None or cached[0] != stamp:
+        tags: set[str] = set()
+        with tags_csv_path.open("r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                tag = (row.get("tag") or "").strip()
+                if tag:
+                    tags.add(tag)
+        cached = (stamp, frozenset(tags))
+        _KNOWN_TAGS_CACHE[tags_csv_path] = cached
+    return set(cached[1])
 
 
 def discover_tag_folders(

@@ -750,8 +750,9 @@ export const api = {
       // Large approved sets can take many minutes (copy/move + DB updates).
       timeoutMs: 60 * 60 * 1000,
     }),
-  getItemPreviewUrl: (itemId) => {
+  // thumb: a small cached still for list and grid rows instead of the original.
+  getItemPreviewUrl: (itemId, { thumb = false } = {}) => {
     if (backendAvailable === false) return null;
-    return `${API_BASE}/items/${itemId}/preview`;
+    return `${API_BASE}/items/${itemId}/preview${thumb ? "?thumb=1" : ""}`;
   },
 };

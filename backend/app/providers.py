@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import threading
 from functools import lru_cache
 from pathlib import Path
 
@@ -10,6 +11,9 @@ logger = logging.getLogger(__name__)
 _DLL_DIRS_CONFIGURED = False
 _DLL_DIRS_CACHE: list[str] = []
 _ORT_DLLS_PRELOADED = False
+# One cold probe at a time: the startup warmup and the UI's first provider
+# request would otherwise each build a probe session.
+_PROBE_LOCK = threading.Lock()
 
 
 def _nvidia_bin_dirs() -> list[Path]:
@@ -200,7 +204,8 @@ def probe_execution_providers() -> dict[str, object]:
     self-heals once the model appears.
     """
     model_path = _find_probe_model()
-    return _probe_execution_providers(_force_cpu(), str(model_path) if model_path else None)
+    with _PROBE_LOCK:
+        return _probe_execution_providers(_force_cpu(), str(model_path) if model_path else None)
 
 
 def clear_provider_probe_cache() -> None:
